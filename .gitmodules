@@ -1,0 +1,28 @@
+[submodule "control-plane"]
+	path = control-plane
+	url = https://github.com/taimen-ai/control-plane.git
+	branch = main
+[submodule "memory-service"]
+	path = memory-service
+	url = https://github.com/taimen-ai/memory-service.git
+	branch = main
+[submodule "iam-service"]
+	path = iam-service
+	url = https://github.com/taimen-ai/iam-service.git
+	branch = main
+[submodule "platform-auth-sdk"]
+	path = platform-auth-sdk
+	url = https://github.com/taimen-ai/platform-auth-sdk.git
+	branch = main
+[submodule "notification-service"]
+	path = notification-service
+	url = https://github.com/taimen-ai/notification-service.git
+	branch = main
+[submodule "skill-sdk"]
+	path = skill-sdk
+	url = https://github.com/taimen-ai/skill-sdk.git
+	branch = main
+[submodule "platform-llm"]
+	path = platform-llm
+	url = https://github.com/taimen-ai/platform-llm.git
+	branch = main

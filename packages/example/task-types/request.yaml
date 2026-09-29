@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../schema/v1/object.schema.json
+apiVersion: taimen.ai/v1
+kind: TaskType
+key: request
+spec:
+  displayName: Запрос
+  description: Входящий запрос, который кто-то берёт в работу и закрывает ответом.
+  fieldSchema:
+    type: object
+    properties:
+      requester:
+        type: string
+        maxLength: 200
+        description: Кто обратился
+      dueDate:
+        type: string
+        format: date
+        description: Желаемый срок ответа
+  lifecycleSchema:
+    statuses:
+      - {key: new, category: backlog, displayName: Новый}
+      - {key: in_progress, category: active, displayName: В работе}
+      - {key: waiting, category: blocked, displayName: Ждёт ответа}
+      - {key: answered, category: terminal_success, displayName: Отвечен}
+      - {key: rejected, category: terminal_cancelled, displayName: Отклонён}
+    transitions:
+      - {from: new, to: [in_progress, rejected]}
+      - {from: in_progress, to: [new, waiting, answered, rejected]}
+      - {from: waiting, to: [in_progress, answered, rejected]}
+    initialStatus: new
+    claimStatus: in_progress
+    releaseStatus: new
+    completionStatus: answered
+  approvalSchema: {}

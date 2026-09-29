@@ -1,0 +1,26 @@
+# Контекст сборки control-plane, memory-service и notification-service — корень
+# umbrella: platform-auth-sdk (и клиент ядра) подключены path-зависимостью соседней
+# папкой. Всё, что сборке не нужно, отсекается здесь. memory-service переопределяет
+# этот файл своим memory-service/Dockerfile.dockerignore.
+**/.git
+**/.venv
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache
+**/__pycache__
+**/node_modules
+**/.env
+**/.secrets
+**/*.zip
+secrets/
+deploy/
+tools/
+guide/
+cla/
+.claude/
+.github/
+*/docs/
+*/tests/
+memory-service/*
+!memory-service/client
+iam-service/

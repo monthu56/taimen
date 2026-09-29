@@ -1,0 +1,20 @@
+# ruff для скриптов umbrella (tools/, deploy/); у компонентов — собственные настройки.
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+  "control-plane", "memory-service", "iam-service", "platform-auth-sdk",
+  "notification-service", "skill-sdk", "platform-llm", "guide",
+]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+# tools/cp_packages.py, pkg.py и package_sandbox.py проецируются из приватного суперпроекта как есть (один источник);
+# стиль правится там, а не в копии.
+[lint.per-file-ignores]
+"tools/cp_packages.py" = ["E501", "B023", "UP017"]
+"tools/pkg.py" = ["E501", "B023", "UP017", "E402"]
+"tools/package_sandbox.py" = ["E501", "B023", "UP017", "E402"]
+
+[format]
+exclude = ["tools/cp_packages.py", "tools/pkg.py", "tools/package_sandbox.py"]

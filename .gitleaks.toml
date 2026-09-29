@@ -1,0 +1,11 @@
+# gitleaks для umbrella: правила по умолчанию плюс узкие исключения для заведомых
+# примеров в руководстве (обрезанный JWT с многоточием, ключ идемпотентности).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Примеры значений в guide/"
+regexes = [
+  '''eyJhbGciOiJSUzI1NiIsImtpZCI6\.\.\.''',
+  '''invoice-42-approved''',
+]

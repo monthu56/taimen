@@ -1,0 +1,191 @@
+site_name: Taimen — руководство по платформе
+site_description: Техническая и эксплуатационная документация платформы Taimen
+docs_dir: docs
+site_dir: site
+use_directory_urls: false
+strict: true
+
+theme:
+  name: material
+  language: ru
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - navigation.path
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Тёмная тема
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Светлая тема
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+extra_css:
+  - assets/extra.css
+
+plugins:
+  - search:
+      lang: [ru, en]
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: info
+    unrecognized_links: info
+
+nav:
+  - Главная: index.md
+  - Обзор:
+      - overview/index.md
+      - Что такое Taimen: overview/what-is-taimen.md
+      - Архитектура: overview/architecture.md
+      - Ключевые понятия: overview/concepts.md
+      - Состав поставки: overview/components.md
+      - Модель безопасности: overview/security-model.md
+  - Быстрый старт:
+      - getting-started/index.md
+      - Требования: getting-started/requirements.md
+      - Установка и первый запуск: getting-started/quickstart.md
+      - Конфигурация .env: getting-started/configuration.md
+      - Bootstrap: getting-started/bootstrap.md
+      - Первая задача: getting-started/first-task.md
+  - Control Plane:
+      - control-plane/index.md
+      - Модель работы: control-plane/work-model.md
+      - Типы задач и статусы: control-plane/task-types.md
+      - Цели, приёмка и evidence: control-plane/goals-and-evidence.md
+      - Правила вывода работы: control-plane/work-rules.md
+      - Исполнение — claims и runs: control-plane/execution.md
+      - Approvals: control-plane/approvals.md
+      - Артефакты и комментарии: control-plane/artifacts.md
+      - События: control-plane/events.md
+      - Подписки на события: control-plane/event-subscriptions.md
+      - Харнесс-протокол: control-plane/harness-protocol.md
+      - Контекст задачи и память: control-plane/context.md
+      - Пакеты каталога: control-plane/catalog-packages.md
+      - Авторизация и права: control-plane/authorization.md
+      - CLI и MCP-сервер: control-plane/cli-and-mcp.md
+      - API: control-plane/api.md
+      - Конфигурация: control-plane/configuration.md
+  - Процессы:
+      - processes/index.md
+      - Процессы и база знаний: processes/knowledge.md
+      - Выражения: processes/expressions.md
+      - Тесты пакета: processes/package-tests.md
+  - IAM:
+      - iam/index.md
+      - Tenants и principals: iam/principals.md
+      - Credentials и PAT: iam/credentials.md
+      - Токены, audiences, scopes: iam/tokens.md
+      - Service accounts: iam/service-accounts.md
+      - Федерация identity: iam/federation.md
+      - API: iam/api.md
+      - Конфигурация: iam/configuration.md
+  - Память:
+      - memory/index.md
+      - Модель знаний: memory/knowledge-model.md
+      - Namespaces и доступ: memory/namespaces.md
+      - Загрузка знаний: memory/ingestion.md
+      - Поиск и сборка контекста: memory/retrieval.md
+      - API: memory/api.md
+      - Конфигурация: memory/configuration.md
+  - Уведомления:
+      - notifications/index.md
+      - Правила уведомлений: notifications/notification-rules.md
+      - Telegram: notifications/telegram.md
+  - Агенты и runner:
+      - runner/index.md
+      - Identity агента: runner/agent-identity.md
+      - Адаптеры исполнителей: runner/adapters.md
+      - Рабочие копии: runner/execution-workspace.md
+      - Трасса прогонов: runner/trace.md
+      - Конфигурация: runner/configuration.md
+  - Работа оператора:
+      - operator/index.md
+      - MCP-плагин для Claude Code: operator/mcp-plugin.md
+      - Повседневные сценарии: operator/workflows.md
+  - SDK и интеграции:
+      - sdk/index.md
+      - platform-auth-sdk: sdk/platform-auth-sdk.md
+      - Клиенты сервисов: sdk/clients.md
+      - skill-sdk: sdk/skill-sdk.md
+      - platform-llm: sdk/platform-llm.md
+      - Вертикальные пакеты: sdk/vertical-packages.md
+  - Эксплуатация:
+      - operations/index.md
+      - Промышленное развёртывание: operations/deployment.md
+      - Периметр и TLS: operations/edge-and-tls.md
+      - Обновление и миграции: operations/upgrades.md
+      - Секреты и ротация: operations/secrets.md
+      - Резервное копирование: operations/backup.md
+      - Хранилище объектов (MinIO): operations/object-storage.md
+      - Мониторинг и здоровье: operations/monitoring.md
+      - Ресурсы и масштабирование: operations/capacity.md
+      - Аварийные процедуры: operations/emergency.md
+  - Диагностика:
+      - troubleshooting/index.md
+      - Установка и запуск: troubleshooting/startup.md
+      - Аутентификация и доступ: troubleshooting/auth.md
+      - Исполнение и runner: troubleshooting/runner.md
+      - Память и контекст: troubleshooting/memory.md
+  - Справочник:
+      - reference/index.md
+      - Переменные окружения: reference/environment.md
+      - API сервисов ядра: reference/api.md
+      - Сервисы и порты: reference/services-and-ports.md
+      - Права и scopes: reference/permissions.md
+      - Схема языка процессов: reference/process-schema.md
+      - Коды ошибок: reference/errors.md
+      - Цели make: reference/make.md
+      - Глоссарий: reference/glossary.md

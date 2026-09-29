@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
+# Локальные секреты и состояние: в git только .env.example
+.env
+secrets/
+deploy/state/
+
+# Собранное руководство (make guide)
+guide/site/
+
+# Локальные настройки инструментов
+.claude/

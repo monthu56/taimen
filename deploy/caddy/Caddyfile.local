@@ -1,0 +1,79 @@
+# Локальный внешний контур: http, без ACME, один хост с раскладкой по путям.
+# Хост taimen.localhost — и для браузера, и для контейнеров (alias сети у сервиса
+# caddy), поэтому issuer IAM и Keycloak совпадает с обеих сторон.
+#
+# Промышленная инсталляция: свой Caddyfile с доменом (TLS выпустит Caddy) и та же
+# раскладка путей; путь к файлу — переменная CADDYFILE в .env.
+{
+	auto_https off
+}
+
+http://taimen.localhost, http://localhost {
+	# Содержимое артефактов не сжимается: ETag ядра — sha256 байтов, а encode
+	# дописывает к нему «-gzip», и клиент отвергает скачанное как
+	# content_integrity_failed.
+	@compressible not path_regexp ^/api/v1/artifacts/[^/]+/content$
+	encode @compressible zstd gzip
+
+	# IAM наружу — только то, что нужно клиентам: JWKS, обмен/интроспекция/отзыв
+	# PAT, обмен client credentials service account'ов, federation:*, SCIM, healthz.
+	# Административная поверхность (/api/v1/tenants/* кроме federation:*,
+	# /api/v1/events) защищена лишь bootstrap-токеном — на периметре её нет;
+	# deploy/bootstrap.py ходит в IAM по 127.0.0.1. Второй рубеж — заголовок
+	# bootstrap-токена срезается до прокси.
+	handle_path /iam/* {
+		@iam_admin {
+			path /api/v1/events /api/v1/events/* /api/v1/tenants /api/v1/tenants/*
+			not path_regexp ^/api/v1/tenants/[^/]+/federation:(authenticate|exchange)$
+		}
+		respond @iam_admin 404
+		request_header -X-IAM-Bootstrap-Token
+		reverse_proxy iam-service:8010
+	}
+
+	# Keycloak (профиль idp) сам живёт под /auth, поэтому handle без срезания пути.
+	handle /auth/* {
+		reverse_proxy keycloak:8080 {
+			header_up X-Forwarded-Host {host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# notification-service (профиль notify): веб-инбокс, webhook Telegram.
+	handle_path /notify/* {
+		reverse_proxy notification-service:8000
+	}
+
+	# Память — только в локальном контуре; в промышленной инсталляции наружу её не
+	# публикуют: клиенты получают контекст через Control Plane.
+	handle_path /memory/* {
+		reverse_proxy memory-service:8077
+	}
+
+	# Руководство по платформе (guide/, статический MkDocs в контейнере guide).
+	redir /guide /guide/ 301
+	handle_path /guide/* {
+		reverse_proxy guide:8080
+	}
+
+	# /metrics на периметр не выводится (без аутентификации, раскрывает счётчики):
+	# метрики снимаются внутри сети compose. Схема API (/openapi.json, /docs, /redoc)
+	# публична осознанно: это контракт для клиентов и исполнителей, секретов в ней нет.
+	@cp_api path /api/v1/* /health/* /docs /docs/* /redoc /redoc/* /openapi.json
+	handle @cp_api {
+		reverse_proxy control-plane-api:8000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Веб-консоли в поставке нет: корень ведёт в руководство.
+	handle {
+		redir * /guide/ 302
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}

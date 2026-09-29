@@ -1,0 +1,7 @@
+Taimen platform (umbrella repository)
+Copyright 2026 Aleksandr Pereboev and Taimen contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+Third-party software used by this repository is listed in THIRD_PARTY.md;
+third-party components of each Taimen component are listed in the THIRD_PARTY.md
+file of that component's repository.

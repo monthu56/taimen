@@ -1,0 +1,502 @@
+# Запуск платформы Taimen одним файлом: одна сеть, стабильные DNS-имена сервисов
+# (iam-service, control-plane-api, memory-service, notification-service, caddy).
+# Инсталляции различаются только .env (см. .env.example) и Caddyfile.
+#
+# Профили (make up по умолчанию поднимает core edge):
+#   core     IAM + Control Plane (api / worker / context-adapter) + memory-service,
+#            их БД и MinIO (хранилище содержимого артефактов)
+#   notify   notification-service и его БД: веб-инбокс, Telegram, email
+#   idp      необязательный: Keycloak — внешний IdP людей для federation через IAM;
+#            ядру не нужен, оператор и агенты работают по Platform Access Token
+#   edge     Caddy — единственный контейнер, смотрящий наружу, и руководство guide/
+#
+#   make up                                     core edge
+#   make up PROFILES="core notify edge"         + уведомления
+#   docker compose --profile core --profile edge up -d
+#
+# Контекст сборки control-plane, memory-service и notification-service — корень
+# umbrella: platform-auth-sdk (и клиент ядра) подключены path-зависимостью соседней
+# папкой, поэтому раскладка сабмодулей плоская. .dockerignore в корне отсекает лишнее.
+# Один образ control-plane обслуживает три процесса ядра.
+
+name: ${COMPOSE_PROJECT_NAME:-taimen}
+
+x-cp-env: &cp-env
+  CP_DATABASE_URL: postgresql+psycopg://control_plane:${CP_POSTGRES_PASSWORD:?set CP_POSTGRES_PASSWORD}@control-plane-db:5432/control_plane
+  CP_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  CP_CONTEXT_PROVIDER: http
+  CP_CONTEXT_BASE_URL: http://memory-service:8077
+  # Память: service account ядра в IAM (secrets/control-plane-iam.env, заводит
+  # deploy/bootstrap.py; audience memory-service), пока его нет — статический ключ.
+  # auto переключается сам при перезапуске с env-файлом.
+  CP_CONTEXT_AUTH: ${CP_CONTEXT_AUTH:-auto}
+  CP_CONTEXT_API_KEY: ${MEMORY_API_KEY:?set MEMORY_API_KEY}
+  CP_IAM_BASE_URL: http://iam-service:8010
+  # Хранилище содержимого артефактов: MinIO контура, свой пользователь с правами
+  # только на бакет (заводит minio-bootstrap). Внешний S3 — CP_S3_ENDPOINT_URL и ключи.
+  CP_S3_ENDPOINT_URL: ${CP_S3_ENDPOINT_URL:-http://minio:9000}
+  CP_S3_BUCKET: ${CP_S3_BUCKET:-artifacts}
+  CP_S3_REGION: ${CP_S3_REGION:-us-east-1}
+  CP_S3_ACCESS_KEY_ID: ${CP_S3_ACCESS_KEY_ID:?set CP_S3_ACCESS_KEY_ID}
+  CP_S3_SECRET_ACCESS_KEY: ${CP_S3_SECRET_ACCESS_KEY:?set CP_S3_SECRET_ACCESS_KEY}
+
+# Service account ядра (CP_IAM_CLIENT_ID/SECRET) появляется после bootstrap:
+# файл необязателен, чтобы первый `up` прошёл до него.
+x-cp-secrets: &cp-secrets
+  - path: ./secrets/control-plane-iam.env
+    required: false
+
+x-healthcheck-py: &healthcheck-py
+  interval: 5s
+  timeout: 5s
+  retries: 30
+
+services:
+  # ---------------------------------------------------------------- core: IAM
+  iam-db:
+    image: postgres:16-alpine
+    profiles: [core]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iam
+      POSTGRES_PASSWORD: ${IAM_POSTGRES_PASSWORD:?set IAM_POSTGRES_PASSWORD}
+      POSTGRES_DB: iam
+    volumes:
+      - iam_db:/var/lib/postgresql/data
+    networks: [taimen]
+    mem_limit: ${PG_MEM_LIMIT:-256m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iam -d iam"]
+      <<: *healthcheck-py
+
+  iam-service:
+    build:
+      context: ./iam-service
+    image: ${IMAGE_PREFIX:-taimen}/iam-service:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn iam_service.app:app --host 0.0.0.0 --port 8010"
+    environment:
+      IAM_DATABASE_URL: postgresql+psycopg://iam:${IAM_POSTGRES_PASSWORD}@iam-db:5432/iam
+      IAM_BOOTSTRAP_TOKEN: ${IAM_BOOTSTRAP_TOKEN:?set IAM_BOOTSTRAP_TOKEN}
+      # Issuer — публичный адрес: он попадает в токены и в bindings Control Plane.
+      # Смена адреса означает перенос bindings.
+      IAM_ISSUER: ${TAIMEN_PUBLIC_URL:?set TAIMEN_PUBLIC_URL}/iam
+      IAM_SIGNING_PRIVATE_KEY_FILE: /run/secrets/iam_signing_key
+      IAM_SIGNING_KEY_ID: ${IAM_SIGNING_KEY_ID:-local-dev}
+    secrets:
+      - iam_signing_key
+    ports:
+      - "127.0.0.1:${IAM_HOST_PORT:-18010}:8010"
+    networks: [taimen]
+    mem_limit: ${IAM_MEM_LIMIT:-256m}
+    depends_on:
+      iam-db:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, а не localhost: в slim-образах localhost резолвится в ::1.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)"]
+      <<: *healthcheck-py
+
+  # ------------------------------------------------------- core: Control Plane
+  control-plane-db:
+    image: postgres:16-alpine
+    profiles: [core]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: control_plane
+      POSTGRES_PASSWORD: ${CP_POSTGRES_PASSWORD}
+      POSTGRES_DB: control_plane
+    volumes:
+      - control_plane_db:/var/lib/postgresql/data
+    networks: [taimen]
+    mem_limit: ${PG_MEM_LIMIT:-256m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U control_plane -d control_plane"]
+      <<: *healthcheck-py
+
+  control-plane-api:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    image: ${IMAGE_PREFIX:-taimen}/control-plane:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn control_plane.main:app --host 0.0.0.0 --port 8000"
+    env_file: *cp-secrets
+    environment:
+      <<: *cp-env
+      CP_BOOTSTRAP_TOKEN: ${CP_BOOTSTRAP_TOKEN:?set CP_BOOTSTRAP_TOKEN}
+      # IAM-only: legacy api-key не является credential.
+      CP_IAM_ENABLED: "true"
+      CP_IAM_ISSUER: ${TAIMEN_PUBLIC_URL}/iam
+      # JWKS — по внутреннему имени: проверка подписи не зависит от внешнего прокси.
+      CP_IAM_JWKS_URL: http://iam-service:8010/.well-known/jwks.json
+      CP_IAM_AUDIENCE: control-plane
+      CP_LEGACY_API_KEYS_ENABLED: ${CP_LEGACY_API_KEYS_ENABLED:-false}
+      # Администраторы реестра онтологий памяти: JSON-список id principal
+      CP_KNOWLEDGE_PACK_ADMINS: ${CP_KNOWLEDGE_PACK_ADMINS:-[]}
+      # Бюджет чтения памяти при сборке контекста задачи, секунды
+      CP_CONTEXT_TIMEOUT_SECONDS: ${CP_CONTEXT_TIMEOUT_SECONDS:-3}
+      CP_CORS_ORIGINS: ${CP_CORS_ORIGINS:-[]}
+    ports:
+      - "127.0.0.1:${CP_HOST_PORT:-18000}:8000"
+    networks: [taimen]
+    mem_limit: ${CP_MEM_LIMIT:-512m}
+    depends_on:
+      control-plane-db:
+        condition: service_healthy
+      memory-service:
+        condition: service_healthy
+      iam-service:
+        condition: service_healthy
+      # бакет и пользователь ядра должны существовать до первой загрузки; с внешним S3
+      # сервиса minio-bootstrap может не быть — зависимость необязательна
+      minio-bootstrap:
+        condition: service_completed_successfully
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      <<: *healthcheck-py
+
+  control-plane-worker:
+    image: ${IMAGE_PREFIX:-taimen}/control-plane:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    command: python -m control_plane.worker
+    env_file: *cp-secrets
+    environment:
+      <<: *cp-env
+    networks: [taimen]
+    mem_limit: ${CP_WORKER_MEM_LIMIT:-256m}
+    depends_on:
+      control-plane-db:
+        condition: service_healthy
+      control-plane-api:
+        condition: service_healthy
+
+  context-adapter:
+    image: ${IMAGE_PREFIX:-taimen}/control-plane:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    command: python -m control_plane.worker.context_adapter
+    env_file: *cp-secrets
+    environment:
+      <<: *cp-env
+    networks: [taimen]
+    mem_limit: ${CP_WORKER_MEM_LIMIT:-256m}
+    depends_on:
+      control-plane-db:
+        condition: service_healthy
+      control-plane-api:
+        condition: service_healthy
+      memory-service:
+        condition: service_healthy
+
+  # ------------------------------------------------------------- core: Memory
+  memory-db:
+    build:
+      context: ./memory-service/infra/memory-db
+    image: ${IMAGE_PREFIX:-taimen}/memory-db:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${MEMORY_POSTGRES_PASSWORD:?set MEMORY_POSTGRES_PASSWORD}
+      POSTGRES_DB: company_brain
+    volumes:
+      - memory_db:/var/lib/postgresql/data
+    networks: [taimen]
+    mem_limit: ${MEMORY_DB_MEM_LIMIT:-512m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory -d company_brain"]
+      <<: *healthcheck-py
+
+  memory-service:
+    build:
+      # Контекст — корень: platform-auth-sdk подключён path-зависимостью;
+      # memory-service/Dockerfile.dockerignore переопределяет корневой .dockerignore.
+      context: .
+      dockerfile: memory-service/Dockerfile
+    image: ${IMAGE_PREFIX:-taimen}/memory-service:${IMAGE_TAG:-local}
+    profiles: [core]
+    restart: unless-stopped
+    environment:
+      CB_DATABASE_URL: postgresql://memory:${MEMORY_POSTGRES_PASSWORD}@memory-db:5432/company_brain
+      CB_SERVER_API_KEY: ${MEMORY_API_KEY}
+      CB_SERVER_API_KEYS_PII: ""
+      CB_PII_PROTECTION: "true"
+      CB_DEFAULT_NAMESPACE: main
+      # Провайдеры: fake/echo работают офлайн (тесты, локальный запуск) или openai —
+      # любой OpenAI-совместимый endpoint (LLM_BASE_URL, LLM_API_KEY; см. .env.example).
+      CB_EMBEDDING_PROVIDER: ${MEMORY_EMBEDDING_PROVIDER:-fake}
+      CB_EMBEDDING_BASE_URL: ${LLM_BASE_URL:-}
+      CB_EMBEDDING_API_KEY: ${LLM_API_KEY:-}
+      CB_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
+      CB_EMBEDDING_DIM: "1536"
+      CB_EMBEDDING_TIMEOUT: "60"
+      CB_LLM_PROVIDER: ${MEMORY_LLM_PROVIDER:-echo}
+      CB_LLM_BASE_URL: ${LLM_BASE_URL:-}
+      CB_LLM_API_KEY: ${LLM_API_KEY:-}
+      CB_LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      CB_RERANK_ENABLED: ${MEMORY_RERANK_ENABLED:-false}
+      CB_RERANK_POOL: "20"
+      CB_CONSOLE_ENABLED: ${MEMORY_CONSOLE_ENABLED:-false}
+      CB_CONSOLE_NAMESPACES: ""
+      # IAM-токены audience memory-service параллельно со статическим ключом
+      CB_IAM_ENABLED: ${MEMORY_IAM_ENABLED:-true}
+      CB_IAM_ISSUER: ${TAIMEN_PUBLIC_URL}/iam
+      CB_IAM_JWKS_URL: http://iam-service:8010/.well-known/jwks.json
+      CB_IAM_AUDIENCE: memory-service
+    ports:
+      - "127.0.0.1:${MEMORY_HOST_PORT:-18001}:8077"
+    networks: [taimen]
+    mem_limit: ${MEMORY_MEM_LIMIT:-512m}
+    depends_on:
+      memory-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8077/healthz', timeout=3)"]
+      <<: *healthcheck-py
+
+  # -------------------------------------------------------- core: object store
+  # MinIO — S3 контура: содержимое артефактов ядра (бакет CP_S3_BUCKET, отдельный
+  # пользователь с политикой cp-artifacts; root-ключи — только у minio-bootstrap).
+  # Портов наружу нет.
+  minio:
+    # Официальные образы MinIO на Docker Hub и quay.io больше не раздаются анонимно;
+    # сборка Chainguard — тот же сервер (Apache-2.0 образ, AGPL-3.0 MinIO), закреплена по digest.
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:71674988a1c7ddd5724928633199152b11e4ddefd6c6ce2d60772ff4a8f22ca9}
+    profiles: [core]
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+    volumes:
+      - minio_data:/data
+    networks: [taimen]
+    mem_limit: ${MINIO_MEM_LIMIT:-256m}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  minio-bootstrap:
+    # вариант -dev: в нём есть /bin/sh для сценария ниже
+    image: ${MINIO_MC_IMAGE:-cgr.dev/chainguard/minio-client@sha256:19c80ef13b3bec25196b00c24345195f0d0e1305a339cebf6dc7d44b85782817}
+    profiles: [core]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      CP_S3_BUCKET: ${CP_S3_BUCKET:-artifacts}
+      CP_S3_ACCESS_KEY_ID: ${CP_S3_ACCESS_KEY_ID:?set CP_S3_ACCESS_KEY_ID}
+      CP_S3_SECRET_ACCESS_KEY: ${CP_S3_SECRET_ACCESS_KEY:?set CP_S3_SECRET_ACCESS_KEY}
+    entrypoint: ["/bin/sh", "-c"]
+    # Идемпотентно: бакет, политика ядра (ListBucket на бакет — иначе head_bucket даёт 403;
+    # объекты — Get/Put/Delete; создавать бакеты ядру не нужно), пользователь и привязка.
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
+        mc mb --ignore-existing "local/$$CP_S3_BUCKET"
+        cat > /tmp/cp-artifacts.json <<JSON
+        {"Version": "2012-10-17", "Statement": [
+          {"Effect": "Allow", "Action": ["s3:GetBucketLocation", "s3:ListBucket"], "Resource": ["arn:aws:s3:::$$CP_S3_BUCKET"]},
+          {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], "Resource": ["arn:aws:s3:::$$CP_S3_BUCKET/*"]}
+        ]}
+        JSON
+        mc admin policy create local cp-artifacts /tmp/cp-artifacts.json
+        mc admin user add local "$$CP_S3_ACCESS_KEY_ID" "$$CP_S3_SECRET_ACCESS_KEY"
+        # в образе mc нет grep: привязку проверяем по выводу user info (повторная attach — ошибка)
+        case "$$(mc admin user info local "$$CP_S3_ACCESS_KEY_ID")" in
+          *cp-artifacts*) ;;
+          *) mc admin policy attach local cp-artifacts --user "$$CP_S3_ACCESS_KEY_ID" ;;
+        esac
+        echo "minio bootstrap complete: bucket $$CP_S3_BUCKET"
+    networks: [taimen]
+
+  # ---------------------------------------------------------------- notify
+  # Сервис уведомлений: отправка любым сервисом или скиллом, каналы веб / Telegram /
+  # email, потребитель событий ядра. Своя БД; service account — secrets/notification-iam.env
+  # (пишет deploy/bootstrap.py).
+  notification-db:
+    image: postgres:16-alpine
+    profiles: [notify]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: notify
+      POSTGRES_PASSWORD: ${NOTIFY_POSTGRES_PASSWORD:?set NOTIFY_POSTGRES_PASSWORD}
+      POSTGRES_DB: notify
+    volumes:
+      - notify_db:/var/lib/postgresql/data
+    networks: [taimen]
+    mem_limit: ${NOTIFY_DB_MEM_LIMIT:-128m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notify -d notify"]
+      <<: *healthcheck-py
+
+  notification-service:
+    build:
+      # Контекст — корень: platform-auth-sdk и клиент ядра подключены путём.
+      context: .
+      dockerfile: notification-service/Dockerfile
+    image: ${IMAGE_PREFIX:-taimen}/notification-service:${IMAGE_TAG:-local}
+    profiles: [notify]
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head && notification-service"
+    env_file:
+      - path: ./secrets/notification-iam.env
+        required: false
+      # бот Telegram: NS_TELEGRAM_BOT_TOKEN, NS_TELEGRAM_WEBHOOK_SECRET,
+      # NS_TELEGRAM_BOT_USERNAME; без файла канала Telegram нет
+      - path: ./secrets/notification-telegram.env
+        required: false
+    environment:
+      NS_DATABASE_URL: postgresql+psycopg://notify:${NOTIFY_POSTGRES_PASSWORD:?set NOTIFY_POSTGRES_PASSWORD}@notification-db:5432/notify
+      NS_IAM_URL: http://iam-service:8010
+      NS_IAM_ISSUER: ${TAIMEN_PUBLIC_URL}/iam
+      NS_IAM_JWKS_URL: http://iam-service:8010/.well-known/jwks.json
+      NS_AUDIENCE: notification-service
+      NS_CONTROL_PLANE_URL: http://control-plane-api:8000
+      NS_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-notifications@localhost}
+      NS_SMTP_HOST: ${NOTIFY_SMTP_HOST:-localhost}
+      NS_SMTP_PORT: ${NOTIFY_SMTP_PORT:-587}
+    ports:
+      - "127.0.0.1:${NOTIFY_HOST_PORT:-18045}:8000"
+    networks: [taimen]
+    mem_limit: ${NOTIFY_MEM_LIMIT:-256m}
+    depends_on:
+      notification-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      <<: *healthcheck-py
+
+  # ---------------------------------------------------------------------- idp
+  # Необязательный профиль. Keycloak — внешний IdP людей: его токен обменивается в IAM
+  # (federation:exchange), ролей и tenant в realm нет — полномочия живут в IAM и
+  # Control Plane. Realm — шаблон deploy/keycloak/platform-realm.json.
+  keycloak-db:
+    image: postgres:16-alpine
+    profiles: [idp]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak_db:/var/lib/postgresql/data
+    networks: [taimen]
+    mem_limit: ${PG_MEM_LIMIT:-256m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.2
+    profiles: [idp]
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL_HOST: keycloak-db
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      # Публичный адрес с префиксом пути: issuer realm = ${TAIMEN_PUBLIC_URL}/auth/realms/platform
+      KC_HOSTNAME: ${TAIMEN_PUBLIC_URL}/auth
+      KC_HOSTNAME_STRICT: ${KEYCLOAK_HOSTNAME_STRICT:-true}
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      # --import-realm импортирует realm только при первом старте; дальнейшие правки —
+      # через Admin API.
+      - ./deploy/keycloak/platform-realm.json:/opt/keycloak/data/import/platform-realm.json:ro
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18081}:8080"
+    networks: [taimen]
+    mem_limit: ${KEYCLOAK_MEM_LIMIT:-768m}
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /auth/health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  # --------------------------------------------------------------------- edge
+  caddy:
+    image: caddy:2-alpine
+    profiles: [edge]
+    restart: unless-stopped
+    ports:
+      - "${EDGE_HTTP_PORT:-80}:80"
+      - "${EDGE_HTTPS_PORT:-443}:443"
+    volumes:
+      # Bind-mount держит inode: править файл на месте или `up -d --force-recreate caddy`.
+      - ${CADDYFILE:-./deploy/caddy/Caddyfile.local}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      taimen:
+        # Контейнеры ходят к IAM и Keycloak по публичному адресу (issuer); локально
+        # это тот же Caddy под именем taimen.localhost.
+        aliases:
+          - ${TAIMEN_PUBLIC_HOST:-taimen.localhost}
+
+  # Руководство guide/ (статический MkDocs): Caddy отдаёт его на /guide/.
+  guide:
+    build:
+      context: ./guide
+    image: ${IMAGE_PREFIX:-taimen}/guide:${IMAGE_TAG:-local}
+    profiles: [edge]
+    restart: unless-stopped
+    mem_limit: 64m
+    networks: [taimen]
+
+secrets:
+  iam_signing_key:
+    file: ${IAM_SIGNING_KEY_FILE:-./secrets/iam-signing.pem}
+
+networks:
+  taimen:
+    name: ${TAIMEN_NETWORK:-taimen_default}
+
+# Имена volumes заданы явно, чтобы инсталляция могла указать уже существующие.
+volumes:
+  iam_db:
+    name: ${VOLUME_IAM_DB:-${COMPOSE_PROJECT_NAME:-taimen}_iam_db}
+  control_plane_db:
+    name: ${VOLUME_CONTROL_PLANE_DB:-${COMPOSE_PROJECT_NAME:-taimen}_control_plane_db}
+  memory_db:
+    name: ${VOLUME_MEMORY_DB:-${COMPOSE_PROJECT_NAME:-taimen}_memory_db}
+  minio_data:
+    name: ${VOLUME_MINIO_DATA:-${COMPOSE_PROJECT_NAME:-taimen}_minio_data}
+  notify_db:
+    name: ${VOLUME_NOTIFY_DB:-${COMPOSE_PROJECT_NAME:-taimen}_notify_db}
+  keycloak_db:
+    name: ${VOLUME_KEYCLOAK_DB:-${COMPOSE_PROJECT_NAME:-taimen}_keycloak_db}
+  caddy_data:
+    name: ${VOLUME_CADDY_DATA:-${COMPOSE_PROJECT_NAME:-taimen}_caddy_data}
+  caddy_config:
+    name: ${VOLUME_CADDY_CONFIG:-${COMPOSE_PROJECT_NAME:-taimen}_caddy_config}

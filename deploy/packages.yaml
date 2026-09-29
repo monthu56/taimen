@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=../packages/schema/v1/object.schema.json
+# Установка каталога: какие пакеты из packages/ ставить в инсталляцию.
+#   python3 tools/cp_packages.py check --install deploy/packages.yaml
+#   python3 tools/cp_packages.py plan  --install deploy/packages.yaml --server http://taimen.localhost
+#   python3 tools/cp_packages.py apply --install deploy/packages.yaml --server http://taimen.localhost
+apiVersion: taimen.ai/v1
+kind: Installation
+key: default
+spec:
+  packages: [example]

@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=../schema/v1/object.schema.json
+# Минимальный пакет каталога: один тип задачи. Образец для своих пакетов —
+# структура и виды объектов описаны в руководстве (guide/, «Пакеты каталога»).
+apiVersion: taimen.ai/v1
+kind: Package
+key: example
+spec:
+  version: 0.1.0
+  displayName: Example
+  description: Образец пакета каталога — тип задачи «Запрос» со своим словарём статусов.
+  requires: []

@@ -1,0 +1,16 @@
+# Dependabot для umbrella: только то, что живёт в этом репозитории, — GitHub Actions и
+# образы, закреплённые в compose.yml. Зависимости компонентов обновляются в их репозиториях.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: compose
