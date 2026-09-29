@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Идемпотентный bootstrap платформы Taimen (make bootstrap).
+"""Idempotent bootstrap of the Taimen platform (make bootstrap).
 
-Первичная инициализация IAM и Control Plane в один проход:
+Initial setup of IAM and the Control Plane in one pass:
 
-  1. ждёт готовности Control Plane и IAM по портам на 127.0.0.1;
-  2. IAM: tenant, audiences со своими потолками scope, human principal оператора;
-  2a. IAM: service account Control Plane (память) → secrets/control-plane-iam.env;
-  3. Control Plane: POST /api/v1/bootstrap с `iamBinding` оператора → tenant (тот же
-     UUID, что у IAM), admin principal и первый binding IAM↔CP одной транзакцией;
-  4. свежий authentication context → Platform Access Token оператора с потолком
-     read/write/admin → secrets/harness-pat (0600); обмен PAT проверяется тут же;
-  5. Control Plane: project template, project и workspace;
-  5a. notification-service: service account IAM, описание сервиса и его личность в
-     ядре → secrets/notification-iam.env (сервис подхватит файл при `up -d`);
-     legacy api-key из ответа шага 3 отзывается — инсталляция IAM-only;
-  6. --agents agents.json (необязательно): principals агентов в Control Plane и IAM,
-     bindings и PAT с потолком read/write → secrets/agents/<slug>.pat.
+  1. waits for the Control Plane and IAM to be ready on the 127.0.0.1 ports;
+  2. IAM: the tenant, audiences with their own scope ceilings, the operator's human principal;
+  2a. IAM: the Control Plane service account (memory) → secrets/control-plane-iam.env;
+  3. Control Plane: POST /api/v1/bootstrap with the operator's `iamBinding` → the tenant (the
+     same UUID as in IAM), the admin principal and the first IAM↔CP binding in one transaction;
+  4. a fresh authentication context → the operator's Platform Access Token with the
+     read/write/admin ceiling → secrets/harness-pat (0600); the PAT exchange is verified right away;
+  5. Control Plane: project template, project and workspace;
+  5a. notification-service: an IAM service account, the service description and its identity in
+     the core → secrets/notification-iam.env (the service picks up the file on `up -d`);
+     the legacy api-key from the step 3 response is revoked — the installation is IAM-only;
+  6. --agents agents.json (optional): agent principals in the Control Plane and IAM,
+     bindings and PATs with the read/write ceiling → secrets/agents/<slug>.pat.
 
-Состояние — deploy/state/<env>.json: идентификаторы не секретны, повторный запуск
-пропускает сделанное и приводит изменяемое (потолки audiences, права bindings) к
-реестру в скрипте. Секреты не печатаются. Только стандартная библиотека Python.
+State lives in deploy/state/<env>.json: the identifiers are not secret; a repeated run
+skips what is done and brings the mutable parts (audience ceilings, binding permissions)
+in line with the registry in the script. Secrets are never printed. Python standard library only.
 
     python3 deploy/bootstrap.py --env .env
     python3 deploy/bootstrap.py --env .env --agents agents.json
@@ -39,12 +39,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Audiences IAM и их потолки scope: один токен — один сервис.
+# IAM audiences and their scope ceilings: one token — one service.
 AUDIENCES = {
-    # control-plane:decide — решение одного approval из канала уведомлений
+    # control-plane:decide — deciding a single approval from a notification channel
     "control-plane": ["control-plane:read", "control-plane:write", "control-plane:admin", "control-plane:decide"],
-    # memory:tenants и memory:service — только service account ядра;
-    # memory:on-behalf — сервис читает память от имени principal
+    # memory:tenants and memory:service — only the core's service account;
+    # memory:on-behalf — a service reads memory on behalf of a principal
     "memory-service": [
         "memory:read",
         "memory:write",
@@ -53,23 +53,23 @@ AUDIENCES = {
         "memory:on-behalf",
         "memory:service",
     ],
-    # send — отправители, read — инбокс человека, admin — обязательные правила и группы каналов
+    # send — senders, read — a person's inbox, admin — mandatory rules and channel groups
     "notification-service": ["notifications:send", "notifications:read", "notifications:admin"],
-    # сам IAM как audience: сервис уведомлений подтверждает привязки каналов
+    # IAM itself as an audience: the notification service confirms channel links
     "iam": ["iam:channel-links"],
 }
 
-# Service account Control Plane: context-adapter пишет память всех tenant'ов.
-# Секрет живёт только в secrets/control-plane-iam.env (env_file процессов ядра).
+# Control Plane service account: context-adapter writes the memory of all tenants.
+# The secret lives only in secrets/control-plane-iam.env (env_file of the core processes).
 CP_SERVICE_ACCOUNT = {
     "displayName": "Taimen Control Plane",
     "audiences": ["memory-service"],
     "scopeCeiling": ["memory:read", "memory:write", "memory:tenants", "memory:on-behalf", "memory:service"],
 }
 
-# notification-service — агент без размещения с личностью вида service: описание в ядре
-# задаёт его права, IAM-часть — service account. Читает события и каталог адресатов
-# ядра, подтверждает привязки каналов в IAM.
+# notification-service is an agent without placement, with an identity of kind service: the
+# description in the core defines its permissions, the IAM part is a service account. It reads
+# events and the core's recipient directory, and confirms channel links in IAM.
 NOTIFICATION_AGENT = {
     "key": "notification-service",
     "spec": {
@@ -86,7 +86,7 @@ NOTIFICATION_AGENT = {
     },
 }
 
-# Права агента по умолчанию (реестр --agents): без admin и approvals.decide.
+# Default agent permissions (the --agents registry): without admin and approvals.decide.
 AGENT_DEFAULT_PERMISSIONS = [
     "sessions.open",
     "tasks.read",
@@ -130,7 +130,7 @@ class Http:
             except (urllib.error.URLError, OSError):
                 pass
             if time.time() >= deadline:
-                raise SystemExit(f"не дождался {self.base}{path}")
+                raise SystemExit(f"timed out waiting for {self.base}{path}")
             time.sleep(2)
 
 
@@ -174,24 +174,24 @@ def issue_pat(
 def revoke_service_account(iam: Http, bootstrap: dict, tenant: str, client_id: str) -> None:
     try:
         iam.call("POST", f"/api/v1/tenants/{tenant}/service-accounts/{client_id}:revoke", None, bootstrap)
-        print("   прежний service account отозван:", client_id)
+        print("   previous service account revoked:", client_id)
     except RuntimeError as error:
-        print("   прежний service account не отозван:", str(error)[:120])
+        print("   previous service account not revoked:", str(error)[:120])
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--env", default=".env")
-    parser.add_argument("--name", default=None, help="имя окружения (по умолчанию COMPOSE_PROJECT_NAME)")
+    parser.add_argument("--name", default=None, help="environment name (default: COMPOSE_PROJECT_NAME)")
     parser.add_argument("--operator", default="Human Operator")
     parser.add_argument("--tenant-slug", default=None)
-    parser.add_argument("--agents", default=None, help="реестр агентов (agents.json) — необязательно")
+    parser.add_argument("--agents", default=None, help="agent registry (agents.json) — optional")
     parser.add_argument("--pat-ttl", type=int, default=180 * 24 * 3600)
     parser.add_argument("--secrets-dir", default="secrets")
     parser.add_argument(
         "--reissue-agent-pats",
         action="store_true",
-        help="перевыпустить PAT агентов, даже если файл есть (старый файл → .bak)",
+        help="reissue agent PATs even if the file exists (old file → .bak)",
     )
     args = parser.parse_args()
 
@@ -212,24 +212,24 @@ def main() -> int:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
 
-    print("1. ожидание сервисов")
+    print("1. waiting for services")
     cp.wait("/health/ready")
     iam.wait("/healthz")
 
     if "iamTenantId" in state:
-        # State пережил сброс volumes: id из него уже не существуют, и «уже сделано»
-        # было бы ложью.
+        # The state survived a volume reset: its ids no longer exist, and "already done"
+        # would be a lie.
         try:
             iam.call("GET", f"/api/v1/tenants/{state['iamTenantId']}/audiences", headers=bootstrap_header)
         except RuntimeError as error:
             if "HTTP 404" in str(error):
                 raise SystemExit(
-                    f"{state_path.relative_to(ROOT)} ссылается на IAM tenant {state['iamTenantId']}, "
-                    "которого нет в IAM (volumes сброшены?). Запустите `make reset-state` и повторите bootstrap."
+                    f"{state_path.relative_to(ROOT)} refers to IAM tenant {state['iamTenantId']}, "
+                    "which does not exist in IAM (volumes reset?). Run `make reset-state` and repeat bootstrap."
                 ) from error
             raise
 
-    print("2. IAM tenant, audiences, principal оператора")
+    print("2. IAM tenant, audiences, operator principal")
     if "iamTenantId" not in state:
         tenant = iam.call("POST", "/api/v1/tenants", {"slug": slug, "name": slug}, bootstrap_header)
         state["iamTenantId"] = tenant["id"]
@@ -251,7 +251,7 @@ def main() -> int:
             ready.add(key)
             state["iamAudiences"] = sorted(ready)
             save()
-        # Потолок сервиса растёт вместе с сервисом: приводим allowedScopes к реестру.
+        # A service's ceiling grows with the service: bring allowedScopes in line with the registry.
         iam.call("PATCH", f"/api/v1/tenants/{iam_tenant}/audiences/{key}", {"allowedScopes": scopes}, bootstrap_header)
     if "iamOperatorPrincipalId" not in state:
         principal = iam.call(
@@ -262,18 +262,18 @@ def main() -> int:
         )
         state["iamOperatorPrincipalId"] = principal["id"]
         save()
-    print("   IAM tenant", iam_tenant, "оператор", state["iamOperatorPrincipalId"])
+    print("   IAM tenant", iam_tenant, "operator", state["iamOperatorPrincipalId"])
     if env.get("IAM_TENANT_ID", "") != iam_tenant:
-        print(f"   !! впишите в {args.env}: IAM_TENANT_ID={iam_tenant} (нужен клиентам и раннерам)")
+        print(f"   !! add to {args.env}: IAM_TENANT_ID={iam_tenant} (needed by clients and runners)")
 
-    print("2a. service account Control Plane в IAM")
+    print("2a. Control Plane service account in IAM")
     sa_env = secrets_dir / "control-plane-iam.env"
-    # PATCH потолка у service account в IAM нет: если потолок в коде вырос, выпускаем
-    # новый service account, прежний отзывается.
+    # IAM has no PATCH for a service account's ceiling: if the ceiling in the code grew, issue
+    # a new service account and revoke the previous one.
     ceiling = sorted(CP_SERVICE_ACCOUNT["scopeCeiling"]) + sorted(CP_SERVICE_ACCOUNT["audiences"])
     stale = "cpServiceAccountClientId" in state and state.get("cpServiceAccountCeiling") != ceiling
     if stale:
-        print("   потолок service account изменился — перевыпуск")
+        print("   service account ceiling changed — reissuing")
     if "cpServiceAccountClientId" not in state or not sa_env.exists() or stale:
         issued = iam.call(
             "POST", f"/api/v1/tenants/{iam_tenant}/service-accounts", CP_SERVICE_ACCOUNT, bootstrap_header
@@ -286,17 +286,17 @@ def main() -> int:
         save()
         if previous and previous != issued["clientId"]:
             revoke_service_account(iam, bootstrap_header, iam_tenant, previous)
-        print("   выпущен →", sa_env, "client", issued["clientId"])
+        print("   issued →", sa_env, "client", issued["clientId"])
         print(
-            "   !! перезапустите ядро, чтобы оно взяло env-файл: "
+            "   !! restart the core so that it picks up the env file: "
             "docker compose up -d control-plane-api control-plane-worker context-adapter"
         )
     else:
-        print("   уже есть:", sa_env, "client", state["cpServiceAccountClientId"])
+        print("   already exists:", sa_env, "client", state["cpServiceAccountClientId"])
 
-    print("3. Control Plane bootstrap с binding оператора")
+    print("3. Control Plane bootstrap with the operator binding")
     if "cpTenantId" not in state:
-        # Единый tenant платформы: Control Plane получает UUID tenant'а IAM.
+        # A single platform tenant: the Control Plane gets the UUID of the IAM tenant.
         boot = cp.call(
             "POST",
             "/api/v1/bootstrap",
@@ -321,18 +321,18 @@ def main() -> int:
         print(
             "   tenant",
             state["cpTenantId"],
-            "оператор",
+            "operator",
             state["cpOperatorPrincipalId"],
             "binding",
             state["cpOperatorBindingId"],
         )
     else:
-        print("   уже сделано:", state["cpTenantId"])
+        print("   already done:", state["cpTenantId"])
 
-    print("4. PAT оператора")
+    print("4. operator PAT")
     pat_file = secrets_dir / "harness-pat"
     if not pat_file.exists():
-        # Человеку IAM выпускает PAT только со свежим authentication context (≤ 300 с).
+        # IAM issues a PAT to a human only with a fresh authentication context (≤ 300 s).
         iam.call(
             "POST",
             f"/api/v1/tenants/{iam_tenant}/principals/{state['iamOperatorPrincipalId']}/authentication-contexts",
@@ -353,9 +353,9 @@ def main() -> int:
         state["operatorPatPrefix"] = credential.get("publicPrefix")
         state["operatorPatExpiresAt"] = credential.get("expiresAt")
         save()
-        print("   выпущен →", pat_file, "prefix", state.get("operatorPatPrefix"))
+        print("   issued →", pat_file, "prefix", state.get("operatorPatPrefix"))
     else:
-        print("   уже есть:", pat_file)
+        print("   already exists:", pat_file)
     pat = pat_file.read_text().strip()
     exchange = iam.call(
         "POST",
@@ -363,7 +363,7 @@ def main() -> int:
         {"token": pat, "audience": "control-plane", "scopes": OPERATOR_CEILING},
     )
     auth = {"Authorization": f"Bearer {exchange['accessToken']}"}
-    print("   обмен PAT → access token: ok")
+    print("   PAT → access token exchange: ok")
 
     print("5. Control Plane: project template, project, workspace")
     if "templateId" not in state:
@@ -390,7 +390,7 @@ def main() -> int:
         save()
     print("   project", state["projectId"], "workspace", state["workspaceId"])
 
-    print("5a. notification-service: service account IAM, личность в ядре, env-файл")
+    print("5a. notification-service: IAM service account, identity in the core, env file")
     ns_env = secrets_dir / "notification-iam.env"
     identity = NOTIFICATION_AGENT["spec"]["identity"]
     account = {
@@ -401,7 +401,7 @@ def main() -> int:
     ceiling = sorted(account["scopeCeiling"]) + sorted(account["audiences"])
     stale = "notifyServiceAccountClientId" in state and state.get("notifyServiceAccountCeiling") != ceiling
     if stale:
-        print("   потолок или audiences изменились — перевыпуск")
+        print("   ceiling or audiences changed — reissuing")
     if "notifyServiceAccountClientId" not in state or not ns_env.exists() or stale:
         issued = iam.call("POST", f"/api/v1/tenants/{iam_tenant}/service-accounts", account, bootstrap_header)
         previous = state.get("notifyServiceAccountClientId")
@@ -414,11 +414,12 @@ def main() -> int:
         )
         if previous and previous != issued["clientId"]:
             revoke_service_account(iam, bootstrap_header, iam_tenant, previous)
-        print("   выпущен →", ns_env, "client", issued["clientId"])
-        print("   !! перезапустите сервис: docker compose --profile notify up -d notification-service")
+        print("   issued →", ns_env, "client", issued["clientId"])
+        print("   !! restart the service: docker compose --profile notify up -d notification-service")
     else:
-        print("   уже есть:", ns_env)
-    # Описание — источник прав в ядре: principal и binding с правами описания выводит ядро.
+        print("   already exists:", ns_env)
+    # The description is the source of permissions in the core: the core derives the principal
+    # and the binding with the description's permissions.
     published = cp.call("POST", "/api/v1/agents", NOTIFICATION_AGENT, {**auth, "Idempotency-Key": str(uuid.uuid4())})
     linked = cp.call(
         "PUT",
@@ -428,19 +429,19 @@ def main() -> int:
     )
     state["notifyCpPrincipalId"] = linked.get("principalId") or state.get("notifyCpPrincipalId")
     save()
-    print("   ревизия", published.get("currentRevision"), "principal", state["notifyCpPrincipalId"])
+    print("   revision", published.get("currentRevision"), "principal", state["notifyCpPrincipalId"])
 
     if state.get("cpLegacyAdminKeyId") and not state.get("cpLegacyAdminKeyRevoked"):
         try:
             cp.call("POST", f"/api/v1/api-keys/{state['cpLegacyAdminKeyId']}:revoke", None, auth)
             state["cpLegacyAdminKeyRevoked"] = True
             save()
-            print("   legacy admin api-key отозван")
+            print("   legacy admin api-key revoked")
         except RuntimeError as error:
-            print("   legacy admin api-key не отозван:", str(error)[:120])
+            print("   legacy admin api-key not revoked:", str(error)[:120])
 
     if args.agents:
-        print("6. агенты из", args.agents)
+        print("6. agents from", args.agents)
         registry = json.loads(Path(args.agents).read_text())
         agents_state = state.setdefault("agents", {})
         for agent in registry["agents"]:
@@ -472,7 +473,7 @@ def main() -> int:
                 agent.get("permissions") or registry.get("defaultAgentPermissions") or AGENT_DEFAULT_PERMISSIONS
             )
             if "admin" in permissions or "approvals.decide" in permissions:
-                raise SystemExit(f"{agent_slug}: агенту нельзя выдавать admin / approvals.decide")
+                raise SystemExit(f"{agent_slug}: an agent must not be granted admin / approvals.decide")
             binding = cp.call(
                 "POST",
                 f"/api/v1/principals/{entry['cpPrincipalId']}/iam-bindings",
@@ -507,10 +508,10 @@ def main() -> int:
             )
 
     save()
-    print("готово:", state_path.relative_to(ROOT))
+    print("done:", state_path.relative_to(ROOT))
     print(
-        "credential для MCP-плагина и CLI: ~/.config/iam/credentials.json, ключ "
-        f"{issuer}|{iam_tenant}|{state['iamOperatorPrincipalId']} → содержимое {pat_file.relative_to(ROOT)}"
+        "credential for the MCP plugin and CLI: ~/.config/iam/credentials.json, key "
+        f"{issuer}|{iam_tenant}|{state['iamOperatorPrincipalId']} → contents of {pat_file.relative_to(ROOT)}"
     )
     return 0
 

@@ -9,13 +9,13 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 
-# Локальные секреты и состояние: в git только .env.example
+# Local secrets and state: only .env.example is in git
 .env
 secrets/
 deploy/state/
 
-# Собранное руководство (make guide)
+# The built guide (make guide)
 guide/site/
 
-# Локальные настройки инструментов
+# Local tool settings
 .claude/

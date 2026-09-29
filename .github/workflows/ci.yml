@@ -1,7 +1,7 @@
-# CI umbrella. Тесты компонентов гоняются здесь, а не только в их репозиториях:
-# control-plane, memory-service, notification-service и skill-sdk берут соседей
-# (platform-auth-sdk, platform-llm, клиент ядра) path-зависимостью и в одиночном
-# чекауте не собираются. Чекаут с сабмодулями даёт всем соседей на закреплённых ревизиях.
+# Umbrella CI. Component tests run here, not only in their own repositories:
+# control-plane, memory-service, notification-service and skill-sdk take their neighbours
+# (platform-auth-sdk, platform-llm, the core client) as path dependencies and do not build
+# in a standalone checkout. A checkout with submodules gives everyone neighbours at pinned revisions.
 name: ci
 
 on:
@@ -49,7 +49,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: ${{ env.UV_VERSION }}
-      - name: Установить зависимости
+      - name: Install dependencies
         working-directory: ${{ matrix.component }}
         run: uv sync ${{ matrix.extra }} --all-groups 2>/dev/null || uv sync ${{ matrix.extra }} --dev
       - name: ruff
@@ -62,7 +62,7 @@ jobs:
         run: uv run ${{ matrix.extra }} pytest -q ${{ matrix.tests }}
 
   control-plane:
-    name: control-plane (все тесты, PostgreSQL)
+    name: control-plane (all tests, PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -92,14 +92,14 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
           uv run pytest -q tests/unit tests/client tests/integration tests/concurrency
-      - name: skill-sdk сквозь исполнитель скиллов ядра
+      - name: skill-sdk through the core skill executor
         working-directory: control-plane
         run: |
           PYTHONPATH=../skill-sdk/src:../skill-sdk uv run pytest -q -p no:cacheprovider \
             -c ../skill-sdk/pyproject.toml ../skill-sdk/tests/test_executor_e2e.py
 
   notification-service:
-    name: notification-service (все тесты, PostgreSQL)
+    name: notification-service (all tests, PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -131,46 +131,46 @@ jobs:
           uv run pytest -q
 
   umbrella:
-    name: umbrella (tools, compose, ссылки, oss-check)
+    name: umbrella (tools, compose, links, oss-check)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          # oss-check смотрит историю, достижимую из ревизии (gitleaks)
+          # oss-check inspects the history reachable from the revision (gitleaks)
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           version: ${{ env.UV_VERSION }}
-      - name: ruff + тесты tools/
+      - name: ruff + tests of tools/
         run: |
           uvx ruff check tools deploy
           uvx ruff format --check tools deploy
           uv run --no-project --with pytest python -m pytest -q tools/tests
-      - name: Интерполяция compose со всеми профилями
+      - name: Compose interpolation with all profiles
         run: |
           cp .env.example .env
           python3 tools/fill_secrets.py .env
           mkdir -p secrets && touch secrets/iam-signing.pem
           docker compose --profile core --profile notify --profile idp --profile edge config --quiet
-      - name: Пакеты каталога (без стенда)
+      - name: Catalog packages (without a running installation)
         run: uv run --no-project --with pyyaml --with jsonschema python tools/cp_packages.py check --install deploy/packages.yaml
-      - name: Ссылки в документации
+      - name: Documentation links
         run: python3 tools/linkcheck.py
       - name: gitleaks
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
             | sudo tar -xz -C /usr/local/bin gitleaks
       - name: oss-check umbrella
-        # Приватный стоп-лист — секрет OSS_CHECK_STOPLIST (одно регулярное выражение на строку);
-        # без него проверяются лицензии, язык документов и gitleaks.
+        # The private stop-list is the OSS_CHECK_STOPLIST secret (one regular expression per line);
+        # without it, licences, document language and gitleaks are checked.
         env:
           OSS_CHECK_STOPLIST: ${{ secrets.OSS_CHECK_STOPLIST }}
         run: python3 tools/oss_check.py . --ref HEAD
 
   guide:
-    name: руководство guide/ (mkdocs --strict)
+    name: guide guide/ (mkdocs --strict)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -180,15 +180,15 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: make guide
         run: |
-          if [ ! -f guide/mkdocs.yml ]; then echo "guide/ ещё нет — пропуск"; exit 0; fi
+          if [ ! -f guide/mkdocs.yml ]; then echo "no guide/ yet — skipping"; exit 0; fi
           make guide
 
   quickstart:
-    name: quickstart с чистого клона (core edge)
+    name: quickstart from a clean clone (core edge)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Критерий тега платформы: шаги README
-    # make secrets → make up → make bootstrap → make smoke проходят на чистой машине.
+    # Platform tag criterion: the README steps
+    # make secrets → make up → make bootstrap → make smoke pass on a clean machine.
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -203,21 +203,21 @@ jobs:
           start=$(date +%s)
           make up PROFILES="core edge"
           echo "build+up: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Дождаться healthz
+      - name: Wait for healthz
         run: |
           for i in $(seq 1 60); do make smoke >/dev/null 2>&1 && break; sleep 5; done
           make smoke
-      - name: make bootstrap (дважды — идемпотентность)
+      - name: make bootstrap (twice — idempotency)
         run: |
           make bootstrap
-          sudo test -f secrets/harness-pat || { echo "bootstrap не выпустил PAT"; exit 1; }
+          sudo test -f secrets/harness-pat || { echo "bootstrap did not issue a PAT"; exit 1; }
           make bootstrap
-      - name: Перезапуск ядра после bootstrap и smoke
+      - name: Restart the core after bootstrap, then smoke
         run: |
           docker compose --profile core --profile edge up -d control-plane-api control-plane-worker context-adapter
           for i in $(seq 1 60); do make smoke >/dev/null 2>&1 && break; sleep 5; done
           make smoke
           docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Журналы при сбое
+      - name: Logs on failure
         if: failure()
         run: docker compose --profile "*" logs --tail 200

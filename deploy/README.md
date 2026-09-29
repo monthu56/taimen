@@ -1,74 +1,75 @@
-# deploy/ — запуск и bootstrap
+# deploy/ — startup and bootstrap
 
-Всё, что нужно, чтобы поднять Taimen из чистого клона и довести до рабочего
-состояния. Секретов в каталоге нет: `.env`, PAT и ключ подписи живут в `secrets/` и
-`deploy/state/`, оба в `.gitignore`. Подробное описание — в руководстве `guide/`
-(разделы о начале работы и эксплуатации).
+Everything needed to bring Taimen up from a clean clone to a working state. There are
+no secrets in this directory: `.env`, PATs and the signing key live in `secrets/` and
+`deploy/state/`, both in `.gitignore`. The detailed description is in the guide
+`guide/` (the getting-started and operations sections).
 
 ```text
 deploy/
-├── bootstrap.py                 идемпотентный bootstrap: IAM → Control Plane → PAT → сервисы → агенты
-├── caddy/Caddyfile.local        внешний контур локального запуска: http, один хост, раскладка по путям
-├── keycloak/platform-realm.json шаблон realm для необязательного профиля idp
-└── state/<env>.json             состояние bootstrap: идентификаторы, не секреты (в .gitignore)
+├── bootstrap.py                 idempotent bootstrap: IAM → Control Plane → PAT → services → agents
+├── caddy/Caddyfile.local        edge for a local run: http, one host, routing by path
+├── keycloak/platform-realm.json realm template for the optional idp profile
+└── state/<env>.json             bootstrap state: identifiers, not secrets (in .gitignore)
 ```
 
-Профили compose, переменные окружения и порты описаны в `compose.yml` и
-`.env.example` в корне; здесь они не дублируются.
+Compose profiles, environment variables and ports are described in `compose.yml` and
+`.env.example` at the root; they are not duplicated here.
 
-## Локальный запуск
+## Local run
 
 ```bash
-make secrets                     # .env (0600) со случайными секретами + secrets/iam-signing.pem
+make secrets                     # .env (0600) with random secrets + secrets/iam-signing.pem
 make up PROFILES="core notify edge"
 make bootstrap
 docker compose --profile notify up -d control-plane-api control-plane-worker context-adapter notification-service
 make smoke
 ```
 
-После первого bootstrap ядро и notification-service перезапускаются один раз, чтобы
-подхватить выпущенные для них service accounts (`secrets/control-plane-iam.env`,
-`secrets/notification-iam.env`); скрипт напоминает об этом. На Linux ключ подписи
-`secrets/iam-signing.pem`, который монтируется в контейнер IAM, должен принадлежать
-uid 10001, права 600.
+After the first bootstrap the core and notification-service are restarted once to
+pick up the service accounts issued for them (`secrets/control-plane-iam.env`,
+`secrets/notification-iam.env`); the script reminds you of this. On Linux the signing
+key `secrets/iam-signing.pem`, which is mounted into the IAM container, must be owned
+by uid 10001 with mode 600.
 
-## Что делает bootstrap
+## What bootstrap does
 
-`deploy/bootstrap.py --env .env` идемпотентен: сделанное записывается в
-`deploy/state/<env>.json` (`<env>` — `COMPOSE_PROJECT_NAME` или `--name`), повторный
-запуск пропускает готовые шаги и приводит изменяемое (потолки audiences, права
-bindings) к реестру в скрипте. Секреты не печатаются.
+`deploy/bootstrap.py --env .env` is idempotent: what has been done is recorded in
+`deploy/state/<env>.json` (`<env>` is `COMPOSE_PROJECT_NAME` or `--name`); a repeated
+run skips completed steps and brings the mutable parts (audience ceilings, binding
+permissions) in line with the registry in the script. Secrets are never printed.
 
-1. Ждёт готовности Control Plane и IAM на портах `127.0.0.1`.
-2. IAM: tenant, audiences со своими потолками scope (`control-plane`,
-   `memory-service`, `notification-service`, `iam`), human principal оператора
-   (`--operator`, по умолчанию `Human Operator`).
-3. IAM: service account Control Plane для доступа к памяти →
+1. Waits for the Control Plane and IAM to be ready on the `127.0.0.1` ports.
+2. IAM: the tenant, audiences with their own scope ceilings (`control-plane`,
+   `memory-service`, `notification-service`, `iam`), the operator's human principal
+   (`--operator`, `Human Operator` by default).
+3. IAM: the Control Plane service account for access to memory →
    `secrets/control-plane-iam.env`.
-4. Control Plane: `POST /api/v1/bootstrap` — tenant (тот же UUID, что у IAM), admin
-   principal оператора и его binding одной транзакцией.
-5. PAT оператора с потолком `control-plane:read/write/admin` →
-   `secrets/harness-pat` (0600, срок `--pat-ttl`, по умолчанию 180 дней); обмен PAT
-   на access token проверяется тут же.
-6. Control Plane: project template, project и workspace с именем tenant'а.
-7. notification-service: service account IAM → `secrets/notification-iam.env`,
-   описание сервиса и его личность в Control Plane (права — чтение событий,
-   approvals, задач, principals и workspaces). Шаг выполняется всегда; сервис
-   подхватит файл, когда профиль `notify` будет поднят.
-8. Отзывает legacy api-key, выданный на шаге 4: инсталляция IAM-only.
-9. `--agents agents.json` (необязательно): агенты — см. ниже.
+4. Control Plane: `POST /api/v1/bootstrap` — the tenant (the same UUID as in IAM), the
+   operator's admin principal and its binding in one transaction.
+5. The operator's PAT with the `control-plane:read/write/admin` ceiling →
+   `secrets/harness-pat` (0600, lifetime `--pat-ttl`, 180 days by default); the
+   exchange of the PAT for an access token is verified right away.
+6. Control Plane: a project template, a project and a workspace named after the
+   tenant.
+7. notification-service: an IAM service account → `secrets/notification-iam.env`, the
+   service description and its identity in the Control Plane (permissions: reading
+   events, approvals, tasks, principals and workspaces). The step always runs; the
+   service picks up the file once the `notify` profile is started.
+8. Revokes the legacy api-key issued in step 4: the installation is IAM-only.
+9. `--agents agents.json` (optional): agents — see below.
 
-После сброса volumes файл состояния ссылается на несуществующие объекты; скрипт это
-заметит и попросит `make reset-state` — цель переносит состояние и выданные
-credentials в `secrets/stale-<время>/`.
+After the volumes are reset, the state file refers to objects that no longer exist;
+the script notices this and asks for `make reset-state` — that target moves the state
+and the issued credentials to `secrets/stale-<time>/`.
 
-В конце скрипт напоминает вписать `IAM_TENANT_ID=<uuid>` в `.env` и печатает ключ
-credential для CLI и MCP-плагина: `~/.config/iam/credentials.json` (0600), запись
-`<issuer>|<tenant>|<principal>` → содержимое `secrets/harness-pat`. Альтернатива без
-файла — переменные `IAM_CREDENTIAL_MODE=environment` и `IAM_PLATFORM_ACCESS_TOKEN`
-(только вместе).
+At the end the script reminds you to add `IAM_TENANT_ID=<uuid>` to `.env` and prints
+the credential key for the CLI and the MCP plugin: `~/.config/iam/credentials.json`
+(0600), entry `<issuer>|<tenant>|<principal>` → the contents of `secrets/harness-pat`.
+The alternative without a file is the variables `IAM_CREDENTIAL_MODE=environment` and
+`IAM_PLATFORM_ACCESS_TOKEN` (only together).
 
-### Реестр агентов
+### Agent registry
 
 ```json
 {
@@ -82,21 +83,21 @@ credential для CLI и MCP-плагина: `~/.config/iam/credentials.json` (0
 }
 ```
 
-`make bootstrap ARGS="--agents agents.json"` заводит каждому агенту principal в
-Control Plane и в IAM, binding с правами (`permissions`, иначе
-`defaultAgentPermissions`, иначе встроенный список) и PAT с потолком
-`control-plane:read` + `control-plane:write` → `secrets/agents/<slug>.pat`. Агенту
-нельзя выдать `admin` и `approvals.decide` — скрипт остановится. Идентификаторы
-лежат в state под `agents.<slug>`; `--reissue-agent-pats` перевыпускает PAT
-(старый файл → `.pat.bak`).
+`make bootstrap ARGS="--agents agents.json"` creates for each agent a principal in
+the Control Plane and in IAM, a binding with permissions (`permissions`, otherwise
+`defaultAgentPermissions`, otherwise a built-in list) and a PAT with the
+`control-plane:read` + `control-plane:write` ceiling → `secrets/agents/<slug>.pat`. An
+agent cannot be granted `admin` or `approvals.decide` — the script stops. The
+identifiers are stored in the state under `agents.<slug>`; `--reissue-agent-pats`
+reissues the PATs (the old file → `.pat.bak`).
 
-## Runner автономных исполнителей
+## Runner for autonomous executors
 
-Runner — демон `control-plane-agent` из пакета `control-plane`: он забирает
-назначенные его principal'у задачи, разворачивает рабочую копию репозитория,
-запускает кодовый агент (Claude Code, Codex, OpenCode) и завершает run артефактами.
-Ему нужны только HTTP-доступ к Control Plane и IAM, git-зеркало репозитория и сам
-кодовый агент.
+The runner is the `control-plane-agent` daemon from the `control-plane` package: it
+takes the tasks assigned to its principal, sets up a working copy of the repository,
+starts the coding agent (Claude Code, Codex, OpenCode) and completes the run with
+artifacts. It needs only HTTP access to the Control Plane and IAM, a git mirror of the
+repository and the coding agent itself.
 
 ```bash
 uv tool install ./control-plane        # control-plane, control-plane-mcp, control-plane-agent
@@ -111,34 +112,34 @@ export CONTROL_PLANE_AGENT_REPO=/srv/mirrors/my-repo.git CONTROL_PLANE_AGENT_WOR
 control-plane-agent
 ```
 
-Адаптер `echo` проверяет конвейер без LLM; для настоящей работы —
-`CONTROL_PLANE_AGENT_ADAPTER=claude-code` (с `CLAUDE_CODE_OAUTH_TOKEN`) или `codex`.
-Держите `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` или `CONTROL_PLANE_AGENT_WORKSPACE`:
-без них демон возьмёт первую доступную задачу любого workspace. Полный список
-переменных и эксплуатация демона — в руководстве `guide/` и в документации
-`control-plane`.
+The `echo` adapter checks the pipeline without an LLM; for real work use
+`CONTROL_PLANE_AGENT_ADAPTER=claude-code` (with `CLAUDE_CODE_OAUTH_TOKEN`) or `codex`.
+Keep `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` or `CONTROL_PLANE_AGENT_WORKSPACE` set:
+without them the daemon takes the first available task of any workspace. The full list
+of variables and how to operate the daemon are in the guide `guide/` and in the
+`control-plane` documentation.
 
-## Уведомления в Telegram
+## Telegram notifications
 
-Канал Telegram включается файлом `secrets/notification-telegram.env` с переменными
-`NS_TELEGRAM_BOT_TOKEN`, `NS_TELEGRAM_WEBHOOK_SECRET` и `NS_TELEGRAM_BOT_USERNAME`;
-без файла сервис работает с веб-инбоксом и email. Webhook бота — публичный адрес
-`/notify/…` за Caddy.
+The Telegram channel is enabled by the file `secrets/notification-telegram.env` with
+the variables `NS_TELEGRAM_BOT_TOKEN`, `NS_TELEGRAM_WEBHOOK_SECRET` and
+`NS_TELEGRAM_BOT_USERNAME`; without the file the service works with the web inbox and
+email. The bot webhook is the public address `/notify/…` behind Caddy.
 
-## Внешний IdP (профиль idp)
+## External IdP (the idp profile)
 
-Ядру Keycloak не нужен: оператор и агенты работают по Platform Access Token. Профиль
-`idp` поднимает Keycloak под `/auth` для инсталляций, где людей аутентифицирует
-внешний IdP: его токен обменивается в IAM (`federation:exchange`), полномочия
-по-прежнему живут в IAM и Control Plane. Realm импортируется из
-`keycloak/platform-realm.json` только при первом старте; клиентов своих приложений
-добавляйте через Admin API.
+The core does not need Keycloak: the operator and the agents work with Platform Access
+Tokens. The `idp` profile starts Keycloak under `/auth` for installations where people
+are authenticated by an external IdP: its token is exchanged in IAM
+(`federation:exchange`), and authority still lives in IAM and the Control Plane. The
+realm is imported from `keycloak/platform-realm.json` only on the first start; add the
+clients of your own applications through the Admin API.
 
-## Промышленная инсталляция
+## Production installation
 
-- Задайте `TAIMEN_PUBLIC_URL` (https) и `TAIMEN_PUBLIC_HOST`, положите свой
-  Caddyfile с доменом (TLS выпустит Caddy) и укажите его в `CADDYFILE`; раскладку
-  путей возьмите из `caddy/Caddyfile.local` без маршрута `/memory/*`.
-- `KEYCLOAK_HOSTNAME_STRICT=true`, если поднят профиль `idp`.
-- Issuer IAM (`${TAIMEN_PUBLIC_URL}/iam`) попадает в токены и в bindings Control
-  Plane: смена публичного адреса означает перенос bindings.
+- Set `TAIMEN_PUBLIC_URL` (https) and `TAIMEN_PUBLIC_HOST`, provide your own Caddyfile
+  with the domain (Caddy issues TLS) and point `CADDYFILE` at it; take the path
+  layout from `caddy/Caddyfile.local`, without the `/memory/*` route.
+- `KEYCLOAK_HOSTNAME_STRICT=true` if the `idp` profile is started.
+- The IAM issuer (`${TAIMEN_PUBLIC_URL}/iam`) goes into tokens and into Control Plane
+  bindings: changing the public address means migrating the bindings.

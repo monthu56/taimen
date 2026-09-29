@@ -18,7 +18,7 @@
     {
       "clientId": "iam-service",
       "name": "iam-service",
-      "description": "Audience, который IAM ожидает в upstream-токене (federation)",
+      "description": "Audience that IAM expects in the upstream token (federation)",
       "enabled": true,
       "protocol": "openid-connect",
       "bearerOnly": true,

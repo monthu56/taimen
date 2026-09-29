@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Проверка относительных ссылок в документации umbrella (make linkcheck).
+"""Check relative links in the umbrella documentation (make linkcheck).
 
-Смотрит *.md в корне, deploy/**/*.md и .github/**/*.md; ссылки на http(s), mailto и
-якоря пропускает. Руководство guide/ проверяет сам MkDocs (make guide, режим strict).
-Ссылки внутрь сабмодулей проверяются по файловой системе, поэтому сабмодули должны
-быть инициализированы (make submodules).
+Looks at *.md at the root, deploy/**/*.md and .github/**/*.md; skips http(s), mailto and
+anchor links. The guide guide/ is checked by MkDocs itself (make guide, strict mode).
+Links into submodules are checked against the file system, so the submodules must
+be initialized (make submodules).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def main() -> int:
                 broken += 1
                 line = text[: match.start()].count("\n") + 1
                 print(f"BROKEN {file.relative_to(ROOT)}:{line} -> {link}")
-    print(f"проверено ссылок: {total} в {len(files)} файлах, битых: {broken}")
+    print(f"links checked: {total} in {len(files)} files, broken: {broken}")
     return 1 if broken else 0
 
 

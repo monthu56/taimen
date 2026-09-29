@@ -1,18 +1,18 @@
-<!-- Спасибо за вклад в Taimen. Одно логическое изменение на pull request;
-     подробности — в CONTRIBUTING.md. -->
+<!-- Thank you for contributing to Taimen. One logical change per pull request;
+     details are in CONTRIBUTING.md. -->
 
-## Что и зачем
+## What and why
 
-<!-- Что меняется и почему. Для изменения API, модели данных или границы между
-     сервисами — ссылка на issue с обсуждением. -->
+<!-- What changes and why. For a change to an API, the data model or the boundary
+     between services, link the issue where it was discussed. -->
 
-## Чек-лист
+## Checklist
 
-- [ ] Я подписал соглашение контрибьютора (CLA):
-      [для частных лиц](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-individual.md) или
-      [для компаний](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-entity.md).
-- [ ] В изменении нет секретов, данных клиентов и внутренних адресов.
-- [ ] Тесты, `ruff check` и `ruff format --check` проходят; изменение поведения
-      сопровождается тестами.
-- [ ] Изменение API, модели данных или границы сервисов ссылается на issue и
-      обновляет затронутую документацию.
+- [ ] I have signed the Contributor License Agreement (CLA):
+      [for individuals](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-individual.md) or
+      [for companies](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-entity.md).
+- [ ] The change contains no secrets, customer data or internal addresses.
+- [ ] Tests, `ruff check` and `ruff format --check` pass; a change in behaviour comes
+      with tests.
+- [ ] A change to an API, the data model or a service boundary links an issue and
+      updates the affected documentation.

@@ -1,24 +1,24 @@
-# Пакеты каталога
+# Catalog packages
 
-Каталог Control Plane — типы задач и артефактов, роли, capabilities, скиллы,
-правила вывода работы, процессы, календари, описания агентов и правила уведомлений —
-хранится в git пакетами: каталог `packages/<ключ>/` с `package.yaml` и YAML-файлами
-объектов в обёртке `{apiVersion, kind, key, spec}`. Схема объектов —
-[schema/v1/object.schema.json](schema/v1/object.schema.json), схема тестов процессов —
-[schema/v1/test.schema.json](schema/v1/test.schema.json).
+The Control Plane catalog — task and artifact types, roles, capabilities, skills, work
+rules, processes, calendars, agent descriptions and notification rules — is stored in
+git as packages: a `packages/<key>/` directory with `package.yaml` and YAML object
+files in the `{apiVersion, kind, key, spec}` envelope. The object schema is
+[schema/v1/object.schema.json](schema/v1/object.schema.json), the process test schema
+is [schema/v1/test.schema.json](schema/v1/test.schema.json).
 
-Какие пакеты ставить в инсталляцию, говорит файл установки
-[deploy/packages.yaml](../deploy/packages.yaml). Инструмент — `tools/cp_packages.py`:
+Which packages to install into an installation is defined by the install file
+[deploy/packages.yaml](../deploy/packages.yaml). The tool is `tools/cp_packages.py`:
 
 ```bash
-make packages-check                                  # проверка без стенда
-make packages-plan  SERVER=http://taimen.localhost   # что изменится в живом Control Plane
-make packages-apply SERVER=http://taimen.localhost   # применить
-python3 tools/cp_packages.py --help                  # test, export, migrate-expr и остальное
+make packages-check                                  # check without a running installation
+make packages-plan  SERVER=http://taimen.localhost   # what will change in a live Control Plane
+make packages-apply SERVER=http://taimen.localhost   # apply
+python3 tools/cp_packages.py --help                  # test, export, migrate-expr and the rest
 ```
 
-Токен для `plan` и `apply` — переменная `CP_TOKEN` (access token audience
-`control-plane`) или credential оператора, если инструмент запущен интерпретатором
-установленного пакета control-plane. [example](example/) — минимальный пакет-образец.
-Подробно — руководство, раздел «Пакеты каталога», и статьи о правилах вывода работы
-и процессах.
+The token for `plan` and `apply` is the `CP_TOKEN` variable (an access token for the
+`control-plane` audience) or the operator's credential, if the tool is run by the
+interpreter of the installed control-plane package. [example](example/) is a minimal
+sample package. For details, see the guide's catalog packages section and its articles
+on work rules and processes.

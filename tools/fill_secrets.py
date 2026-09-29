@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Заполнить пустые секреты в .env случайными значениями (make secrets).
+"""Fill empty secrets in .env with random values (make secrets).
 
-Меняются только переменные из списка SECRET_KEYS, у которых значение пустое;
-всё остальное в файле остаётся как есть. Повторный запуск ничего не перезапишет.
-Ключ, которого в файле нет (появился в .env.example позже), дописывается.
+Only variables from the SECRET_KEYS list whose value is empty are changed;
+everything else in the file stays as is. A repeated run overwrites nothing.
+A key missing from the file (added to .env.example later) is appended.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ SECRET_KEYS = {
 
 
 def token_for(key: str) -> str:
-    # Идентификатор ключа S3 короче: MinIO ограничивает его длину.
+    # The S3 key id is shorter: MinIO limits its length.
     return secrets.token_hex(12 if key.endswith("S3_ACCESS_KEY_ID") else 24)
 
 
@@ -52,7 +52,7 @@ def main(path: str) -> int:
         filled.append(key)
     env.write_text("\n".join(lines) + "\n")
     env.chmod(0o600)
-    print("заполнены секреты:", ", ".join(filled) if filled else "нечего заполнять")
+    print("filled secrets:", ", ".join(filled) if filled else "nothing to fill")
     return 0
 
 

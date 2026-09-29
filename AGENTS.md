@@ -1,45 +1,46 @@
-# Правила для агентов-контрибьюторов
+# Rules for contributing agents
 
-## Язык
+## Language
 
-Документация этого репозитория — на русском. Имена API, протоколов, сущностей и
-компонентов, а также идентификаторы кода оставляйте на английском. Английский
-двойник документа — файл `*.en.md` без кириллицы (так проверяет
-`tools/oss_check.py`, основной язык объявлен в `.oss-language`). Юридические тексты
-(`LICENSE`, `cla/`) не переводятся.
+The documentation of this repository is in English. The primary language is declared
+in `.oss-language`. A Russian counterpart of a document is a `*.ru.md` file next to it
+(for example `README.ru.md`); an English document that has such a counterpart must
+contain no Cyrillic — `tools/oss_check.py` checks this. Names of APIs, protocols,
+entities and components, as well as code identifiers, stay in English in both
+languages. Legal texts (`LICENSE`, `cla/`) are not translated.
 
-## Раскладка
+## Layout
 
-- Компоненты — сабмодули плоско в корне: `control-plane`, `iam-service`,
+- The components are submodules flat at the root: `control-plane`, `iam-service`,
   `memory-service`, `notification-service`, `platform-auth-sdk`, `skill-sdk`,
-  `platform-llm`. Плоская раскладка обязательна: компоненты берут соседей
-  (`../platform-auth-sdk`, `../platform-llm`, клиент ядра) path-зависимостью.
-  Не переносите сабмодули в подкаталоги.
-- `compose.yml`, `.env.example`, `Makefile` — сборка и запуск платформы.
-- `deploy/` — bootstrap (`deploy/bootstrap.py`), внешний контур
-  (`deploy/caddy/`), шаблон realm Keycloak (`deploy/keycloak/`).
-- `tools/` — скрипты сборки и проверок, только стандартная библиотека Python;
-  тесты — `tools/tests/`.
-- `guide/` — руководство (MkDocs). Оно генерируется из исходников документации
-  проекта: не правьте `guide/` вручную, сообщайте о неточностях issue.
+  `platform-llm`. The flat layout is mandatory: the components take their neighbours
+  (`../platform-auth-sdk`, `../platform-llm`, the core client) as path dependencies.
+  Do not move submodules into subdirectories.
+- `compose.yml`, `.env.example`, `Makefile` — building and running the platform.
+- `deploy/` — bootstrap (`deploy/bootstrap.py`), the edge (`deploy/caddy/`), the
+  Keycloak realm template (`deploy/keycloak/`).
+- `tools/` — build and check scripts, Python standard library only; tests live in
+  `tools/tests/`.
+- `guide/` — the guide (MkDocs). It is generated from the project's documentation
+  sources: do not edit `guide/` by hand, report inaccuracies as an issue.
 
-## Где делать изменения
+## Where to make changes
 
-- Изменение компонента — в его репозитории; указатель сабмодуля здесь сдвигается
-  отдельным коммитом после релиза компонента.
-- Файл, без которого инсталляция не воспроизводится из git, не может жить только на
-  сервере: конфигурация запуска — здесь.
-- Секреты — только в `.env` и `secrets/` (оба в `.gitignore`). Не коммитьте токены,
-  ключи, данные клиентов и внутренние адреса.
+- A change to a component goes to its repository; the submodule pointer here is moved
+  in a separate commit after the component is released.
+- A file without which an installation cannot be reproduced from git must not live
+  only on a server: the runtime configuration belongs here.
+- Secrets go only into `.env` and `secrets/` (both in `.gitignore`). Do not commit
+  tokens, keys, customer data or internal addresses.
 
-## Проверки
+## Checks
 
 ```bash
-make tools-check      # ruff + тесты tools/
-make config           # compose.yml после интерполяции (нужен .env: make secrets)
-make linkcheck        # относительные ссылки в документации
-make check            # тесты всех компонентов (тяжело: поднимает БД для control-plane)
+make tools-check      # ruff + tests of tools/
+make config           # compose.yml after interpolation (needs .env: make secrets)
+make linkcheck        # relative links in the documentation
+make check            # tests of all components (heavy: starts a database for control-plane)
 ```
 
-В долгоживущей документации не используйте абсолютные локальные пути: ссылайтесь на
-компоненты по именам, на документы — относительными ссылками.
+Do not use absolute local paths in long-lived documentation: refer to components by
+name and to documents by relative links.

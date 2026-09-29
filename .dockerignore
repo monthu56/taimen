@@ -1,7 +1,7 @@
-# Контекст сборки control-plane, memory-service и notification-service — корень
-# umbrella: platform-auth-sdk (и клиент ядра) подключены path-зависимостью соседней
-# папкой. Всё, что сборке не нужно, отсекается здесь. memory-service переопределяет
-# этот файл своим memory-service/Dockerfile.dockerignore.
+# The build context of control-plane, memory-service and notification-service is the
+# umbrella root: platform-auth-sdk (and the core client) are path dependencies in a
+# neighbouring directory. Everything the build does not need is excluded here.
+# memory-service overrides this file with its own memory-service/Dockerfile.dockerignore.
 **/.git
 **/.venv
 **/.mypy_cache

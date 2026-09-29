@@ -1,5 +1,5 @@
-# Dependabot для umbrella: только то, что живёт в этом репозитории, — GitHub Actions и
-# образы, закреплённые в compose.yml. Зависимости компонентов обновляются в их репозиториях.
+# Dependabot for the umbrella: only what lives in this repository — GitHub Actions and
+# the images pinned in compose.yml. Component dependencies are updated in their repositories.
 version: 2
 updates:
   - package-ecosystem: github-actions

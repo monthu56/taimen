@@ -1,30 +1,30 @@
-# Политика в отношении товарного знака
+# Trademark policy
 
 "Taimen" and the Taimen logo are trademarks of Aleksandr Pereboev ("the owner").
 
-Название «Taimen» и логотип Taimen — товарные знаки владельца. Лицензия Apache,
-версия 2.0, под которой распространяется это программное обеспечение, **не** даёт
-права использовать эти знаки (см. раздел 6 лицензии).
+The Apache License, Version 2.0, under which this software is distributed, does
+**not** grant permission to use these marks (see section 6 of the licence).
 
-## Что можно без разрешения
+## What you may do without permission
 
-- Называть «Taimen» это программное обеспечение по существу, например «построено на
-  Taimen», «совместимо с API Taimen Control Plane», а также в статьях, докладах и
-  сравнениях.
-- Сохранять название в неизменённых копиях программного обеспечения и в именах
-  пакетов, публикуемых этим проектом.
-- Указывать название в описании форка, чтобы сказать, откуда код («форк Taimen»).
+- Refer to this software as "Taimen" when that is accurate, for example "built on
+  Taimen" or "compatible with the Taimen Control Plane API", as well as in articles,
+  talks and comparisons.
+- Keep the name in unmodified copies of the software and in the names of packages
+  published by this project.
+- Mention the name in the description of a fork to say where the code comes from
+  ("a fork of Taimen").
 
-## Что требует разрешения
+## What requires permission
 
-- Использовать «Taimen» или логотип как название или бренд изменённой версии,
-  сервиса, продукта или компании, а также в доменном имени.
-- Использовать логотип, кроме как в неизменённой копии программного обеспечения.
-- Создавать впечатление одобрения, партнёрства или официального статуса.
+- Using "Taimen" or the logo as the name or brand of a modified version, a service, a
+  product or a company, or in a domain name.
+- Using the logo other than in an unmodified copy of the software.
+- Creating an impression of endorsement, partnership or official status.
 
-Распространяя изменённую версию, выберите для неё своё название и уберите логотип.
-Имена компонентов, которые просто описывают назначение (`control-plane`,
-`iam-service`, `memory-service` и т. п.), товарными знаками не считаются.
+When distributing a modified version, choose your own name for it and remove the logo.
+Component names that simply describe their purpose (`control-plane`, `iam-service`,
+`memory-service` and the like) are not considered trademarks.
 
-Вопросы и запросы разрешения — issue в этом репозитории
+Questions and permission requests — an issue in this repository
 (https://github.com/taimen-ai/taimen/issues).

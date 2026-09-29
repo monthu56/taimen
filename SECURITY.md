@@ -1,52 +1,53 @@
-# Политика безопасности
+# Security policy
 
-## Поддерживаемые версии
+## Supported versions
 
-Taimen — версии 0.x. Исправления безопасности делаются в ветке `main` каждого
-компонента и входят в следующий релиз платформы; веток долгосрочной поддержки пока
-нет.
+Taimen is at version 0.x. Security fixes are made on the `main` branch of each
+component and ship in the next platform release; there are no long-term support
+branches yet.
 
-| Версия платформы | Поддерживается |
+| Platform version | Supported |
 |---|---|
-| последний `main` / последний тег `v0.x` | да |
-| более старые теги | нет |
+| latest `main` / latest `v0.x` tag | yes |
+| older tags | no |
 
-## Как сообщить об уязвимости
+## Reporting a vulnerability
 
-Не открывайте публичный issue о проблеме безопасности.
+Do not open a public issue about a security problem.
 
-Сообщайте приватно через GitHub private vulnerability reporting: откройте вкладку
-**Security** затронутого репозитория и выберите **Report a vulnerability**. Если это
-недоступно, откройте issue с одной фразой «security: прошу связаться» без
-подробностей — мейнтейнер свяжется с вами приватно.
+Report privately through GitHub private vulnerability reporting: open the
+**Security** tab of the affected repository and choose **Report a vulnerability**. If
+that is not available, open an issue containing only the phrase "security: please
+contact me", with no details — a maintainer will contact you privately.
 
-В приватном сообщении укажите:
+In the private report, include:
 
-- компонент и версию (тег или коммит);
-- шаги воспроизведения или proof of concept;
-- ожидаемые последствия (что получает атакующий);
-- известна ли проблема публично.
+- the component and version (tag or commit);
+- steps to reproduce or a proof of concept;
+- the expected impact (what an attacker gains);
+- whether the problem is publicly known.
 
-Подтверждение придёт в течение 5 рабочих дней, дальше — статус не реже раза в 14 дней
-до исправления. Мы просим о согласованном раскрытии: дайте до 90 дней на выпуск
-исправления, прежде чем публиковать подробности. Благодарность указывается в заметках
-к релизу, если вы не предпочитаете остаться анонимным.
+You will receive an acknowledgement within 5 business days, then a status update at
+least every 14 days until the fix. We ask for coordinated disclosure: allow up to 90
+days for a fix to be released before publishing details. Credit is given in the
+release notes unless you prefer to remain anonymous.
 
-## Область действия
+## Scope
 
-Входит: код репозиториев компонентов Taimen и этого репозитория (`compose.yml`,
-`deploy/`, `tools/`), включая MCP-плагин и демон runner'а из `control-plane`.
+In scope: the code of the Taimen component repositories and of this repository
+(`compose.yml`, `deploy/`, `tools/`), including the MCP plugin and the runner daemon
+from `control-plane`.
 
-Не входит: сторонние зависимости (сообщайте их авторам; скажите нам, если исправление
-требует согласованного обновления) и инсталляции, которые эксплуатируют третьи лица.
+Out of scope: third-party dependencies (report to their authors; tell us if a fix
+requires a coordinated update) and installations operated by third parties.
 
-## Рекомендации по эксплуатации
+## Operational recommendations
 
-- Работайте только с IAM-аутентификацией (`CP_LEGACY_API_KEYS_ENABLED=false`, по
-  умолчанию).
-- Ключ подписи (`secrets/*.pem`) и Platform Access Tokens (`secrets/harness-pat`,
-  `secrets/agents/*.pat`, `~/.config/iam/credentials.json`) держите с правами `0600`;
-  не коммитьте `secrets/` и `.env`.
-- Наружу публикуйте только Caddy; остальные сервисы по умолчанию слушают `127.0.0.1`.
-- Административная поверхность IAM на периметр не выводится — см.
+- Run with IAM authentication only (`CP_LEGACY_API_KEYS_ENABLED=false`, the default).
+- Keep the signing key (`secrets/*.pem`) and Platform Access Tokens
+  (`secrets/harness-pat`, `secrets/agents/*.pat`, `~/.config/iam/credentials.json`)
+  with mode `0600`; do not commit `secrets/` or `.env`.
+- Expose only Caddy to the outside; the other services listen on `127.0.0.1` by
+  default.
+- The IAM administrative surface is not exposed at the edge — see
   `deploy/caddy/Caddyfile.local`.

@@ -1,72 +1,72 @@
-# Как участвовать в Taimen
+# Contributing to Taimen
 
-Спасибо, что нашли время помочь. Taimen развивается открыто под лицензией
-Apache 2.0; этот документ описывает, как предложить изменение.
+Thank you for taking the time to help. Taimen is developed in the open under the
+Apache 2.0 licence; this document describes how to propose a change.
 
-## Прежде чем начать
+## Before you start
 
-- Прочитайте [README.md](README.md) и руководство `guide/` — там описаны модель
-  работы, компоненты и их границы.
-- Перед крупным изменением посмотрите открытые issues. Если изменение затрагивает API,
-  модель данных или границу между сервисами, сначала откройте issue с предложением:
-  такие решения обсуждаются до кода.
+- Read the [README.md](README.md) and the guide `guide/` — they describe the work
+  model, the components and their boundaries.
+- Before a large change, look through the open issues. If the change affects an API,
+  the data model or the boundary between services, open an issue with a proposal
+  first: such decisions are discussed before the code.
 
-## Соглашение контрибьютора (CLA)
+## Contributor License Agreement (CLA)
 
-Для каждого вклада нужно подписанное соглашение контрибьютора. Оно даёт проекту
-лицензию на авторские права и патенты в отношении вашего вклада; авторские права
-остаются за вами. Соглашение нужно, чтобы проект мог защищать и при необходимости
-перелицензировать код, не разыскивая каждого автора.
+Every contribution requires a signed Contributor License Agreement. It grants the
+project a copyright and patent licence for your contribution; you keep the copyright.
+The agreement lets the project defend the code and, if necessary, relicense it without
+tracking down every author.
 
-- Для частных лиц — [cla/CLA-individual.md](cla/CLA-individual.md).
-- Для компаний, чьи сотрудники вносят вклад от их имени, —
+- For individuals — [cla/CLA-individual.md](cla/CLA-individual.md).
+- For companies whose employees contribute on their behalf —
   [cla/CLA-entity.md](cla/CLA-entity.md).
 
-Тексты соглашений — юридические документы на английском языке; действует именно
-английская редакция. Подпись проверяет бот cla-assistant на каждом pull request,
-подписать нужно один раз.
+The cla-assistant bot checks the signature on every pull request; you only need to
+sign once.
 
-## Окружение разработки
+## Development environment
 
-Компоненты — отдельные репозитории, подключённые сюда сабмодулями. Python-компоненты
-используют [uv](https://docs.astral.sh/uv/).
+The components are separate repositories attached here as submodules. Python
+components use [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone --recurse-submodules https://github.com/taimen-ai/taimen.git && cd taimen
 make secrets && make up && make bootstrap && make smoke
-make check                  # ruff + тесты всех компонентов, как в CI
-make check-<компонент>      # например make check-control-plane
+make check                  # ruff + tests of all components, as in CI
+make check-<component>      # for example make check-control-plane
 ```
 
-`control-plane`, `memory-service`, `notification-service` и `skill-sdk` зависят от
-соседей (`../platform-auth-sdk`, `../platform-llm`) по пути, поэтому работайте из
-чекаута этого репозитория или держите соседей рядом с компонентом.
+`control-plane`, `memory-service`, `notification-service` and `skill-sdk` depend on
+their neighbours (`../platform-auth-sdk`, `../platform-llm`) by path, so work from a
+checkout of this repository or keep the neighbours next to the component.
 
-## Куда отправлять изменения
+## Where to send changes
 
-- Код компонента — pull request в репозиторий компонента.
-- Сборка (`compose.yml`, `Makefile`, `deploy/`, `tools/`, CI) — pull request сюда.
-- Руководство `guide/` генерируется из исходников документации проекта: ошибки и
-  неточности в нём присылайте issue в этот репозиторий, а не правкой `guide/`.
+- Component code — a pull request to the component's repository.
+- The assembly (`compose.yml`, `Makefile`, `deploy/`, `tools/`, CI) — a pull request
+  here.
+- The guide `guide/` is generated from the project's documentation sources: report
+  errors and inaccuracies in it as an issue in this repository rather than by editing
+  `guide/`.
 
-## Pull request
+## Pull requests
 
-- Одно логическое изменение на pull request; история линейная (rebase, без
-  merge-коммитов).
-- Тесты, `ruff check` и `ruff format --check` проходят; изменение поведения
-  сопровождается тестами.
-- Сообщение коммита объясняет «зачем», а не «что»; ссылайтесь на issue.
-- Изменение публичного API (маршруты, схемы, инструменты MCP, переменные окружения)
-  обновляет документацию компонента, а ломающее — описывается в заметках к релизу.
-- Шаблон pull request просит подтвердить CLA и отсутствие секретов, данных клиентов
-  и внутренних адресов.
+- One logical change per pull request; linear history (rebase, no merge commits).
+- Tests, `ruff check` and `ruff format --check` pass; a change in behaviour comes with
+  tests.
+- The commit message explains "why", not "what"; reference the issue.
+- A change to a public API (routes, schemas, MCP tools, environment variables) updates
+  the component's documentation, and a breaking one is described in the release notes.
+- The pull request template asks you to confirm the CLA and the absence of secrets,
+  customer data and internal addresses.
 
-## Ошибки и уязвимости
+## Bugs and vulnerabilities
 
-Об ошибке сообщайте issue в репозитории компонента: версия, шаги воспроизведения,
-логи. Об уязвимости — только приватно, как описано в [SECURITY.md](SECURITY.md),
-не публичным issue.
+Report a bug as an issue in the component's repository: version, steps to reproduce,
+logs. Report a vulnerability only privately, as described in [SECURITY.md](SECURITY.md),
+not in a public issue.
 
-## Кодекс поведения
+## Code of conduct
 
-Проект следует [кодексу поведения](CODE_OF_CONDUCT.md).
+The project follows the [code of conduct](CODE_OF_CONDUCT.md).

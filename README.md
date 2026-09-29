@@ -1,247 +1,249 @@
 # Taimen
 
-![Taimen — открытая платформа для людей, агентов и процессов](.github/assets/cover.webp)
+![Taimen — an open platform for humans, agents and workflows](.github/assets/cover.webp)
 
-*English summary: [README.en.md](README.en.md)*
+*Russian version: [README.ru.md](README.ru.md)*
 
-**Taimen — runtime организации.** Платформа, в которой работу организации исполняют
-люди, AI-агенты, программные сервисы и детерминированные процессы — в любой
-комбинации и под единым управлением. Главная сущность здесь не агент, не чат и не
-модель, а **работа**: у неё есть происхождение, исполнитель, права, критерии приёмки
-и доказательства. Исполнители и модели заменяемы; граф работы, полномочия и история
-исполнения остаются в платформе.
+**Taimen is an organizational runtime.** A platform where the work of an organization
+is carried out by people, AI agents, software services and deterministic processes — in
+any combination and under a single governance model. The central entity is not an
+agent, a chat or a model but **work**: it has an origin, an executor, permissions,
+acceptance criteria and evidence. Executors and models are replaceable; the work graph,
+authority and execution history stay in the platform.
 
 ```text
-Состояние → Цель → Вывод работы → Делегирование → Исполнение → Наблюдение
-          → Проверка → Сверка → Новое состояние
+State → Goal → Work derivation → Delegation → Execution → Observation
+      → Verification → Reconciliation → New state
 ```
 
-Мы не стремимся сделать AI максимально автономным. Мы стремимся к тому, чтобы работа
-организации исполнялась эффективно и проверяемо — лучшим доступным исполнителем, а
-каждое решение оставляло след.
+We do not aim to make AI as autonomous as possible. We aim for the work of an
+organization to be done efficiently and verifiably — by the best available executor —
+with every decision leaving a trace.
 
-## Возможности
+## Capabilities
 
-### Работа как управляемый граф
+### Work as a governed graph
 
-- **Типы задач со своим словарём.** Tenant объявляет статусы, переходы, поля и
-  исходы согласований; ядро рассуждает о системных категориях статусов, не зная
-  ваших названий. Типы версионируются.
-- **Захват и исполнение без гонок.** Атомарный claim с lease и fencing token,
-  попытки исполнения (runs) с checkpoints, действиями и дочерними runs, управление
-  идущим прогоном.
-- **Результаты и обсуждение.** Неизменяемые артефакты с реестром типов и файлами в
-  S3-совместимом хранилище; комментарии с историей правок.
-- **Согласования.** Approval с исходами, которые объявляет тип задачи: решение
-  человека запускает декларативные действия — завести работу, закрыть, вернуть.
+- **Task types with their own vocabulary.** A tenant declares statuses, transitions,
+  fields and approval outcomes; the core reasons about system status categories
+  without knowing your names for them. Types are versioned.
+- **Claiming and execution without races.** An atomic claim with a lease and a
+  fencing token; execution attempts (runs) with checkpoints, actions and child runs;
+  control of a run in progress.
+- **Results and discussion.** Immutable artifacts with a type registry and files in
+  S3-compatible storage; comments with edit history.
+- **Approvals.** Approvals with outcomes declared by the task type: a human decision
+  triggers declarative actions — open work, close it, send it back.
 
-### Работа выводится сама
+### Work that derives itself
 
-- **Правила вывода работы.** Факт — внешнее наблюдение, событие ядра или слот
-  расписания — проверяется условием, при необходимости интерпретируется скиллом, и
-  ядро само заводит, обновляет, закрывает или отменяет задачи. У правила своя
-  личность, а у каждой оценки — история с доказательствами.
-- **Процессы в ядре.** Как организация доводит дело до результата — стадии, сроки
-  по рабочим календарям, назначения, согласования с кворумом и разделением
-  обязанностей, таймеры, внешние события, компенсации при отмене. Процесс пишется
-  YAML-данными и исполняется самим Control Plane детерминированно: тест, replay по
-  журналу и живой прогон принимают одни и те же решения.
-- **Один язык выражений.** Условия, ключи, сроки и вычисляемые поля — на CEL в
-  профиле платформы, с функциями рабочего календаря.
+- **Work rules.** A fact — an external observation, a core event or a schedule slot —
+  is checked against a condition, interpreted by a skill when needed, and the core
+  itself opens, updates, closes or cancels tasks. A rule has its own identity, and
+  every evaluation has a history with evidence.
+- **Processes in the core.** How an organization carries a matter through to a
+  result — stages, deadlines on business calendars, assignments, approvals with quorum
+  and separation of duties, timers, external events, compensation on cancellation. A
+  process is written as YAML data and executed deterministically by the Control Plane
+  itself: a test, a replay from the journal and a live run make the same decisions.
+- **One expression language.** Conditions, keys, deadlines and computed fields are
+  written in CEL, in the platform profile, with business-calendar functions.
 
-### Проверка результата, а не отметка «готово»
+### Verifying the result, not ticking "done"
 
-- **Происхождение и приёмка.** У задачи есть `origin` (почему она существует),
-  критерии приёмки и evidence. Критерии бывают детерминированными, по состоянию
-  внешней системы, на суждение человека или модели по рубрике.
-- **Стадия проверки.** Задача становится выполненной, только когда её критерии
-  прошли; провал возвращает работу исполнителю или ждёт человека.
+- **Origin and acceptance.** A task has an `origin` (why it exists), acceptance
+  criteria and evidence. Criteria can be deterministic, based on the state of an
+  external system, or a judgement by a human or by a model against a rubric.
+- **Verification stage.** A task becomes done only when its criteria pass; a failure
+  returns the work to the executor or waits for a human.
 
-### Каталог как код
+### Catalog as code
 
-- **Пакеты каталога в git.** Типы задач и артефактов, роли, скиллы, правила,
-  процессы, календари, описания агентов и правила уведомлений — YAML-объекты
-  пакета. `tools/cp_packages.py` проверяет пакет без стенда, прогоняет его тесты,
-  показывает план и применяет к живой инсталляции; как устроен пакет и образец —
-  в [packages/](packages/README.md).
+- **Catalog packages in git.** Task and artifact types, roles, skills, rules,
+  processes, calendars, agent descriptions and notification rules are YAML objects of
+  a package. `tools/cp_packages.py` checks a package without a running installation,
+  runs its tests, shows a plan and applies it to a live installation; how a package is
+  structured, with an example, is in [packages/](packages/README.md).
 
-### Исполнители без привязки к вендору
+### Vendor-neutral executors
 
-- **Один протокол для всех.** Человек через MCP-плагин или CLI, демон runner'а с
-  адаптерами Claude Code, Codex и OpenCode, сервис по HTTP — все берут работу, пишут
-  checkpoints и артефакты одними и теми же командами.
-- **Изолированная рабочая копия.** Runner готовит для задачи рабочую копию с
-  соседними репозиториями, собирает инструкции исполнителю по слоям (тип задачи,
-  проект) и контекст из памяти, а ход прогона сохраняет транскриптом и действиями
-  по каждому вызову инструмента.
-- **Скиллы с контрактом.** Скилл пишется кодом на `skill-sdk`, контракт выводится
-  из типов; ядро вызывает его локально, по HTTP или через MCP. Внешняя запись
-  требует основания — одобренного согласования; сеть и токены — во власти
-  исполнителя, а не контракта.
+- **One protocol for everyone.** A person through the MCP plugin or the CLI, the
+  runner daemon with Claude Code, Codex and OpenCode adapters, a service over HTTP —
+  all take work and write checkpoints and artifacts with the same commands.
+- **An isolated working copy.** The runner prepares a working copy for the task with
+  its neighbouring repositories, assembles the executor's instructions from layers
+  (task type, project) and context from memory, and records the run as a transcript
+  plus an action for every tool call.
+- **Skills with a contract.** A skill is written in code with `skill-sdk`, and its
+  contract is derived from the types; the core invokes it locally, over HTTP or via
+  MCP. An external write requires a basis — an approved approval; network and tokens
+  are up to the executor, not the contract.
 
-### Identity и безопасность
+### Identity and security
 
-- **Отдельный IAM.** Tenants, principals людей, агентов и сервисов, Platform Access
-  Tokens, обмен на короткоживущие токены конкретного сервиса с потолком scope,
-  service accounts, федерация внешнего IdP по OIDC, SCIM.
-- **Агент — полноправный, но ограниченный участник.** Собственный principal и
-  права без `admin` и без решения согласований; его работа в журнале отличима от
-  работы человека.
-- **IAM-only с первого запуска** и аварийный вход на случай, если IAM недоступен.
+- **A separate IAM.** Tenants, principals for people, agents and services, Platform
+  Access Tokens, exchange for short-lived tokens of a specific service with a scope
+  ceiling, service accounts, OIDC federation of an external IdP, SCIM.
+- **An agent is a full but constrained participant.** Its own principal and
+  permissions, without `admin` and without deciding approvals; its work is
+  distinguishable from a person's work in the audit log.
+- **IAM-only from the first start**, with break-glass access in case IAM is
+  unavailable.
 
-### Память с провенансом
+### Memory with provenance
 
-- **Граф знаний.** Apache AGE и pgvector в одном PostgreSQL: наблюдения,
-  temporal-факты, документы-источники, provenance и аудит.
-- **Поиск и сборка контекста.** Гибридный поиск (вектор, полнотекстовый, граф) со
-  слиянием и реранкингом; Context Compiler собирает контекст задачи в бюджет
-  токенов со ссылками на источники. Процессы читают и пишут память шагами
-  `recall` и `remember`.
-- **Память подсказывает, но не управляет.** Решения проверяет Control Plane;
-  недоступность памяти не блокирует авторитетные операции. Работает и офлайн — на
-  заглушках вместо LLM.
+- **Knowledge graph.** Apache AGE and pgvector in a single PostgreSQL: observations,
+  temporal facts, source documents, provenance and audit.
+- **Retrieval and context assembly.** Hybrid search (vector, full-text, graph) with
+  fusion and reranking; the Context Compiler assembles task context within a token
+  budget, with references to sources. Processes read and write memory with the
+  `recall` and `remember` steps.
+- **Memory advises but does not govern.** Decisions are checked by the Control Plane;
+  unavailability of memory does not block authoritative operations. It also works
+  offline — with stubs instead of an LLM.
 
-### События и уведомления
+### Events and notifications
 
-- **Журнал событий.** Неизменяемый журнал доменных событий с transactional outbox,
-  каталогом типов и версиями данных; подписки с фильтрами, курсором и WebSocket, SDK
-  потребителя на Python.
-- **Уведомления.** Веб-инбокс, Telegram и email; согласование можно решить прямо
-  из сообщения. Какие события становятся уведомлениями и кому — правила данными,
-  а не код сервиса.
+- **Event log.** An immutable log of domain events with a transactional outbox, a
+  type catalog and data versions; subscriptions with filters, a cursor and WebSocket,
+  and a Python consumer SDK.
+- **Notifications.** Web inbox, Telegram and email; an approval can be decided right
+  from the message. Which events become notifications, and for whom, is defined by
+  data rules, not by service code.
 
-## Состав
+## Components
 
-Компоненты — отдельные репозитории, подключённые сабмодулями плоско в корне этого
-репозитория.
+The components are separate repositories, attached as submodules flat at the root of
+this repository.
 
-| Компонент | Назначение |
+| Component | Purpose |
 |---|---|
-| [control-plane](https://github.com/taimen-ai/control-plane) | Граф работы, правила вывода, процессы, приёмка, скиллы, журнал событий; CLI, MCP-плагин и демон runner'а |
-| [iam-service](https://github.com/taimen-ai/iam-service) | Identity: tenants, principals, Platform Access Tokens, обмен токенов по audience, service accounts, федерация, SCIM |
-| [memory-service](https://github.com/taimen-ai/memory-service) | Память: граф знаний (Apache AGE + pgvector), гибридный поиск, сборка контекста, MCP-сервер и клиент |
-| [notification-service](https://github.com/taimen-ai/notification-service) | Уведомления: веб-инбокс, Telegram, email, правила уведомлений, решения из канала |
-| [platform-auth-sdk](https://github.com/taimen-ai/platform-auth-sdk) | Проверка токенов и прав в сервисах (Policy Enforcement Point) |
-| [skill-sdk](https://github.com/taimen-ai/skill-sdk) | SDK скиллов: контракт из кода, контекст вызова, хостинг `local` / `http` / `mcp` |
-| [platform-llm](https://github.com/taimen-ai/platform-llm) | Клиент любого OpenAI-совместимого endpoint со структурированным ответом |
+| [control-plane](https://github.com/taimen-ai/control-plane) | Work graph, work rules, processes, acceptance, skills, event log; CLI, MCP plugin and runner daemon |
+| [iam-service](https://github.com/taimen-ai/iam-service) | Identity: tenants, principals, Platform Access Tokens, token exchange by audience, service accounts, federation, SCIM |
+| [memory-service](https://github.com/taimen-ai/memory-service) | Memory: knowledge graph (Apache AGE + pgvector), hybrid search, context assembly, MCP server and client |
+| [notification-service](https://github.com/taimen-ai/notification-service) | Notifications: web inbox, Telegram, email, notification rules, decisions from the channel |
+| [platform-auth-sdk](https://github.com/taimen-ai/platform-auth-sdk) | Token and permission checks in services (Policy Enforcement Point) |
+| [skill-sdk](https://github.com/taimen-ai/skill-sdk) | Skill SDK: contract from code, invocation context, `local` / `http` / `mcp` hosting |
+| [platform-llm](https://github.com/taimen-ai/platform-llm) | Client for any OpenAI-compatible endpoint with structured output |
 
-Раскладка плоская намеренно: `control-plane`, `memory-service`,
-`notification-service` и `skill-sdk` берут соседей (`../platform-auth-sdk`,
-`../platform-llm`, клиент ядра) path-зависимостью, поэтому образы собираются из
-корня этого репозитория.
+The flat layout is intentional: `control-plane`, `memory-service`,
+`notification-service` and `skill-sdk` take their neighbours (`../platform-auth-sdk`,
+`../platform-llm`, the core client) as path dependencies, so images are built from the
+root of this repository.
 
-Сам этот репозиторий — сборка: `compose.yml`, `.env.example`, `Makefile`,
-[deploy/](deploy/README.md) (bootstrap и внешний контур), `tools/` (в том числе
-инструмент пакетов каталога) и руководство `guide/`.
+This repository itself is the assembly: `compose.yml`, `.env.example`, `Makefile`,
+[deploy/](deploy/README.md) (bootstrap and the edge), `tools/` (including the catalog
+package tool) and the guide `guide/`.
 
-## Быстрый старт
+## Quick start
 
-Нужны Docker с Compose v2, Python 3 (скрипты в `tools/` и `deploy/` используют
-только стандартную библиотеку), `openssl` и [uv](https://docs.astral.sh/uv/) — для
-CLI и MCP-плагина. Лимиты памяти по умолчанию рассчитаны на машину с 8 ГБ RAM.
+You need Docker with Compose v2, Python 3 (the scripts in `tools/` and `deploy/` use
+only the standard library), `openssl` and [uv](https://docs.astral.sh/uv/) for the CLI
+and the MCP plugin. The default memory limits are sized for a machine with 8 GB of RAM.
 
 ```bash
 git clone --recurse-submodules https://github.com/taimen-ai/taimen.git && cd taimen
-make secrets      # .env (0600) со случайными секретами + secrets/iam-signing.pem
-make up           # профили core edge: IAM, Control Plane, память, MinIO, Caddy, руководство
-make bootstrap    # tenant, оператор, PAT, workspace → deploy/state/<env>.json и secrets/
+make secrets      # .env (0600) with random secrets + secrets/iam-signing.pem
+make up           # profiles core edge: IAM, Control Plane, memory, MinIO, Caddy, guide
+make bootstrap    # tenant, operator, PAT, workspace → deploy/state/<env>.json and secrets/
 docker compose up -d control-plane-api control-plane-worker context-adapter
-make smoke        # healthz поднятых сервисов
+make smoke        # healthz of the running services
 ```
 
-Перезапуск ядра после первого `make bootstrap` нужен один раз: ядро подхватывает
-выпущенный bootstrap'ом service account для доступа к памяти (скрипт напоминает об
-этом сам).
+Restarting the core after the first `make bootstrap` is needed once: the core picks up
+the service account issued by bootstrap for access to memory (the script reminds you
+of this itself).
 
-После запуска платформа доступна на `http://taimen.localhost` (Chrome и Firefox
-резолвят `*.localhost` сами; для curl и Safari добавьте `127.0.0.1 taimen.localhost`
-в `/etc/hosts`): Control Plane — `/api/v1` и схема `/docs`, IAM — `/iam`,
-руководство — `/guide/`. Те же сервисы слушают на `127.0.0.1` по портам из `.env`
-(`CP_HOST_PORT`, `IAM_HOST_PORT`, `MEMORY_HOST_PORT`). `make down` останавливает
-контейнеры, данные в volumes остаются.
+Once running, the platform is available at `http://taimen.localhost` (Chrome and
+Firefox resolve `*.localhost` themselves; for curl and Safari add
+`127.0.0.1 taimen.localhost` to `/etc/hosts`): the Control Plane at `/api/v1` with the
+schema at `/docs`, IAM at `/iam`, the guide at `/guide/`. The same services listen on
+`127.0.0.1` on the ports from `.env` (`CP_HOST_PORT`, `IAM_HOST_PORT`,
+`MEMORY_HOST_PORT`). `make down` stops the containers; data stays in the volumes.
 
-Профили compose:
+Compose profiles:
 
-| Профиль | Что поднимает |
+| Profile | What it starts |
 |---|---|
-| `core` | IAM, Control Plane (api / worker / context-adapter), memory-service, их БД, MinIO для артефактов |
-| `notify` | notification-service и его БД |
-| `edge` | Caddy — единственный вход снаружи — и руководство `guide/` |
-| `idp` | необязательный: Keycloak как внешний IdP людей через federation IAM; ядру не нужен |
+| `core` | IAM, Control Plane (api / worker / context-adapter), memory-service, their databases, MinIO for artifacts |
+| `notify` | notification-service and its database |
+| `edge` | Caddy — the only entry point from outside — and the guide `guide/` |
+| `idp` | optional: Keycloak as an external IdP for people via IAM federation; the core does not need it |
 
 ```bash
-make up PROFILES="core notify edge"   # с уведомлениями
+make up PROFILES="core notify edge"   # with notifications
 ```
 
-Память по умолчанию работает офлайн (`MEMORY_EMBEDDING_PROVIDER=fake`,
-`MEMORY_LLM_PROVIDER=echo`). Чтобы подключить любой OpenAI-совместимый endpoint,
-задайте в `.env` `LLM_BASE_URL` и `LLM_API_KEY` и переключите оба провайдера на
-`openai`. На Linux ключ подписи `secrets/iam-signing.pem` должен принадлежать uid
-10001 (права 600).
+By default memory works offline (`MEMORY_EMBEDDING_PROVIDER=fake`,
+`MEMORY_LLM_PROVIDER=echo`). To connect any OpenAI-compatible endpoint, set
+`LLM_BASE_URL` and `LLM_API_KEY` in `.env` and switch both providers to `openai`. On
+Linux the signing key `secrets/iam-signing.pem` must be owned by uid 10001 (mode 600).
 
-### Первая задача через MCP-плагин
+### First task through the MCP plugin
 
-1. `make bootstrap` печатает ключ credential для CLI и MCP-плагина: положите
-   содержимое `secrets/harness-pat` в `~/.config/iam/credentials.json` (0600) под
-   ключом `<issuer>|<tenant>|<principal>` и впишите напечатанный
-   `IAM_TENANT_ID=<uuid>` в `.env`.
-2. Установите пакет Control Plane (соседний `platform-auth-sdk` уже на месте):
-   `uv tool install ./control-plane` — это даёт `control-plane` (CLI),
-   `control-plane-mcp` (MCP-сервер) и `control-plane-agent` (демон runner'а).
-3. Подключите MCP-сервер к своему кодовому агенту, например Claude Code:
-   `claude mcp add control-plane -- control-plane-mcp`. Секретов в конфигурации MCP
-   нет: сервер сам находит credential.
-4. В сессии вызовите `cp_whoami` и `cp_context`, затем создайте задачу `cp_create_task`
-   и проведите её через `cp_claim_task`, `cp_start_run`, `cp_create_artifact` и
-   `cp_complete_run`.
+1. `make bootstrap` prints the credential key for the CLI and the MCP plugin: put the
+   contents of `secrets/harness-pat` into `~/.config/iam/credentials.json` (0600)
+   under the key `<issuer>|<tenant>|<principal>` and add the printed
+   `IAM_TENANT_ID=<uuid>` to `.env`.
+2. Install the Control Plane package (the neighbouring `platform-auth-sdk` is already
+   in place): `uv tool install ./control-plane` — this gives you `control-plane` (the
+   CLI), `control-plane-mcp` (the MCP server) and `control-plane-agent` (the runner
+   daemon).
+3. Connect the MCP server to your coding agent, for example Claude Code:
+   `claude mcp add control-plane -- control-plane-mcp`. There are no secrets in the MCP
+   configuration: the server finds the credential itself.
+4. In a session, call `cp_whoami` and `cp_context`, then create a task with
+   `cp_create_task` and take it through `cp_claim_task`, `cp_start_run`,
+   `cp_create_artifact` and `cp_complete_run`.
 
-Агентов с собственными principals и PAT заводит `make bootstrap ARGS="--agents
-agents.json"`; формат реестра и запуск демона runner'а — в
+Agents with their own principals and PATs are created by `make bootstrap ARGS="--agents
+agents.json"`; the registry format and how to start the runner daemon are in
 [deploy/README.md](deploy/README.md).
 
-## Руководство
+## Guide
 
-Техническая и эксплуатационная документация платформы — руководство в каталоге
-`guide/` (MkDocs Material, на русском): установка и конфигурация, модель работы,
-identity, память, уведомления, исполнители, эксплуатация и справочник API.
-
-```bash
-make guide         # собрать в guide/site (mkdocs --strict)
-make guide-serve   # с живой перезагрузкой на http://127.0.0.1:8008
-```
-
-В запущенной платформе руководство отдаётся по адресу `/guide/` (сервис `guide`
-профиля `edge`).
-
-## Разработка
+The technical and operations documentation of the platform is the guide in the
+`guide/` directory (MkDocs Material, in English, with a Russian version): installation
+and configuration, the work model, identity, memory, notifications, executors,
+operations and the API reference.
 
 ```bash
-make submodules          # сабмодули на закреплённых ревизиях
-make check               # ruff + unit-тесты всех компонентов и tools/, как в CI
-make check-control-plane # один компонент
-make help                # все цели
+make guide         # build into guide/site (mkdocs --strict)
+make guide-serve   # with live reload at http://127.0.0.1:8008
 ```
 
-Изменение в компоненте делается pull request'ом в его репозиторий; указатель
-сабмодуля здесь сдвигается отдельным коммитом после релиза компонента.
+In a running platform the guide is served at `/guide/`, with the Russian version at
+`/guide/ru/` (the `guide` service of the `edge` profile).
 
-## Версии
+## Development
 
-Платформа версии 0.x: совместимость API до 1.0 не обещается, ломающие изменения
-описываются в заметках к релизу компонента. Тег платформы `vX.Y.Z` ставится в этом
-репозитории и фиксирует ревизии всех компонентов.
+```bash
+make submodules          # submodules at their pinned revisions
+make check               # ruff + unit tests of all components and tools/, as in CI
+make check-control-plane # a single component
+make help                # all targets
+```
 
-## Участие, безопасность и лицензия
+A change to a component is made as a pull request to its repository; the submodule
+pointer here is moved in a separate commit after the component is released.
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — как предложить изменение; для каждого вклада
-  нужно подписанное соглашение контрибьютора (CLA).
-- [SECURITY.md](SECURITY.md) — как сообщить об уязвимости приватно.
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — кодекс поведения.
-- Лицензия — [Apache-2.0](LICENSE), см. также [NOTICE](NOTICE) и
-  [THIRD_PARTY.md](THIRD_PARTY.md). Имя и логотип Taimen лицензией не покрываются —
-  [TRADEMARK.md](TRADEMARK.md).
+## Versions
 
-## Автор
+The platform is at version 0.x: API compatibility is not promised before 1.0, and
+breaking changes are described in the component's release notes. A platform tag
+`vX.Y.Z` is set in this repository and pins the revisions of all components.
 
-Александр Перебоев (Aleksandr Pereboev) — архитектура и код платформы. Вопросы и
-предложения — через issues этого репозитория.
+## Contributing, security and licence
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to propose a change; every contribution
+  requires a signed Contributor License Agreement (CLA).
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability privately.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — the code of conduct.
+- Licence — [Apache-2.0](LICENSE); see also [NOTICE](NOTICE) and
+  [THIRD_PARTY.md](THIRD_PARTY.md). The Taimen name and logo are not covered by the
+  licence — see [TRADEMARK.md](TRADEMARK.md).
+
+## Author
+
+Aleksandr Pereboev — architecture and code of the platform. Questions and proposals —
+via the issues of this repository.

@@ -3,26 +3,26 @@ apiVersion: taimen.ai/v1
 kind: TaskType
 key: request
 spec:
-  displayName: Запрос
-  description: Входящий запрос, который кто-то берёт в работу и закрывает ответом.
+  displayName: Request
+  description: An incoming request that someone takes on and closes with an answer.
   fieldSchema:
     type: object
     properties:
       requester:
         type: string
         maxLength: 200
-        description: Кто обратился
+        description: Who made the request
       dueDate:
         type: string
         format: date
-        description: Желаемый срок ответа
+        description: Desired response date
   lifecycleSchema:
     statuses:
-      - {key: new, category: backlog, displayName: Новый}
-      - {key: in_progress, category: active, displayName: В работе}
-      - {key: waiting, category: blocked, displayName: Ждёт ответа}
-      - {key: answered, category: terminal_success, displayName: Отвечен}
-      - {key: rejected, category: terminal_cancelled, displayName: Отклонён}
+      - {key: new, category: backlog, displayName: New}
+      - {key: in_progress, category: active, displayName: In progress}
+      - {key: waiting, category: blocked, displayName: Waiting for reply}
+      - {key: answered, category: terminal_success, displayName: Answered}
+      - {key: rejected, category: terminal_cancelled, displayName: Rejected}
     transitions:
       - {from: new, to: [in_progress, rejected]}
       - {from: in_progress, to: [new, waiting, answered, rejected]}

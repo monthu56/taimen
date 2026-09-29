@@ -19,8 +19,9 @@ revision that passed this check. The script inspects one repository at one ref:
    the primary language of the repository: ``--lang``, else the first word of the
    ``.oss-language`` file at the ref (``en`` or ``ru``), else ``en``.
 
-   - ``en`` (components): a ``*.md`` that has a ``*.ru.md`` sibling or starts with
-     the ``*English.`` marker line;
+   - ``en`` (components and the umbrella): a ``*.md`` that has a ``*.ru.md`` sibling
+     (``README.md`` next to ``README.ru.md``) or starts with the ``*English.`` marker
+     line; the ``*.ru.md`` twins themselves are not checked;
    - ``ru`` (a repository written in Russian with short English companions): every
      ``*.en.md`` and every ``*.md`` that starts with the ``*English.`` marker line;
      Russian documents are not checked;

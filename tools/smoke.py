@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Smoke поднятого стека: healthz каждого сервиса через порты на 127.0.0.1 (make smoke).
+"""Smoke test of the running stack: healthz of every service via the 127.0.0.1 ports (make smoke).
 
-Порты читаются из .env (или из окружения), сервисы, которые не подняты, помечаются
-«не запущен» и ошибкой не считаются: профили compose могут быть разными.
+Ports are read from .env (or from the environment); services that are not running are marked
+"not running" and are not counted as errors: compose profiles may differ.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def main() -> int:
     failures = 0
     for name, var, default, path in CHECKS:
         if running is not None and name not in running:
-            print(f"  {name:20s} —   не запущен")
+            print(f"  {name:20s} —   not running")
             continue
         port = os.environ.get(var) or env.get(var) or default
         url = f"http://127.0.0.1:{port}{path}"
@@ -63,7 +63,7 @@ def main() -> int:
         except urllib.error.HTTPError as error:
             status = error.code
         except (urllib.error.URLError, OSError):
-            print(f"  {name:20s} —   не запущен ({url})")
+            print(f"  {name:20s} —   not running ({url})")
             continue
         ok = status < 400
         failures += 0 if ok else 1

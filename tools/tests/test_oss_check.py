@@ -120,6 +120,20 @@ def test_default_language_is_english_and_ru_siblings_mark_english_documents(tmp_
     assert lang == "en" and paths == {"README.md"}
 
 
+def test_english_readme_with_a_russian_twin_is_publishable(tmp_path, capsys):
+    lang, paths = english_findings(
+        tmp_path,
+        capsys,
+        {
+            ".oss-language": "en\n",
+            "README.md": "# C\n\n*Russian version: [README.ru.md](README.ru.md)*\n",
+            "README.ru.md": "# C\n\n*English version: [README.md](README.md)*\n" + RUSSIAN,
+            "CONTRIBUTING.md": "# Contributing\n",
+        },
+    )
+    assert lang == "en" and paths == set()
+
+
 def test_russian_repository_checks_only_en_companions(tmp_path, capsys):
     lang, paths = english_findings(
         tmp_path,

@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=../packages/schema/v1/object.schema.json
-# Установка каталога: какие пакеты из packages/ ставить в инсталляцию.
+# Catalog install file: which packages from packages/ to install into the installation.
 #   python3 tools/cp_packages.py check --install deploy/packages.yaml
 #   python3 tools/cp_packages.py plan  --install deploy/packages.yaml --server http://taimen.localhost
 #   python3 tools/cp_packages.py apply --install deploy/packages.yaml --server http://taimen.localhost
