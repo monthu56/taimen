@@ -1,5 +1,7 @@
 # Taimen
 
+![Taimen — an open platform for humans, agents and workflows](.github/assets/cover.webp)
+
 *English summary. The primary documentation of this repository is in Russian:
 [README.md](README.md).*
 

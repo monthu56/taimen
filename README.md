@@ -1,5 +1,7 @@
 # Taimen
 
+![Taimen — открытая платформа для людей, агентов и процессов](.github/assets/cover.webp)
+
 *English summary: [README.en.md](README.en.md)*
 
 **Taimen — runtime организации.** Платформа, в которой работу организации исполняют
