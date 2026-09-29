@@ -15,7 +15,10 @@ revision that passed this check. The script inspects one repository at one ref:
    COPYING, the trademark-owner line of ``TRADEMARK.md``, ``authors = …`` of
    ``pyproject.toml``, the copyright-holder line of a CLA and the ``## Author``
    section of a README legitimately name the owner;
-3. **no Cyrillic in English documents**. Which documents are English depends on
+3. **no Cyrillic in English documents** outside code: fenced blocks (```` ``` ```` or
+   ``~~~``, indented inside lists and admonitions too) and inline code spans may quote
+   literal program output, which some components print in Russian. Which documents are
+   English depends on
    the primary language of the repository: ``--lang``, else the first word of the
    ``.oss-language`` file at the ref (``en`` or ``ru``), else ``en``.
 
@@ -58,6 +61,12 @@ REQUIRED_FILES = ("LICENSE", "NOTICE", "THIRD_PARTY.md")
 LICENSE_ID = "Apache-2.0"
 EN_MARKER = re.compile(r"^\s*\*English\.")
 CYRILLIC = re.compile(r"[\u0400-\u04FF]")
+# A fence opens with three or more backticks or tildes (any indentation, any info string)
+# and closes with a run of the same character at least as long and nothing after it.
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+# An inline code span: a backtick run closed by a run of the same length; it may wrap to
+# the next line within a paragraph, but not across a blank line.
+INLINE_CODE = re.compile(r"(`+)(?!`)((?:(?!\n[ \t]*\n).)+?)(?<!`)\1(?!`)", re.DOTALL)
 LANGUAGES = ("en", "ru")
 LANGUAGE_FILE = ".oss-language"
 MAX_TEXT_BYTES = 2_000_000
@@ -234,6 +243,28 @@ def repository_language(repo: Path, ref: str, override: str | None) -> str:
     return language
 
 
+def prose_lines(lines: list[str]) -> list[str]:
+    """The lines with code blanked out: fenced blocks and inline code spans (also those
+    wrapped to the next line). Line numbering is preserved."""
+    out: list[str] = []
+    fence: str | None = None
+    for line in lines:
+        match = FENCE.match(line)
+        if fence is None:
+            if match and not (match.group(1)[0] == "`" and "`" in line[match.end() :]):
+                fence = match.group(1)
+                out.append("")
+                continue
+            out.append(line)
+        else:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
+                if not line[match.end() :].strip():
+                    fence = None
+            out.append("")
+    blob = INLINE_CODE.sub(lambda m: "\n" * m.group(0).count("\n"), "\n".join(out))
+    return blob.split("\n")
+
+
 def is_english_document(path: str, head: list[str], known: set[str], language: str) -> bool:
     """Should this Markdown file be free of Cyrillic?"""
     if not path.endswith(".md"):
@@ -273,7 +304,7 @@ def check_tree(repo: Path, ref: str, stoplist: list[re.Pattern[str]], report: Re
                         rule=index,
                     )
         if is_english_document(path, lines[:5], known, language):
-            for number, line in enumerate(lines, 1):
+            for number, line in enumerate(prose_lines(lines), 1):
                 if CYRILLIC.search(line):
                     report.add(
                         "english-docs", f"{path}:{number}: Cyrillic in an English document", path=path, line=number

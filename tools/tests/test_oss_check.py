@@ -120,6 +120,37 @@ def test_default_language_is_english_and_ru_siblings_mark_english_documents(tmp_
     assert lang == "en" and paths == {"README.md"}
 
 
+def test_cyrillic_inside_code_is_allowed_in_english_documents(tmp_path, capsys):
+    text = (
+        "# Guide\n\n"
+        "The memory service answers `403 Нет прав на namespace` when the grant is narrow.\n"
+        "A span may wrap: `контекст памяти\nнедоступен` and ``двойные ` кавычки``.\n\n"
+        "```text\n1. ожидание сервисов\n```\n\n"
+        '~~~~ json\n{"context": "# Найденные фрагменты"}\n~~~\nещё код\n~~~~\n\n'
+        "1. A step:\n\n    ```bash\n    echo готово\n    ```\n\n"
+        '!!! note "Output"\n    ````\n    ```\n    вложенный\n    ````\n'
+    )
+    lang, paths = english_findings(tmp_path, capsys, {"guide.md": "*English.*\n" + text})
+    assert lang == "en" and paths == set()
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        ("*English.*\nplain Привет\n", 2),
+        ("*English.*\n```\ncode\n```\nafter Привет\n", 5),
+        ("*English.*\n`unclosed span\n\nПривет`\n", 4),
+        ("*English.*\n~~~\ncode\n```\nstill code\n~~~\nПривет\n", 7),
+    ],
+)
+def test_cyrillic_outside_code_is_still_a_finding(tmp_path, capsys, text, line):
+    repo = make_repo(tmp_path, {"guide.md": text})
+    run(repo, tmp_path, "--json")
+    report = json.loads(capsys.readouterr().out)
+    lines = {f["line"] for f in report["findings"] if f["check"] == "english-docs"}
+    assert lines == {line}
+
+
 def test_english_readme_with_a_russian_twin_is_publishable(tmp_path, capsys):
     lang, paths = english_findings(
         tmp_path,
