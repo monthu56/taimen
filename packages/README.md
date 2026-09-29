@@ -8,7 +8,8 @@ files in the `{apiVersion, kind, key, spec}` envelope. The object schema is
 is [schema/v1/test.schema.json](schema/v1/test.schema.json).
 
 Which packages to install into an installation is defined by the install file
-[deploy/packages.yaml](../deploy/packages.yaml). The tool is `tools/cp_packages.py`:
+[deploy/packages.yaml](../deploy/packages.yaml); `make bootstrap` applies it at step 5b,
+and a repeated run changes only what differs. The tool is `tools/cp_packages.py`:
 
 ```bash
 make packages-check                                  # check without a running installation

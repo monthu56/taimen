@@ -11,23 +11,31 @@ Initial setup of IAM and the Control Plane in one pass:
   4. a fresh authentication context → the operator's Platform Access Token with the
      read/write/admin ceiling → secrets/harness-pat (0600); the PAT exchange is verified right away;
   5. Control Plane: project template, project and workspace;
-  5a. notification-service: an IAM service account, the service description and its identity in
+  5b. the catalog from packages/ by the installation file (--packages, default
+     deploy/packages.yaml) through tools/cp_packages.py: task types and templates get a new
+     version only when they differ from the package, the previously active ones become
+     deprecated; roles, workspace types, capabilities and skills are created or brought in
+     line with the package; `retire` of the installation file is applied;
+  5c. notification-service: an IAM service account, the service description and its identity in
      the core → secrets/notification-iam.env (the service picks up the file on `up -d`);
-     the legacy api-key from the step 3 response is revoked — the installation is IAM-only;
+     then the legacy api-key from the step 3 response is revoked — the installation is IAM-only;
   6. --agents agents.json (optional): agent principals in the Control Plane and IAM,
      bindings and PATs with the read/write ceiling → secrets/agents/<slug>.pat.
 
 State lives in deploy/state/<env>.json: the identifiers are not secret; a repeated run
 skips what is done and brings the mutable parts (audience ceilings, binding permissions)
-in line with the registry in the script. Secrets are never printed. Python standard library only.
+in line with the registry in the script and the catalog with the packages. Secrets are never
+printed. HTTP uses the Python standard library only; step 5b needs PyYAML and jsonschema
+(`make bootstrap` provides them through uv):
 
-    python3 deploy/bootstrap.py --env .env
-    python3 deploy/bootstrap.py --env .env --agents agents.json
+    uv run --no-project --with pyyaml --with jsonschema python3 deploy/bootstrap.py --env .env
+    python3 deploy/bootstrap.py --env .env --agents agents.json   # system python3 with both modules
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -38,6 +46,11 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import cp_packages  # noqa: E402  (catalog packages, step 5b)
+
+# Python modules step 5b needs (tools/cp_packages.py): import name → package name.
+CATALOG_MODULES = {"yaml": "PyYAML", "jsonschema": "jsonschema"}
 
 # IAM audiences and their scope ceilings: one token — one service.
 AUDIENCES = {
@@ -152,6 +165,16 @@ def secure_write(path: Path, value: str) -> None:
         os.close(descriptor)
 
 
+def require_catalog_modules() -> None:
+    """Fail before the first write if step 5b could not run: better than a half-done bootstrap."""
+    missing = [name for module, name in CATALOG_MODULES.items() if importlib.util.find_spec(module) is None]
+    if missing:
+        raise SystemExit(
+            f"{' and '.join(missing)} required by step 5b (catalog from packages): install uv and run "
+            "`make bootstrap`, or `pip install pyyaml jsonschema` for this python3"
+        )
+
+
 def issue_pat(
     iam: Http,
     bootstrap: dict,
@@ -189,11 +212,15 @@ def main() -> int:
     parser.add_argument("--pat-ttl", type=int, default=180 * 24 * 3600)
     parser.add_argument("--secrets-dir", default="secrets")
     parser.add_argument(
+        "--packages", default="deploy/packages.yaml", help="catalog installation file (kind: Installation), step 5b"
+    )
+    parser.add_argument(
         "--reissue-agent-pats",
         action="store_true",
         help="reissue agent PATs even if the file exists (old file → .bak)",
     )
     args = parser.parse_args()
+    require_catalog_modules()
 
     env = read_env(ROOT / args.env)
     project = env.get("COMPOSE_PROJECT_NAME", "taimen")
@@ -251,8 +278,17 @@ def main() -> int:
             ready.add(key)
             state["iamAudiences"] = sorted(ready)
             save()
-        # A service's ceiling grows with the service: bring allowedScopes in line with the registry.
-        iam.call("PATCH", f"/api/v1/tenants/{iam_tenant}/audiences/{key}", {"allowedScopes": scopes}, bootstrap_header)
+        # A service's ceiling grows with the service: bring allowedScopes in line with the registry
+        # (PATCH is idempotent; an older IAM without it is a warning, not a stop).
+        try:
+            iam.call(
+                "PATCH", f"/api/v1/tenants/{iam_tenant}/audiences/{key}", {"allowedScopes": scopes}, bootstrap_header
+            )
+        except RuntimeError as error:
+            if "HTTP 404" in str(error) or "HTTP 405" in str(error):
+                print(f"   !! IAM cannot PATCH audiences ({key}): upgrade iam-service")
+            else:
+                raise
     if "iamOperatorPrincipalId" not in state:
         principal = iam.call(
             "POST",
@@ -328,6 +364,11 @@ def main() -> int:
         )
     else:
         print("   already done:", state["cpTenantId"])
+    if state["cpTenantId"] != iam_tenant:
+        print(
+            f"   !! core tenant {state['cpTenantId']} ≠ IAM tenant {iam_tenant}: "
+            "the installation predates the single tenant"
+        )
 
     print("4. operator PAT")
     pat_file = secrets_dir / "harness-pat"
@@ -390,7 +431,15 @@ def main() -> int:
         save()
     print("   project", state["projectId"], "workspace", state["workspaceId"])
 
-    print("5a. notification-service: IAM service account, identity in the core, env file")
+    print("5b. catalog from packages:", args.packages)
+    try:
+        installation = cp_packages.load_installation(ROOT / args.packages)
+        state["catalog"] = cp_packages.apply(installation, cp, auth, env={**env, **os.environ})
+    except cp_packages.PackageError as error:
+        raise SystemExit(f"step 5b stopped: {error}") from error
+    save()
+
+    print("5c. notification-service: IAM service account, identity in the core, env file")
     ns_env = secrets_dir / "notification-iam.env"
     identity = NOTIFICATION_AGENT["spec"]["identity"]
     account = {

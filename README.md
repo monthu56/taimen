@@ -137,15 +137,15 @@ package tool) and the guide `guide/`.
 
 ## Quick start
 
-You need Docker with Compose v2, Python 3 (the scripts in `tools/` and `deploy/` use
-only the standard library), `openssl` and [uv](https://docs.astral.sh/uv/) for the CLI
-and the MCP plugin. The default memory limits are sized for a machine with 8 GB of RAM.
+You need Docker with Compose v2, Python 3, `openssl` and
+[uv](https://docs.astral.sh/uv/): `make bootstrap` runs through uv to get PyYAML and
+jsonschema for its catalog step, and uv installs the CLI and the MCP plugin. The default memory limits are sized for a machine with 8 GB of RAM.
 
 ```bash
 git clone --recurse-submodules https://github.com/taimen-ai/taimen.git && cd taimen
 make secrets      # .env (0600) with random secrets + secrets/iam-signing.pem
 make up           # profiles core edge: IAM, Control Plane, memory, MinIO, Caddy, guide
-make bootstrap    # tenant, operator, PAT, workspace → deploy/state/<env>.json and secrets/
+make bootstrap    # tenant, operator, PAT, workspace, catalog → deploy/state/<env>.json and secrets/
 docker compose up -d control-plane-api control-plane-worker context-adapter
 make smoke        # healthz of the running services
 ```

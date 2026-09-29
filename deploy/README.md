@@ -7,7 +7,8 @@ no secrets in this directory: `.env`, PATs and the signing key live in `secrets/
 
 ```text
 deploy/
-├── bootstrap.py                 idempotent bootstrap: IAM → Control Plane → PAT → services → agents
+├── bootstrap.py                 idempotent bootstrap: IAM → Control Plane → PAT → catalog → services → agents
+├── packages.yaml                catalog installation file: which packages/ bootstrap installs
 ├── caddy/Caddyfile.local        edge for a local run: http, one host, routing by path
 ├── keycloak/platform-realm.json realm template for the optional idp profile
 └── state/<env>.json             bootstrap state: identifiers, not secrets (in .gitignore)
@@ -37,27 +38,34 @@ by uid 10001 with mode 600.
 `deploy/bootstrap.py --env .env` is idempotent: what has been done is recorded in
 `deploy/state/<env>.json` (`<env>` is `COMPOSE_PROJECT_NAME` or `--name`); a repeated
 run skips completed steps and brings the mutable parts (audience ceilings, binding
-permissions) in line with the registry in the script. Secrets are never printed.
+permissions, the catalog) in line with the registry in the script and the packages.
+Secrets are never printed. The step numbers below are the ones the script prints.
 
-1. Waits for the Control Plane and IAM to be ready on the `127.0.0.1` ports.
-2. IAM: the tenant, audiences with their own scope ceilings (`control-plane`,
-   `memory-service`, `notification-service`, `iam`), the operator's human principal
-   (`--operator`, `Human Operator` by default).
-3. IAM: the Control Plane service account for access to memory →
-   `secrets/control-plane-iam.env`.
-4. Control Plane: `POST /api/v1/bootstrap` — the tenant (the same UUID as in IAM), the
-   operator's admin principal and its binding in one transaction.
-5. The operator's PAT with the `control-plane:read/write/admin` ceiling →
-   `secrets/harness-pat` (0600, lifetime `--pat-ttl`, 180 days by default); the
-   exchange of the PAT for an access token is verified right away.
-6. Control Plane: a project template, a project and a workspace named after the
-   tenant.
-7. notification-service: an IAM service account → `secrets/notification-iam.env`, the
-   service description and its identity in the Control Plane (permissions: reading
-   events, approvals, tasks, principals and workspaces). The step always runs; the
-   service picks up the file once the `notify` profile is started.
-8. Revokes the legacy api-key issued in step 4: the installation is IAM-only.
-9. `--agents agents.json` (optional): agents — see below.
+- **1.** Waits for the Control Plane and IAM to be ready on the `127.0.0.1` ports.
+- **2.** IAM: the tenant, audiences with their own scope ceilings (`control-plane`,
+  `memory-service`, `notification-service`, `iam`), the operator's human principal
+  (`--operator`, `Human Operator` by default).
+- **2a.** IAM: the Control Plane service account for access to memory →
+  `secrets/control-plane-iam.env`.
+- **3.** Control Plane: `POST /api/v1/bootstrap` — the tenant (the same UUID as in IAM), the
+  operator's admin principal and its binding in one transaction.
+- **4.** The operator's PAT with the `control-plane:read/write/admin` ceiling →
+  `secrets/harness-pat` (0600, lifetime `--pat-ttl`, 180 days by default); the
+  exchange of the PAT for an access token is verified right away.
+- **5.** Control Plane: a project template, a project and a workspace named after the
+  tenant.
+- **5b.** The catalog from [packages/](../packages/README.md) by the installation file
+  `--packages` (default [packages.yaml](packages.yaml)) through `tools/cp_packages.py`:
+  a type gets a new version only when it differs from the package, so a repeated run
+  changes nothing. Needs PyYAML and jsonschema — `make bootstrap` provides them
+  through uv; without uv, the system `python3` must have them, otherwise the script
+  stops before its first step.
+- **5c.** notification-service: an IAM service account → `secrets/notification-iam.env`, the
+  service description and its identity in the Control Plane (permissions: reading
+  events, approvals, tasks, principals and workspaces). The step always runs; the
+  service picks up the file once the `notify` profile is started.
+  Then the legacy api-key issued in step 3 is revoked: the installation is IAM-only.
+- **6.** `--agents agents.json` (optional): agents — see below.
 
 After the volumes are reset, the state file refers to objects that no longer exist;
 the script notices this and asks for `make reset-state` — that target moves the state

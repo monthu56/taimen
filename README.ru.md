@@ -136,15 +136,15 @@
 
 ## Быстрый старт
 
-Нужны Docker с Compose v2, Python 3 (скрипты в `tools/` и `deploy/` используют
-только стандартную библиотеку), `openssl` и [uv](https://docs.astral.sh/uv/) — для
-CLI и MCP-плагина. Лимиты памяти по умолчанию рассчитаны на машину с 8 ГБ RAM.
+Нужны Docker с Compose v2, Python 3, `openssl` и [uv](https://docs.astral.sh/uv/):
+через uv `make bootstrap` получает PyYAML и jsonschema для шага каталога, им же
+ставятся CLI и MCP-плагин. Лимиты памяти по умолчанию рассчитаны на машину с 8 ГБ RAM.
 
 ```bash
 git clone --recurse-submodules https://github.com/taimen-ai/taimen.git && cd taimen
 make secrets      # .env (0600) со случайными секретами + secrets/iam-signing.pem
 make up           # профили core edge: IAM, Control Plane, память, MinIO, Caddy, руководство
-make bootstrap    # tenant, оператор, PAT, workspace → deploy/state/<env>.json и secrets/
+make bootstrap    # tenant, оператор, PAT, workspace, каталог → deploy/state/<env>.json и secrets/
 docker compose up -d control-plane-api control-plane-worker context-adapter
 make smoke        # healthz поднятых сервисов
 ```

@@ -2,7 +2,7 @@
 #   make submodules           → component submodules at their pinned revisions
 #   make secrets              → .env and the IAM signing key with random secrets
 #   make up                   → start compose profiles (core edge by default)
-#   make bootstrap            → initial setup (tenant, operator, PAT, workspace)
+#   make bootstrap            → initial setup (tenant, operator, PAT, workspace, catalog)
 #   make smoke                → healthz of the running services
 #   make check                → ruff + unit tests of the components (as in CI)
 #   make guide                → build the guide guide/
@@ -60,8 +60,12 @@ logs: ## Service logs: make logs svc=control-plane-api
 smoke: ## Check healthz of the running services via the 127.0.0.1 ports
 	@python3 tools/smoke.py
 
-bootstrap: ## Initial setup; ARGS="--agents agents.json" — agents as well
-	@python3 deploy/bootstrap.py --env .env $(ARGS)
+# PyYAML and jsonschema are needed by the catalog-from-packages step (tools/cp_packages.py): through uv
+# they are not installed into the system python3; without uv, the system python3 must have them.
+BOOTSTRAP_PY = $(if $(shell command -v uv 2>/dev/null),uv run --no-project --quiet --with pyyaml --with jsonschema python3,python3)
+
+bootstrap: ## Initial setup, catalog from deploy/packages.yaml; ARGS="--agents agents.json" — agents as well
+	@$(BOOTSTRAP_PY) deploy/bootstrap.py --env .env $(ARGS)
 
 reset-state: ## After resetting volumes: move away the bootstrap state and the credentials it issued (to secrets/stale-<time>/)
 	@ts=$$(date +%Y%m%d-%H%M%S); dir=secrets/stale-$$ts; mkdir -p $$dir; \
