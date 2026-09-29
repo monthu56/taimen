@@ -47,7 +47,9 @@ reads their values from `.env`.
 The script uses only the Python standard library for HTTP, but step 5b
 imports `tools/cp_packages.py`, which needs **PyYAML** and **jsonschema**.
 With uv installed, `make bootstrap` adds them itself; without uv, the system
-Python must have them.
+Python must have them. The script checks for both before its first step and
+stops right away if either is missing, so a bootstrap is never left half done
+for this reason.
 `cp_packages` takes the Control Plane domain validators from the
 `control-plane/src` submodule; if they cannot be imported, it prints a warning
 and validates only the format schema.
@@ -125,15 +127,13 @@ were retired, and the remaining steps keep their numbers.
 
 The script polls Control Plane `GET /health/ready` and IAM `GET /healthz`
 every 2 seconds, for up to 180 seconds. If a service does not come up, it
-exits with `SystemExit("не дождался …")` ("gave up waiting for …").
+exits with `SystemExit("timed out waiting for …")`.
 
 If the state file already contains `iamTenantId`, the script checks that the
 tenant exists in IAM (`GET /api/v1/tenants/{t}/audiences` with the bootstrap
 token). A `404` response means the volumes were reset but the state remained;
-the script stops with the message `… ссылается на IAM tenant …, которого нет в IAM
-(volumes сброшены?). Запустите `make reset-state` и повторите bootstrap.` ("…
-refers to an IAM tenant … that does not exist in IAM (volumes reset?). Run
-`make reset-state` and rerun bootstrap.")
+the script stops with the message `… refers to IAM tenant …, which does not
+exist in IAM (volumes reset?). Run `make reset-state` and repeat bootstrap.`
 
 ### 2. IAM: tenant, audiences, operator
 
@@ -156,7 +156,7 @@ All calls carry the header `X-IAM-Bootstrap-Token: ${IAM_BOOTSTRAP_TOKEN}`.
    → `iamOperatorPrincipalId`.
 
 If `IAM_TENANT_ID` in `.env` does not match the created tenant, the script
-prints `!! впишите в .env: IAM_TENANT_ID=…` ("write to .env"). Do it, so that
+prints `!! add to .env: IAM_TENANT_ID=… (needed by clients and runners)`. Do it, so that
 `.env` fully describes the deployment.
 
 ### 2a. Control Plane service account
@@ -277,11 +277,13 @@ apiVersion: taimen.ai/v1
 kind: Installation
 key: default
 spec:
-  packages: []
+  packages: [example]
 ```
 
-The core is domain-neutral: by default, an installation knows only the system
-type `task`. Domain types come from their own packages.
+The core is domain-neutral: by itself, an installation knows only the system
+type `task`. Domain types come from their own packages. The default
+installation adds the sample package `packages/example` (the task type
+`request`); list your own packages instead.
 
 `cp_packages.apply` first validates the packages (the format's JSON Schema,
 Control Plane domain validators, closure of references), then brings the
@@ -330,11 +332,11 @@ The script then revokes the legacy administrator API key from step 3
 ### Result
 
 At the end, the script prints the path to the state file and a hint for the
-client (in Russian: "done" and "credential for the MCP plugin/CLI"):
+client:
 
 ```text
-готово: deploy/state/taimen.json
-credential для MCP-плагина/CLI: ~/.config/iam/credentials.json, ключ http://taimen.localhost/iam|<tenant-id>|<iam-principal-id> → содержимое secrets/harness-pat
+done: deploy/state/taimen.json
+credential for the MCP plugin and CLI: ~/.config/iam/credentials.json, key http://taimen.localhost/iam|<tenant-id>|<iam-principal-id> → contents of secrets/harness-pat
 ```
 
 How to use it is described in [First task](first-task.md).
@@ -362,13 +364,13 @@ How to use it is described in [First task](first-task.md).
 
 | Message | Cause | Fix |
 |---|---|---|
-| `не дождался http://127.0.0.1:18000/health/ready` ("gave up waiting for …") | the core did not start, or the port is different | `make ps`, `make logs svc=control-plane-api`; check `CP_HOST_PORT` |
+| `timed out waiting for http://127.0.0.1:18000/health/ready` | the core did not start, or the port is different | `make ps`, `make logs svc=control-plane-api`; check `CP_HOST_PORT` |
 | `POST /api/v1/tenants: HTTP 401` | `IAM_BOOTSTRAP_TOKEN` in `.env` does not match the one `iam-service` was started with | after editing `.env`, recreate the container: `docker compose up -d iam-service` |
 | `POST /api/v1/bootstrap: HTTP 409 … already_bootstrapped` | Control Plane is already initialized, and the state file is missing | restore `deploy/state/<name>.json` |
 | `POST /api/v1/bootstrap: HTTP 403 … bootstrap_disabled` | `CP_BOOTSTRAP_TOKEN` is empty | set a value and recreate `control-plane-api` |
-| `нужен PyYAML` / `нужен jsonschema` ("PyYAML required" / "jsonschema required") | uv is not installed, and the system Python lacks the dependencies | install uv or `pip install pyyaml jsonschema`; when calling the script directly, use `uv run --no-project --with pyyaml --with jsonschema python3 deploy/bootstrap.py …` |
-| `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` ("refers to an IAM tenant that does not exist in IAM (volumes reset?)") | volumes were reset, but the state file remains | `make reset-state` and rerun bootstrap |
-| `пакеты не прошли проверку: …` ("packages failed validation") | an error in a package's YAML | `make packages-check`, fix the package |
+| `PyYAML and jsonschema required by step 5b (catalog from packages)` (or only one of them) | uv is not installed, and the system Python lacks the dependencies; the script stops before its first step | install uv or `pip install pyyaml jsonschema`; when calling the script directly, use `uv run --no-project --with pyyaml --with jsonschema python3 deploy/bootstrap.py …` |
+| `… refers to IAM tenant …, which does not exist in IAM (volumes reset?)` | volumes were reset, but the state file remains | `make reset-state` and rerun bootstrap |
+| `step 5b stopped: пакеты не прошли проверку: …` (`tools/cp_packages.py` prints the reason in Russian: "packages failed validation") | an error in a package's YAML | `make packages-check`, fix the package |
 | `platform-access-tokens:exchange: HTTP 500` | IAM cannot read the signing key | on Linux, `chown 10001:10001 secrets/iam-signing.pem`, then restart `iam-service` |
 
 ## See also

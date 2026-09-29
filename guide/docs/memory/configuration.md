@@ -40,8 +40,9 @@ Hard-coded in `compose.yml`: `CB_PII_PROTECTION=true`, an empty
 `CB_IAM_JWKS_URL=http://iam-service:8010/.well-known/jwks.json`,
 `CB_IAM_AUDIENCE=memory-service`,
 `CB_IAM_BASE_URL=http://iam-service:8010`. The file
-`secrets/memory-service-iam.env` (optional, created by `deploy/bootstrap.py`)
-adds `CB_IAM_CLIENT_ID` and `CB_IAM_CLIENT_SECRET`.
+`secrets/memory-service-iam.env` (optional: memory's service identity for calling
+an external PDP; you add it together with the PDP) adds `CB_IAM_CLIENT_ID` and
+`CB_IAM_CLIENT_SECRET`.
 
 !!! warning "Offline providers by default"
     Without a provider key, the platform runs memory on `fake`/`echo`:

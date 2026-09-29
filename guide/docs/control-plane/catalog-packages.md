@@ -40,16 +40,17 @@ packages/
     └── skills/                    # kind: Skill
 ```
 
-The delivery includes the format, the `packages/schema` schema, and the installer
-`tools/cp_packages.py`; it contains no domain packages. The examples below use
-the hypothetical package `example`.
+The delivery includes the format, the `packages/schema` schema, the installer
+`tools/cp_packages.py`, and a minimal sample package, `packages/example` (one
+task type, `request`); it contains no domain packages. The examples below use a
+package named `example` with more objects than the sample has.
 
 Installation files (which packages to install in a particular environment) live in
 `deploy/`:
 
 | File | Purpose |
 |---|---|
-| `deploy/packages.yaml` | the default installation, used by `make bootstrap` (`packages: []` — only the core's system type `task`) |
+| `deploy/packages.yaml` | the default installation, used by `make bootstrap` |
 | `deploy/<environment>/packages.yaml` | an environment's own installation with its own `retire` list |
 
 ## Object format

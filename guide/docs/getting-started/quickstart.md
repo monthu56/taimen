@@ -59,13 +59,12 @@ What the target does (`Makefile`, `tools/fill_secrets.py`):
 4. Generates the RSA-3072 signing key `secrets/iam-signing.pem` (if missing)
    and sets its mode to `600`.
 
-The script prints its messages in Russian ("created .env", "filled secrets",
-"secrets in place"):
+Output:
 
 ```text
-создан .env
-заполнены секреты: CP_POSTGRES_PASSWORD, IAM_POSTGRES_PASSWORD, …, S3_SECRET_ACCESS_KEY
-секреты на месте: .env, secrets/*.pem (на Linux: chown 10001 secrets/*.pem)
+created .env
+filled secrets: CP_POSTGRES_PASSWORD, IAM_POSTGRES_PASSWORD, …, S3_SECRET_ACCESS_KEY
+secrets in place: .env, secrets/iam-signing.pem (on Linux: chown 10001 secrets/*.pem)
 ```
 
 On Linux, hand the keys over to the container uid right away:
@@ -135,33 +134,33 @@ installed; otherwise, with the system `python3` (which then needs PyYAML and
 jsonschema).
 
 `--operator` is the display name of the first human administrator; set your
-own. Expected output (IDs shortened; the script prints its progress in
-Russian):
+own. Expected output (IDs and paths shortened; the lines of step 5b come from
+`tools/cp_packages.py`, which prints them in Russian):
 
 ```text
-1. ожидание сервисов
-2. IAM tenant, audience, principal оператора
-   IAM tenant <tenant-id> оператор <iam-principal-id>
-   !! впишите в .env: IAM_TENANT_ID=<tenant-id>
-2a. service account Control Plane в IAM
-   выпущен → secrets/control-plane-iam.env client <client-id>
-   !! перезапустите ядро, чтобы оно взяло env-файл: docker compose up -d control-plane-api control-plane-worker context-adapter
-3. Control Plane bootstrap с binding оператора
-   tenant <tenant-id> оператор <cp-principal-id> binding <binding-id>
-4. PAT оператора
-   выпущен → secrets/harness-pat prefix <prefix>
-   обмен PAT → access token: ok
-5. Control Plane: project template, workspace, legacy-ключ
+1. waiting for services
+2. IAM tenant, audiences, operator principal
+   IAM tenant <tenant-id> operator <iam-principal-id>
+   !! add to .env: IAM_TENANT_ID=<tenant-id> (needed by clients and runners)
+2a. Control Plane service account in IAM
+   issued → secrets/control-plane-iam.env client <client-id>
+   !! restart the core so that it picks up the env file: docker compose up -d control-plane-api control-plane-worker context-adapter
+3. Control Plane bootstrap with the operator binding
+   tenant <tenant-id> operator <cp-principal-id> binding <binding-id>
+4. operator PAT
+   issued → secrets/harness-pat prefix <prefix>
+   PAT → access token exchange: ok
+5. Control Plane: project template, project, workspace
    project <project-id> workspace <workspace-id>
-5b. Каталог из пакетов: deploy/packages.yaml (TAI-ADR-0044)
+5b. catalog from packages: deploy/packages.yaml
    …
-5c. notification-service: service account IAM по описанию, личность в ядре, env-файл
-   выпущен → secrets/notification-iam.env client <client-id>
-   !! перезапустите сервис: docker compose --profile notify up -d notification-service
-   ревизия 1 principal <principal-id>
-   legacy admin api-key отозван
-готово: deploy/state/taimen.json
-credential для MCP-плагина/CLI: ~/.config/iam/credentials.json, ключ http://taimen.localhost/iam|<tenant-id>|<iam-principal-id> → содержимое secrets/harness-pat
+5c. notification-service: IAM service account, identity in the core, env file
+   issued → secrets/notification-iam.env client <client-id>
+   !! restart the service: docker compose --profile notify up -d notification-service
+   revision 1 principal <principal-id>
+   legacy admin api-key revoked
+done: deploy/state/taimen.json
+credential for the MCP plugin and CLI: ~/.config/iam/credentials.json, key http://taimen.localhost/iam|<tenant-id>|<iam-principal-id> → contents of secrets/harness-pat
 ```
 
 What happens at each step is described in [Bootstrap](bootstrap.md).
@@ -260,8 +259,8 @@ Next: [First task](first-task.md).
 | `required variable … is missing a value` on `make up` | the secrets that `make secrets` generates are empty | `make secrets` |
 | `set CP_POSTGRES_PASSWORD` and similar | `make secrets` was not run, or `.env` is not in the root | `make secrets` |
 | `iam-service` restarts, logs show `PermissionError` on the signing key | Linux, the key file is owned by root | `sudo chown 10001:10001 secrets/*.pem` |
-| bootstrap: `нужен PyYAML` / `нужен jsonschema` ("PyYAML required" / "jsonschema required") | uv is not installed, and the system Python lacks the dependencies | install uv (`make bootstrap` then adds them itself) or `pip install pyyaml jsonschema` |
-| bootstrap: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` ("refers to an IAM tenant that does not exist in IAM (volumes reset?)") | volumes were reset, but `deploy/state/<name>.json` remains | `make reset-state` and rerun bootstrap |
+| bootstrap: `PyYAML and jsonschema required by step 5b (catalog from packages)` (or only one of them) | uv is not installed, and the system Python lacks the dependencies | install uv (`make bootstrap` then adds them itself) or `pip install pyyaml jsonschema` |
+| bootstrap: `… refers to IAM tenant …, which does not exist in IAM (volumes reset?)` | volumes were reset, but `deploy/state/<name>.json` remains | `make reset-state` and rerun bootstrap |
 | bootstrap: `HTTP 409 … already_bootstrapped` at step 3 | Control Plane is already initialized, but the state file is missing | restore `deploy/state/<name>.json` or do a full reset |
 | `bind: address already in use` on `80` | another web server holds the port | free the port, or start without `edge` (`make up PROFILES=core`) and work through `127.0.0.1` |
 | `curl: Could not resolve host: taimen.localhost` | the system resolver does not know `*.localhost` | add a line to `/etc/hosts` or use `127.0.0.1:<port>` addresses |

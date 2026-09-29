@@ -171,7 +171,8 @@ principals, которых в пустых базах уже нет, и bootstra
 - `deploy/state/<ENV_NAME>.json`;
 
 - `secrets/harness-pat`, `secrets/control-plane-iam.env`,
-  `secrets/memory-service-iam.env`.
+  `secrets/notification-iam.env`, `secrets/memory-service-iam.env`,
+  `secrets/agents/`.
 
 Ключи подписи (`secrets/*.pem`) и `.env` не трогает. Если переносить нечего,
 печатает `нечего убирать`. Файлы не удаляются — старые credentials можно

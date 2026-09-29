@@ -62,21 +62,20 @@ For details, see [Edge and TLS](../operations/edge-and-tls.md).
 
 ## make and bootstrap
 
-Some `bootstrap.py` and `make smoke` messages below are quoted verbatim: the
-scripts print them in Russian.
+The `bootstrap.py` and `make smoke` messages below are quoted verbatim.
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `make secrets`: `openssl: command not found` | openssl is not installed on the host | Install openssl |
-| `bootstrap.py`: `не дождался http://127.0.0.1:18000/health/ready` ("did not wait for …") | The stack is not up, the API is not ready (migrations, database), or `CP_HOST_PORT` was changed without recreating containers | `make smoke`, `docker compose ps`; ports are read from `.env` |
+| `bootstrap.py`: `timed out waiting for http://127.0.0.1:18000/health/ready` | The stack is not up, the API is not ready (migrations, database), or `CP_HOST_PORT` was changed without recreating containers | `make smoke`, `docker compose ps`; ports are read from `.env` |
 | `bootstrap.py`: `HTTP 401: {"detail":"unauthorized"}` on IAM requests | `IAM_BOOTSTRAP_TOKEN` in `.env` does not match the value `iam-service` was started with (for example, `.env` was edited without recreating the container) | `docker compose up -d iam-service` or restore the previous value |
 | `bootstrap.py`: `HTTP 409 … already_bootstrapped` | `deploy/state/<env>.json` is lost, but Control Plane is already initialized | Restore the state file from a backup; Control Plane bootstrap runs once |
-| `bootstrap.py`: `нужен PyYAML` / `нужен jsonschema` ("PyYAML required" / "jsonschema required") | uv is not installed, and the system Python lacks the dependencies of the catalog-from-packages step | Install uv (`make bootstrap` pulls them in itself) or `apt install python3-yaml python3-jsonschema` / `pip install pyyaml jsonschema` |
-| `bootstrap.py`: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` ("references an IAM tenant … that does not exist in IAM (volumes reset?)") | Volumes were reset, but `deploy/state/<env>.json` remains | `make reset-state` and rerun `make bootstrap` |
-| `bootstrap.py`: `!! IAM не умеет PATCH audiences` ("IAM cannot PATCH audiences") | `iam-service` is older than the script | Upgrade the whole installation (submodules at the superproject revisions) |
-| `bootstrap.py`: `!! tenant ядра … ≠ tenant IAM …` ("core tenant … ≠ IAM tenant …") | The installation predates the unified tenant, or Control Plane ignored `tenantId` | Live with different ids: put the IAM tenant that the script prints into `.env` |
+| `bootstrap.py`: `PyYAML and jsonschema required by step 5b (catalog from packages)` (or only one of them) | uv is not installed, and the system Python lacks the dependencies of the catalog-from-packages step; the script stops before its first step | Install uv (`make bootstrap` pulls them in itself) or `apt install python3-yaml python3-jsonschema` / `pip install pyyaml jsonschema` |
+| `bootstrap.py`: `… refers to IAM tenant …, which does not exist in IAM (volumes reset?)` | Volumes were reset, but `deploy/state/<env>.json` remains | `make reset-state` and rerun `make bootstrap` |
+| `bootstrap.py`: `!! IAM cannot PATCH audiences (…): upgrade iam-service` | `iam-service` is older than the script | Upgrade the whole installation (submodules at the superproject revisions) |
+| `bootstrap.py`: `!! core tenant … ≠ IAM tenant …: the installation predates the single tenant` | The installation predates the unified tenant, or Control Plane ignored `tenantId` | Live with different ids: put the IAM tenant that the script prints into `.env` |
 | After bootstrap, the core still calls memory with a static key | The core processes were not recreated after `secrets/control-plane-iam.env` appeared | `docker compose up -d control-plane-api control-plane-worker context-adapter` |
-| `make smoke` prints `не запущен` ("not running") for a required service | The profile is not up, or the service crashed | `docker compose --profile "*" ps` |
+| `make smoke` prints `not running` for a required service | The profile is not up, or the service crashed | `docker compose --profile "*" ps` |
 
 ## Miscellaneous
 

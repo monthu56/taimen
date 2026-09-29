@@ -48,7 +48,7 @@ packages/
 
 | Файл | Назначение |
 |---|---|
-| `deploy/packages.yaml` | установка по умолчанию, её использует `make bootstrap` (`packages: []` — только системный тип `task` ядра) |
+| `deploy/packages.yaml` | установка по умолчанию, её использует `make bootstrap` |
 | `deploy/<окружение>/packages.yaml` | своя установка окружения со своим списком `retire` |
 
 ## Формат объекта

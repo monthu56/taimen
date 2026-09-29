@@ -68,7 +68,7 @@ Principles:
 
 | Variable | Meaning |
 |---|---|
-| `IAM_TENANT_ID` | UUID of the tenant in IAM. Known only after bootstrap (it prints the line `впишите в .env: IAM_TENANT_ID=…`, "write to .env"). Services of the `core`, `edge`, and `notify` profiles do not need it |
+| `IAM_TENANT_ID` | UUID of the tenant in IAM. Known only after bootstrap (it prints the line `!! add to .env: IAM_TENANT_ID=…`). Services of the `core`, `edge`, and `notify` profiles do not need it |
 
 Bootstrap stores the other IDs (Control Plane tenant, operator, project,
 workspace) in `deploy/state/<name>.json`.

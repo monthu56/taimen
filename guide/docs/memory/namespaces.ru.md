@@ -273,7 +273,7 @@ Namespace — граница хранения. Внутри него элеме�
 по паре tenant/principal. Недоступность PDP → `503`, не «разрешить».
 Запрос к namespace вне видимости → `403`. Для вызова PDP память использует
 свою service identity (`CB_IAM_CLIENT_ID`/`CB_IAM_CLIENT_SECRET`, файл
-`secrets/memory-service-iam.env` создаёт bootstrap).
+`secrets/memory-service-iam.env` кладётся вместе с подключением PDP).
 
 
 !!! warning "Экспериментальный режим"

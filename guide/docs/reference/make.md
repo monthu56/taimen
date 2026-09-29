@@ -88,8 +88,7 @@ make config PROFILES="core notify edge"
 ```
 
 `docker compose … config --quiet`; on success it prints
-`compose.yml корректен для профилей: …` ("compose.yml is valid for profiles:
-…"). It catches empty required variables and interpolation errors before
+`compose.yml is valid for profiles: …`. It catches empty required variables and interpolation errors before
 launch.
 
 ### make build / make up
@@ -125,7 +124,7 @@ make smoke
 
 `tools/smoke.py` reads ports from `.env` (or the environment) and polls the
 health endpoints of running services; services that are not running are
-marked `не запущен` ("not running") and do not count as an error. The exit
+marked `not running` and do not count as an error. The exit
 code is `1` if at least one running service responded with `≥ 400`. The list
 of checks is in [Services and ports](services-and-ports.md#healthchecks).
 
@@ -173,10 +172,13 @@ following into `secrets/stale-<YYYYMMDD-HHMMSS>/`:
 - `deploy/state/<ENV_NAME>.json`;
 
 - `secrets/harness-pat`, `secrets/control-plane-iam.env`,
-  `secrets/memory-service-iam.env`.
+  `secrets/notification-iam.env`, `secrets/memory-service-iam.env`,
+  `secrets/agents/`.
 
 It does not touch the signing keys (`secrets/*.pem`) or `.env`. If there is
-nothing to move, it prints `нечего убирать` ("nothing to clean up"). Files are
+nothing to move, it prints `nothing to move`; otherwise it lists the moved
+files and ends with `state reset; the signing key and .env are untouched — next:
+make bootstrap`. Files are
 not deleted: you can revoke or delete the old credentials manually later.
 
 ## Checks

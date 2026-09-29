@@ -70,7 +70,7 @@ bootstrap: ## Initial setup, catalog from deploy/packages.yaml; ARGS="--agents a
 reset-state: ## After resetting volumes: move away the bootstrap state and the credentials it issued (to secrets/stale-<time>/)
 	@ts=$$(date +%Y%m%d-%H%M%S); dir=secrets/stale-$$ts; mkdir -p $$dir; \
 	for f in deploy/state/$(ENV_NAME).json secrets/harness-pat secrets/control-plane-iam.env \
-	         secrets/notification-iam.env secrets/agents; do \
+	         secrets/notification-iam.env secrets/memory-service-iam.env secrets/agents; do \
 	  test -e $$f && mv $$f $$dir/ && echo "  → $$dir/$$(basename $$f)"; done; \
 	rmdir $$dir 2>/dev/null && echo "nothing to move" || echo "state reset; the signing key and .env are untouched — next: make bootstrap"
 

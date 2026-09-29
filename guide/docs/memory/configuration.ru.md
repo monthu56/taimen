@@ -39,8 +39,8 @@
 `CB_IAM_JWKS_URL=http://iam-service:8010/.well-known/jwks.json`,
 `CB_IAM_AUDIENCE=memory-service`,
 `CB_IAM_BASE_URL=http://iam-service:8010`. Файл `secrets/memory-service-iam.env`
-(необязательный, создаёт `deploy/bootstrap.py`) добавляет `CB_IAM_CLIENT_ID` и
-`CB_IAM_CLIENT_SECRET`.
+(необязательный: service identity памяти для вызова внешнего PDP; кладётся вместе
+с подключением PDP) добавляет `CB_IAM_CLIENT_ID` и `CB_IAM_CLIENT_SECRET`.
 
 !!! warning "Офлайн-провайдеры по умолчанию"
     Без ключа провайдера платформа запускает память на `fake`/`echo`: всё работает,

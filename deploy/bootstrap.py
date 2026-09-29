@@ -69,7 +69,7 @@ AUDIENCES = {
     # send — senders, read — a person's inbox, admin — mandatory rules and channel groups
     "notification-service": ["notifications:send", "notifications:read", "notifications:admin"],
     # IAM itself as an audience: the notification service confirms channel links
-    "iam": ["iam:channel-links"],
+    "iam": ["iam:channel-links", "iam:agents"],
 }
 
 # Control Plane service account: context-adapter writes the memory of all tenants.
@@ -385,7 +385,7 @@ def main() -> int:
             bootstrap_header,
             tenant=iam_tenant,
             principal=state["iamOperatorPrincipalId"],
-            name=f"operator-{time.strftime('%Y-%m')}",
+            name=f"harness-admin-{time.strftime('%Y-%m')}",
             ceiling=OPERATOR_CEILING,
             ttl=args.pat_ttl,
         )

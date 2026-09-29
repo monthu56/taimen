@@ -294,8 +294,8 @@ The server determines the allowed namespaces and scopes:
 The PDP response is cached for `CB_POLICY_CACHE_TTL_SECONDS` (5 s by default)
 per tenant/principal pair. PDP unavailability → `503`, not "allow". A request
 to a namespace outside visibility → `403`. To call the PDP, memory uses its own
-service identity (`CB_IAM_CLIENT_ID`/`CB_IAM_CLIENT_SECRET`; bootstrap creates
-the `secrets/memory-service-iam.env` file).
+service identity (`CB_IAM_CLIENT_ID`/`CB_IAM_CLIENT_SECRET`; the
+`secrets/memory-service-iam.env` file is added together with the PDP).
 
 
 !!! warning "Experimental mode"
