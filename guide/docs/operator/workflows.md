@@ -1,35 +1,36 @@
-# Повседневные сценарии
 
-Пошаговые процедуры для оператора: поставить задачу, отдать её агенту, проследить прогон,
-принять ревью, взять задачу самому, передать работу другому харнессу и восстановиться после
-потери владения. Сценарии показаны для MCP-плагина Claude Code; вызовы `cp_*` — это то, что
-ассистент делает по вашей команде после вашего явного решения.
+# Everyday workflows
 
-## Общая картина
+Step-by-step procedures for the operator: create a task, give it to an agent, follow a run,
+accept a review, claim a task yourself, hand work off to another harness, and recover after
+losing ownership. The workflows are shown for the Claude Code MCP plugin; the `cp_*` calls
+are what the assistant does on your command, after your explicit decision.
+
+## The big picture
 
 ```mermaid
 flowchart LR
-    A["Создать задачу<br/>(тип, Workspace, исполнитель)"] --> B{"Кому?"}
-    B -- "агенту" --> C["Runner берёт задачу<br/>claim → run → ветка"]
-    B -- "себе" --> D["Claim → run<br/>работа в репозитории"]
-    C --> E["Прогон:<br/>ход, действия, артефакты"]
-    E --> F["Приёмка задачи:<br/>gate-approval ревью"]
-    F -- "approve" --> G["Вливание ветки,<br/>задача done"]
-    F -- "reject" --> H["Задача возвращается<br/>тому же агенту"] --> C
-    D --> I["Артефакты, завершение"]
-    D -- "смена харнесса" --> J["Handoff"] --> D
+    A["Create a task<br/>(type, Workspace, executor)"] --> B{"For whom?"}
+    B -- "an agent" --> C["The runner claims the task<br/>claim → run → branch"]
+    B -- "yourself" --> D["Claim → run<br/>work in the repository"]
+    C --> E["Run:<br/>turn, actions, artifacts"]
+    E --> F["Task acceptance:<br/>review gate approval"]
+    F -- "approve" --> G["Branch merged,<br/>task done"]
+    F -- "reject" --> H["Task goes back<br/>to the same agent"] --> C
+    D --> I["Artifacts, completion"]
+    D -- "harness switch" --> J["Handoff"] --> D
 ```
 
-## Создать задачу
+## Create a task
 
-Попросите ассистента завести задачу. Он покажет черновик и вызовет инструмент только
-после вашего «да»:
+Ask the assistant to create a task. It shows you a draft and calls the tool only after you
+say "yes":
 
 ```text
-cp_list_task_types()                       # какой тип выбрать
+cp_list_task_types()                       # which type to choose
 cp_create_task(
-  title="Добавить фильтр по сроку в список задач",
-  description="Контекст… Критерии готовности: …",
+  title="Add a due date filter to the task list",
+  description="Context… Definition of done: …",
   type_key="coding-task",
   priority="high",
   assignee_id="<cp-principal-id>",
@@ -37,58 +38,58 @@ cp_create_task(
 )
 ```
 
-`workspace_id` и проект подставляются из привязки репозитория; guard плагина не даст
-завести задачу в чужом проекте.
+`workspace_id` and the project are filled in from the repository binding; the plugin guard
+does not let you create a task in someone else's project.
 
-!!! tip "Хорошее описание для агента"
-    Агент читает описание буквально. Укажите, **что** сделать и как проверить результат
-    (какие тесты, какое поведение). **Как** устроен репозиторий — не повторяйте в каждой
-    задаче, это дело файла соглашений runner'а
-    ([Адаптеры](../runner/adapters.md)). Задачу, которую нельзя проверить, агент закроет
-    «как понял».
+!!! tip "A good description for an agent"
+    An agent reads the description literally. State **what** to do and how to verify the
+    result (which tests, which behavior). Do not repeat **how** the repository is organized
+    in every task: that is the job of the runner's conventions file
+    ([Adapters](../runner/adapters.md)). A task that cannot be verified gets closed by the
+    agent "as it understood it".
 
-## Назначить задачу агенту
+## Assign a task to an agent
 
-Runner в режиме `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` берёт только задачи, назначенные его
-principal'у. Поэтому «поставить задачу агенту» = назначить исполнителем CP principal
-агента.
+A runner in `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` mode claims only tasks assigned to its
+principal. So "give a task to an agent" means making the agent's CP principal the assignee.
 
-1. Узнайте CP principal id исполнителя — у администратора.
-2. Проверьте, что задача в том Workspace (проекте), который обслуживает этот runner
-   (`CONTROL_PLANE_AGENT_WORKSPACE`), и что её тип — тот, который он берёт.
-3. Назначьте:
+1. Get the executor's CP principal id from your administrator.
+2. Check that the task is in the Workspace (project) this runner serves
+   (`CONTROL_PLANE_AGENT_WORKSPACE`) and that its type is one the runner takes.
+3. Assign it:
 
     ```text
-    cp_get_task("<publicId>")        # узнать version
-    cp_update_task(task="<publicId>", expected_version=4, assignee_id="<cp-principal-id агента>")
+    cp_get_task("<publicId>")        # find out the version
+    cp_update_task(task="<publicId>", expected_version=4, assignee_id="<agent's cp-principal-id>")
     ```
 
-4. В течение интервала опроса runner'а (по умолчанию 5 с) задача перейдёт в статус захвата
-   типа (например `in_progress`), у задачи появятся захват агента и прогон.
+4. Within the runner's polling interval (5 s by default) the task moves to the type's claim
+   status (for example, `in_progress`), and the task gets the agent's claim and a run.
 
-!!! warning "Задача не берётся"
-    Проверьте по порядку: назначена ли она именно этому principal'у; тот ли Workspace;
-    свободна ли (нет чужого захвата, не блокирует ли её неразрешённый gate-approval или
-    зависимость — claimability в `cp_get_task`); жив ли runner (его сессия в Control Plane).
-    Если тип задачи исполняется скиллом, а principal runner'а не имеет `task_types.read`,
-    демон такую задачу пропускает.
+!!! warning "The task is not picked up"
+    Check in order: is it assigned to exactly this principal; is it the right Workspace; is
+    it free (no one else's claim, not blocked by an unresolved gate approval or a
+    dependency: see claimability in `cp_get_task`); is the runner alive (its session in
+    Control Plane). If the task type is executed by a skill and the runner's principal lacks
+    `task_types.read`, the daemon skips the task.
 
-## Проследить прогон агента
+## Follow an agent's run
 
-1. Найдите прогон задачи: `cp_get_task` в Claude Code.
-2. В прогоне:
-    - **Действия** обновляются вживую: каждый вызов инструмента агента (`tool.Bash`,
-      `tool.Read`, `tool.Edit`…) со сводкой входа и статусом;
-    - **Контрольные точки**: `execution.workspace` (ветка, базовый коммит, ревизии соседей),
-      `claude-code.session` (id сессии, фаза);
-    - по завершении хода — **Ход прогона** (транскрипт) и **Итоговый ответ**.
-3. После успеха у задачи появляются артефакты:
-    - `report` — summary агента: что сделано, какие тесты прогнаны, что осталось;
-    - `transcript` — ограниченный транскрипт;
-    - `commit` — ветка `task/<publicId>` и коммит; `published: true` значит, что ветка
-      есть в forge.
+1. Find the task's run: `cp_get_task` in Claude Code.
+2. In the run:
+    - **Actions** update live: every tool call the agent makes (`tool.Bash`,
+      `tool.Read`, `tool.Edit`…) with an input summary and a status;
+    - **Checkpoints**: `execution.workspace` (branch, base commit, neighbor revisions),
+      `claude-code.session` (session id, phase);
+    - when the turn ends: **Run progress** (the transcript) and **Final answer**.
+3. After a success the task has artifacts:
+    - `report`: the agent's summary of what was done, which tests were run, and what is
+      left;
+    - `transcript`: a bounded transcript;
+    - `commit`: the `task/<publicId>` branch and the commit; `published: true` means the
+      branch exists in the forge.
 
-Через MCP то же самое:
+The same through MCP:
 
 ```text
 cp_get_task("<publicId>")
@@ -96,175 +97,183 @@ cp_list_artifacts(task_id="<task-id>")
 cp_get_run_context(run_id="<run-id>")
 ```
 
-| Что видите | Что это значит |
+| What you see | What it means |
 |---|---|
-| прогон `failed`, причина `restart_recovery` | runner перезапускался посреди работы; задача вернулась в очередь, следующая попытка продолжит ту же ветку и сессию |
-| `failed: lease_lost` / `ownership_lost` | аренда потеряна во время работы; результат не записан |
-| `failed: workspace_busy` | рабочую копию держит другой процесс runner'а |
-| `failed: ClaudeCodeError: claude did not finish within …` | ход упёрся в таймаут; разбейте задачу или попросите поднять таймаут |
-| успех, но нет артефакта `commit` | агент ничего не изменил |
-| `commit` с `published: false` | ветка не опубликована — критерии ревью и вливания пропущены, сообщите инженеру runner'а |
-| `failed: executor_blocked`, задача в `blocked` | агент сообщил, что не может сделать работу; причина — в комментарии задачи |
+| run `failed`, reason `restart_recovery` | the runner restarted mid-work; the task is back in the queue, and the next attempt continues the same branch and session |
+| `failed: lease_lost` / `ownership_lost` | the lease was lost during work; the result was not recorded |
+| `failed: workspace_busy` | another runner process holds the working copy |
+| `failed: ClaudeCodeError: claude did not finish within …` | the turn hit the timeout; split the task or ask for a higher timeout |
+| success, but no `commit` artifact | the agent changed nothing |
+| `commit` with `published: false` | the branch is not published, so the review and merge criteria are skipped; tell the runner's engineer |
+| `failed: executor_blocked`, task in `blocked` | the agent reported that it cannot do the work; the reason is in a task comment |
 
-Отменить идущий прогон — запросом отмены run (см.
-[Исполнение — claims и runs](../control-plane/execution.md)).
+To cancel a run in progress, request run cancellation (see
+[Execution: claims and runs](../control-plane/execution.md)).
 
-## Принять или отклонить ревью
+## Accept or reject a review
 
-Задача на код (`coding-task`) после сдачи ждёт **приёмки**: её тип объявляет критерии
-«ревью человеком», затем «вливание ветки». Если вы — ревьюер установки, после каждой
-сданной задачи с опубликованной веткой ядро запрашивает у вас блокирующий approval на
-**самой задаче** — отдельной задачи ревью нет.
+A code task (`coding-task`) waits for **acceptance** after it is submitted: its type
+declares the criteria "human review" and then "branch merge". If you are the installation's
+reviewer, after every submitted task with a published branch the core requests a blocking
+approval from you on **the task itself**; there is no separate review task.
 
-1. Найдите approval: уведомление в Telegram с кнопками или в Claude Code —
+1. Find the approval: a Telegram notification with buttons, or in Claude Code with
    `cp_list_approvals()`.
-2. Прочитайте задачу и отчёт агента (артефакт `report`). Ветка, коммит и целевая ветка —
-   в артефакте `commit` задачи.
-3. Посмотрите изменения от merge-base с целевой веткой:
+2. Read the task and the agent's report (the `report` artifact). The branch, commit, and
+   target branch are in the task's `commit` artifact.
+3. Look at the changes from the merge base with the target branch:
 
     ```bash
     git fetch origin
     git diff $(git merge-base origin/<targetBranch> origin/task/<publicId>) origin/task/<publicId>
     ```
 
-4. Решите:
+4. Decide:
 
     ```text
-    cp_approve(approval_id="<approval-id>", comment="Принято")
+    cp_approve(approval_id="<approval-id>", comment="Accepted")
     cp_reject(approval_id="<approval-id>",
-              comment="Нет теста на пустой фильтр; миграция не обратима")
+              comment="No test for an empty filter; the migration is not reversible")
     ```
 
-5. Что происходит дальше:
-    - **approve** — ядро вливает одобренный коммит в целевую ветку скиллом `git.merge@1`
-      вашими полномочиями; задача становится выполненной, её зависимые — доступными.
-      Если вливание не удалось (конфликт, ветка сдвинулась), задача возвращается агенту
-      с причиной;
-    - **reject** — задача возвращается в `todo` тому же агенту на ту же ветку; ваш
-      комментарий придёт ему в блоке «Замечания последней проверки». После повторной
-      сдачи вы получите новый запрос решения.
+5. What happens next:
+    - **approve**: the core merges the approved commit into the target branch with the
+      `git.merge@1` skill under your authority; the task becomes done and its dependents
+      become available. If the merge fails (a conflict, the branch moved), the task goes
+      back to the agent with the reason;
+    - **reject**: the task goes back to `todo` for the same agent on the same branch; your
+      comment reaches the agent in the "Findings from the last check" block. After the
+      agent resubmits, you get a new decision request.
 
-!!! tip "Комментарий при отклонении — это задание агенту"
-    Пишите его как постановку: что именно не так и как проверить исправление.
+!!! tip "A rejection comment is an assignment for the agent"
+    Write it like a task statement: what exactly is wrong and how to verify the fix.
 
 
-## Взять задачу самому в Claude Code
+## Claim a task yourself in Claude Code
 
-1. Откройте сессию Claude Code в привязанном репозитории. Ассистент сам вызовет
-   `cp_whoami`, `cp_context` и при необходимости `cp_focus_project`.
-2. Попросите показать работу:
+1. Open a Claude Code session in the bound repository. The assistant calls `cp_whoami`,
+   `cp_context`, and, if needed, `cp_focus_project` on its own.
+2. Ask it to show the work:
 
     ```text
-    cp_list_tasks(system_status_category="active", assignee_id="<мой cp-principal-id>")
+    cp_list_tasks(system_status_category="active", assignee_id="<my cp-principal-id>")
     cp_list_work(assigned_to_me=true)
     ```
 
-3. Выберите задачу и скажите явно: «берём <publicId>». Ассистент:
+3. Choose a task and say so explicitly: "let's take <publicId>". The assistant runs:
 
     ```text
-    cp_get_task("<publicId>")          # claimability, переходы
-    cp_list_comments("<publicId>")     # решения и блокеры обычно в треде
-    cp_claim_task("<publicId>", intent="реализация фильтра")
+    cp_get_task("<publicId>")          # claimability, transitions
+    cp_list_comments("<publicId>")     # decisions and blockers are usually in the thread
+    cp_claim_task("<publicId>", intent="implement the filter")
     cp_start_run()
-    cp_get_run_context()                # checkpoints прошлых попыток, артефакты, approvals
+    cp_get_run_context()                # checkpoints of past attempts, artifacts, approvals
     ```
 
-4. Работа в репозитории. По ходу:
-    - `cp_checkpoint(kind="progress", data={"branch": "...", "next": "..."})` после значимых
-      шагов и перед рискованными действиями;
-    - `cp_comment(...)` — решение, вопрос, блокер (после вашего согласия с текстом).
-5. Результат:
+4. Work in the repository. Along the way:
+    - `cp_checkpoint(kind="progress", data={"branch": "...", "next": "..."})` after
+      significant steps and before risky actions;
+    - `cp_comment(...)` for a decision, question, or blocker (after you agree with the
+      text).
+5. The result:
 
     ```text
     cp_create_artifact(type="commit", name="feature/due-filter@3f1c2a9",
                        uri="git:3f1c2a9…", metadata={"branch": "feature/due-filter"})
     ```
 
-6. Завершение — только по вашей отдельной команде: `cp_complete_run()` (по умолчанию
-   завершает и задачу; статус завершения берётся из типа задачи). Если работа не удалась —
-   `cp_fail_run(reason="…")`, claim остаётся за вами.
+6. Completion happens only on your separate command: `cp_complete_run()` (by default it
+   also completes the task; the completion status comes from the task type). If the work
+   failed, use `cp_fail_run(reason="…")`; the claim stays with you.
 
-Смена статуса без завершения (например `blocked`) — через `cp_update_task` и только по
-переходу с `route: update` из `cp_get_task`.
+To change the status without completing (for example, to `blocked`), use `cp_update_task`,
+and only through a transition with `route: update` from `cp_get_task`.
 
-## Передать работу другому харнессу (handoff)
+## Hand work off to another harness (handoff)
 
-Handoff нужен, когда работу по задаче продолжит другой харнесс: вы переходите из Claude Code
-в Codex, на другую машину или передаёте задачу коллеге.
+You need a handoff when another harness will continue the work on a task: you move from
+Claude Code to Codex or to another machine, or you pass the task to a colleague.
 
-1. Убедитесь, что всё значимое записано: артефакты (коммиты, PR, документы), checkpoints.
-2. Попросите ассистента подготовить handoff. Он покажет summary, следующие шаги и ссылки на
-   evidence — без транскрипта, рассуждений, секретов и локальных путей.
-3. После вашего подтверждения:
+1. Make sure everything significant is recorded: artifacts (commits, PRs, documents) and
+   checkpoints.
+2. Ask the assistant to prepare a handoff. It shows you the summary, the next steps, and
+   links to evidence, with no transcript, reasoning, secrets, or local paths.
+3. After you confirm:
 
     ```text
     cp_prepare_handoff(
-      summary="Фильтр по сроку реализован в API, не сделан UI",
-      next_steps=["Добавить фильтр в таблицу задач", "Прогнать e2e"],
+      summary="Due date filter implemented in the API, UI not done",
+      next_steps=["Add the filter to the task table", "Run e2e"],
       evidence_refs=["git:3f1c2a9…"]
     )
     ```
 
-    Атомарно: checkpoint вида `handoff`, run → `suspended`, claim освобождён.
-4. Закройте первую сессию.
-5. Во втором харнессе: `cp_whoami`, `cp_context`, найти задачу, по вашему решению — новый
-   `cp_claim_task`, новый `cp_start_run`, затем `cp_get_run_context`: он вернёт handoff-
-   checkpoint и артефакты предыдущего run.
+    Atomically: a checkpoint of kind `handoff`, run → `suspended`, claim released.
+4. Close the first session.
+5. In the second harness: `cp_whoami`, `cp_context`, find the task, and, on your decision,
+   a new `cp_claim_task`, a new `cp_start_run`, then `cp_get_run_context`: it returns the
+   handoff checkpoint and the artifacts of the previous run.
 
-Второй харнесс **не продолжает** старый run и не читает чужой транскрипт: он восстанавливается
-только из авторитетного состояния Control Plane.
+The second harness **does not continue** the old run and does not read another harness's
+transcript: it recovers only from the authoritative state in Control Plane.
 
-## Ожидание решения (gate) внутри своей работы
+## Waiting for a decision (gate) within your own work
 
-Если посреди работы нужно чьё-то решение (например согласование схемы):
+If you need someone's decision in the middle of the work (for example, approval of a schema
+change):
 
 ```text
-cp_checkpoint(kind="before-approval", data={"next": "применить миграцию после согласования"})
+cp_checkpoint(kind="before-approval", data={"next": "apply the migration after approval"})
 cp_request_approval(gate=true, required_role_id="<role-id>",
-                    comment="Согласовать изменение схемы: …")
+                    comment="Approve the schema change: …")
 cp_suspend_run(reason="waiting_approval", waiting_for_approval_id="<approval-id>")
-# run архивируется, claim освобождается
+# the run is archived, the claim is released
 ```
 
-После решения продолжение — всегда новый claim и новый run, читающий checkpoints.
+After the decision, you always continue with a new claim and a new run that reads the
+checkpoints.
 
-## Потеря владения (`stale_claim`)
+## Lost ownership (`stale_claim`)
 
-Инструмент вернул `stale_claim`, `task_already_claimed` или `run_not_active`: ваша аренда
-истекла или задачу перехватили.
+A tool returned `stale_claim`, `task_already_claimed`, or `run_not_active`: your lease
+expired or someone else took over the task.
 
-1. Прекратите любые записи по задаче — не повторяйте checkpoint, артефакт или завершение.
-2. `cp_context` — посмотрите, чей сейчас claim и какой run активен.
-3. Решите вместе с владельцем задачи: дождаться, перехватить истёкший захват новым
-   `cp_claim_task` или передать работу через комментарий.
+1. Stop all writes on the task: do not retry the checkpoint, the artifact, or the
+   completion.
+2. Run `cp_context` to see whose claim is current and which run is active.
+3. Decide together with the task owner: wait, take over an expired claim with a new
+   `cp_claim_task`, or hand the work off through a comment.
 
-## Разобрать упавший прогон агента
+## Investigate a failed agent run
 
-1. `cp_get_run_context` → причина провала, последние действия и checkpoints.
-2. Если это обрыв (`restart_recovery`, `lease_lost`) — ничего делать не нужно: задача
-   вернулась в очередь, следующая попытка продолжит ту же рабочую копию и сессию агента.
-3. Если агент упёрся в задачу (таймаут, красные тесты, непонятные требования) — уточните
-   описание или разбейте задачу, оставьте комментарий и при необходимости переназначьте.
-4. Если причина в окружении runner'а (нет доступа к forge, нет прав) — сообщите инженеру
-   runner'а; см. [Диагностика: исполнение и runner](../troubleshooting/runner.md).
+1. `cp_get_run_context` gives the failure reason, the latest actions, and checkpoints.
+2. If it is an interruption (`restart_recovery`, `lease_lost`), you need to do nothing: the
+   task is back in the queue, and the next attempt continues the same working copy and
+   agent session.
+3. If the agent got stuck on the task itself (a timeout, failing tests, unclear
+   requirements), clarify the description or split the task, leave a comment, and reassign
+   it if needed.
+4. If the cause is in the runner's environment (no access to the forge, missing
+   permissions), tell the runner's engineer; see
+   [Troubleshooting: execution and runner](../troubleshooting/runner.md).
 
-## Шпаргалка
+## Cheat sheet
 
-| Хочу | Claude Code |
+| I want to | Claude Code |
 |---|---|
-| Увидеть, что ждёт меня | `cp_context`, `cp_list_approvals` |
-| Создать задачу | `cp_create_task` |
-| Отдать агенту | `cp_update_task(assignee_id=…)` |
-| Посмотреть прогон | `cp_get_run_context` |
-| Решить approval | `cp_approve` / `cp_reject` |
-| Взять задачу | `cp_claim_task` → `cp_start_run` |
-| Записать результат | `cp_create_artifact` |
-| Прокомментировать | `cp_comment` |
-| Передать харнессу | `cp_prepare_handoff` |
-| Завершить | `cp_complete_run` |
+| See what is waiting for me | `cp_context`, `cp_list_approvals` |
+| Create a task | `cp_create_task` |
+| Give it to an agent | `cp_update_task(assignee_id=…)` |
+| Look at a run | `cp_get_run_context` |
+| Decide an approval | `cp_approve` / `cp_reject` |
+| Claim a task | `cp_claim_task` → `cp_start_run` |
+| Record the result | `cp_create_artifact` |
+| Comment | `cp_comment` |
+| Hand off to a harness | `cp_prepare_handoff` |
+| Complete | `cp_complete_run` |
 
-## См. также
+## See also
 
-- [MCP-плагин для Claude Code](mcp-plugin.md)
-- [Исполнение — claims и runs](../control-plane/execution.md)
+- [MCP plugin for Claude Code](mcp-plugin.md)
+- [Execution: claims and runs](../control-plane/execution.md)
 - [Approvals](../control-plane/approvals.md)

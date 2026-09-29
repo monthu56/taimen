@@ -1,54 +1,55 @@
-# Быстрый старт
 
-Раздел проводит от чистой машины до первой задачи, прошедшей полный цикл
-«создана → взята → исполнена → завершена» в Control Plane. Он рассчитан на
-инженера, который поднимает платформу локально или на тестовом сервере; для
-промышленного стенда после него переходите в
-[Эксплуатацию](../operations/deployment.md).
+# Getting started
 
-## Маршрут
+This section takes you from a clean machine to a first task that completes the
+full cycle "created → claimed → executed → completed" in Control Plane. It is
+written for an engineer who brings up the platform locally or on a test server;
+for a production deployment, continue with
+[Operations](../operations/deployment.md) afterwards.
+
+## Route
 
 ```mermaid
 flowchart LR
-    R[Требования] --> Q[make submodules<br/>make secrets]
+    R[Requirements] --> Q[make submodules<br/>make secrets]
     Q --> U[make up]
     U --> B[make bootstrap]
     B --> S[make smoke]
-    S --> F[Первая задача<br/>API / CLI / MCP]
+    S --> F[First task<br/>API / CLI / MCP]
 ```
 
-| Шаг | Статья | Результат |
+| Step | Page | Result |
 |---|---|---|
-| 1 | [Требования](requirements.md) | подходящие железо и ПО, свободные порты |
-| 2 | [Установка и первый запуск](quickstart.md) | сабмодули, `.env` и ключи, запущенный профиль `core edge` |
-| 3 | [Конфигурация .env](configuration.md) | понимание каждой группы переменных и того, что менять для своего стенда |
-| 4 | [Bootstrap](bootstrap.md) | tenant, оператор, PAT, workspace, каталог типов задач, service accounts |
-| 5 | [Первая задача](first-task.md) | задача, claim, run и завершение через `curl`, CLI и MCP-плагин |
+| 1 | [Requirements](requirements.md) | suitable hardware and software, free ports |
+| 2 | [Installation and first launch](quickstart.md) | submodules, `.env` and keys, the `core edge` profile running |
+| 3 | [.env configuration](configuration.md) | what each group of variables means and what to change for your deployment |
+| 4 | [Bootstrap](bootstrap.md) | tenant, operator, PAT, workspace, task type catalog, service accounts |
+| 5 | [First task](first-task.md) | a task, claim, run, and completion via `curl`, the CLI, and the MCP plugin |
 
-## Самый короткий путь
+## Shortest path
 
-Для тех, кто хочет сначала увидеть работающий стек, а потом читать:
+If you want to see a working stack first and read later:
 
 ```bash
-git clone --recurse-submodules <url-суперпроекта> taimen && cd taimen
-make secrets                       # .env из .env.example + ключи подписи
-make up                            # профили core edge
-make bootstrap                     # tenant, оператор, PAT, workspace, каталог
+git clone --recurse-submodules <superproject-url> taimen && cd taimen
+make secrets                       # .env from .env.example + signing keys
+make up                            # profiles core edge
+make bootstrap                     # tenant, operator, PAT, workspace, catalog
 make smoke
 ```
 
-Каждая строка разобрана в [Установке и первом запуске](quickstart.md). Правка
-`.env` перед `make up` не нужна: переменные опциональных профилей по умолчанию
-пусты.
+Each line is explained in [Installation and first launch](quickstart.md). You
+do not need to edit `.env` before `make up`: variables of the optional profiles
+are empty by default.
 
-!!! tip "Что должно получиться"
-    `make smoke` показывает `OK` для `iam-service`, `control-plane-api` и
-    `memory-service`; в `secrets/` лежит `harness-pat` — PAT оператора; в
-    `deploy/state/<имя>.json` — идентификаторы tenant, оператора, проекта и
-    workspace. Этого достаточно, чтобы создать первую задачу.
+!!! tip "Expected result"
+    `make smoke` shows `OK` for `iam-service`, `control-plane-api`, and
+    `memory-service`; `secrets/` contains `harness-pat`, the operator's PAT;
+    `deploy/state/<name>.json` holds the IDs of the tenant, operator, project,
+    and workspace. This is enough to create your first task.
 
-## См. также
+## See also
 
-- [Состав поставки](../overview/components.md) — какие профили бывают
-- [Цели make](../reference/make.md)
-- [Установка и запуск — диагностика](../troubleshooting/startup.md)
+- [Delivery contents](../overview/components.md): which profiles exist
+- [Make targets](../reference/make.md)
+- [Installation and startup (troubleshooting)](../troubleshooting/startup.md)

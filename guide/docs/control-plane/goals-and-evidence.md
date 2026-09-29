@@ -1,29 +1,30 @@
-# Цели, приёмка и evidence
 
-Граф работы отвечает на три вопроса, на которые обычная задача не отвечает:
-**зачем** работа делается (Goal), **откуда** она взялась (origin) и **как
-понять, что сделано** (acceptance и evidence). Статья описывает эти
-сущности, их правила и API. Обоснование — CP-ADR-0062.
+# Goals, acceptance, and evidence
 
-!!! warning "Goal выводится из ядра"
-    Желаемое состояние теперь описывается процессом (TAI-ADR-0055): цель
-    дела — экземпляр процесса с исходом, постоянная цель — процесс-сверка
-    (см. [Цели как процессы](../processes/index.md#goals)). В новых
-    описаниях не ссылайтесь на `goalId`; происхождение, приёмка и evidence
-    остаются.
+The work graph answers three questions that a regular task does not:
+**why** the work is done (Goal), **where** it came from (origin), and **how
+to tell that it is done** (acceptance and evidence). This article describes these
+entities, their rules, and the API. Rationale: CP-ADR-0062.
 
-## Обзор
+!!! warning "Goal is being retired from the core"
+    The desired state is now described by a process (TAI-ADR-0055): the goal of
+    a case is a process instance with an outcome, a standing goal is a reconciliation process
+    (see [Goals as processes](../processes/index.md#goals)). Do not reference `goalId`
+    in new descriptions; origin, acceptance, and evidence
+    remain.
+
+## Overview
 
 ```mermaid
 flowchart TB
-    G0["Goal уровня tenant'а<br/>(workspaceId = null)"]
-    G1["Goal воркспейса A<br/>desiredState, criteria[]"]
-    G2["Подцель воркспейса A"]
+    G0["Tenant-level Goal<br/>(workspaceId = null)"]
+    G1["Goal of workspace A<br/>desiredState, criteria[]"]
+    G2["Subgoal of workspace A"]
     T1["Task<br/>origin, acceptance[], evidence[]"]
-    T2["Task (подзадача)<br/>origin.kind = parent"]
-    O["Observation<br/>(журнал)"]
+    T2["Task (subtask)<br/>origin.kind = parent"]
+    O["Observation<br/>(log)"]
     AR["Artifact"]
-    EX["Объект внешней системы"]
+    EX["External system object"]
 
     G0 --> G1 --> G2
     T1 -- goalId --> G1
@@ -34,141 +35,141 @@ flowchart TB
     T1 -- evidence --> EX
 ```
 
-| Понятие | Где хранится | Изменяемость |
+| Concept | Where it is stored | Mutability |
 |---|---|---|
-| Goal | Отдельная сущность `goals` | Заголовок, желаемое состояние, критерии, владелец, статус, родитель |
-| `origin` | Поле задачи | **Неизменяемо** после создания |
-| `createdFrom` | Поле цели (та же форма, что origin) | Неизменяемо |
-| `acceptance` | Поле задачи: список проверок | Заменяется целиком |
-| `criteria` | Поле цели: список проверок той же формы | Заменяется целиком |
-| `evidence` | Поле задачи: список указателей на факты | Заменяется целиком |
+| Goal | A separate `goals` entity | Title, desired state, criteria, owner, status, parent |
+| `origin` | A task field | **Immutable** after creation |
+| `createdFrom` | A goal field (same form as origin) | Immutable |
+| `acceptance` | A task field: a list of checks | Replaced entirely |
+| `criteria` | A goal field: a list of checks of the same form | Replaced entirely |
+| `evidence` | A task field: a list of pointers to facts | Replaced entirely |
 
-!!! note "Проверки задачи исполняются, критерии цели — нет"
-    Acceptance задачи ядро **исполняет** на стадии проверки: задача с
-    проверками становится выполненной только после того, как все они пройдены
-    (см. [Стадия проверки](#verification-stage)). К проверкам задачи
-    добавляются критерии по умолчанию её типа (см. [Приёмка
-    типа](task-types.md#type-acceptance)). Критерии цели ядро только
-    хранит: цель переводит в `achieved` человек или процесс.
+!!! note "Task checks are executed, goal criteria are not"
+    The core **executes** a task's acceptance at the verification stage: a task with
+    checks becomes done only after all of them pass
+    (see [Verification stage](#verification-stage)). The default criteria of its type
+    are added to the task's checks (see [Type
+    acceptance](task-types.md#type-acceptance)). The core only stores goal criteria:
+    a human or a process moves a goal to `achieved`.
 
 ## Goal
 
-Goal — желаемое состояние чего-либо, продуктово-нейтральное: что именно
-описывает цель, определяют данные tenant'а.
+A Goal is a product-neutral desired state of something: what exactly
+a goal describes is defined by the tenant's data.
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `title` | 1–500 символов |
-| `desiredState` | Проза до 10 000 символов; может быть пустой, если всё сказано критериями |
-| `criteria` | До 50 проверок в форме acceptance (см. ниже) |
-| `ownerId` | Principal-владелец или `null` |
-| `workspaceId` | Workspace цели или `null` — цель уровня tenant'а. После создания не меняется |
-| `parentGoalId` | Родительская цель |
+| `title` | 1–500 characters |
+| `desiredState` | Prose up to 10,000 characters; can be empty if the criteria say everything |
+| `criteria` | Up to 50 checks in acceptance form (see below) |
+| `ownerId` | Owner principal or `null` |
+| `workspaceId` | The goal's workspace or `null` — a tenant-level goal. Does not change after creation |
+| `parentGoalId` | Parent goal |
 | `status` | `active`, `achieved`, `abandoned` |
-| `createdFrom` | Происхождение цели (форма origin); по умолчанию — `human` или `harness` по виду principal |
-| `version` | Для `If-Match: "goal-<version>"` |
-| `closedAt` | Задан ровно тогда, когда статус не `active` (закреплено CHECK в базе) |
+| `createdFrom` | The goal's origin (origin form); defaults to `human` or `harness` depending on the principal kind |
+| `version` | For `If-Match: "goal-<version>"` |
+| `closedAt` | Set exactly when the status is not `active` (enforced by a CHECK in the database) |
 
-### Статусы цели
+### Goal statuses
 
-Цель — не work item: у неё нет claim, run и lifecycle типа. Статусы —
-фиксированный словарь, переход разрешён в любую сторону.
+A goal is not a work item: it has no claim, run, or type lifecycle. The statuses are
+a fixed vocabulary, and transitions are allowed in any direction.
 
 ```mermaid
 stateDiagram-v2
     [*] --> active
     active --> achieved
     active --> abandoned
-    achieved --> active: состояние снова нарушено
+    achieved --> active: state violated again
     abandoned --> active
     achieved --> abandoned
     abandoned --> achieved
 ```
 
-`achieved → active` — нормальный сценарий: состояние может перестать быть
-истинным, и работа, которая его восстанавливает, принадлежит той же цели.
+`achieved → active` is a normal scenario: a state can stop being
+true, and the work that restores it belongs to the same goal.
 
-### Иерархия целей
+### Goal hierarchy
 
-- Родитель — цель того же workspace или цель уровня tenant'а. Цель уровня
-  tenant'а может быть родителем любой цели, цель workspace — только целей
-  того же workspace; цель уровня tenant'а не может висеть под целью
-  workspace. Нарушение — `422 goal_workspace_mismatch`.
-- Цикл — `422 goal_cycle`; глубина иерархии не больше 32
+- The parent is a goal of the same workspace or a tenant-level goal. A tenant-level
+  goal can be the parent of any goal, a workspace goal only of goals of
+  the same workspace; a tenant-level goal cannot sit under a workspace
+  goal. A violation — `422 goal_workspace_mismatch`.
+- A cycle — `422 goal_cycle`; the hierarchy depth is at most 32
   (`422 goal_too_deep`).
-- Родитель, которого пишущий не может читать (`goals.read`), отвечает
-  `404 not_found`, как несуществующий: по разнице ответов нельзя узнать о
-  целях чужого workspace.
+- A parent the writer cannot read (`goals.read`) returns
+  `404 not_found`, like a nonexistent one: you cannot learn about
+  goals of another workspace from differences in responses.
 
-### API целей
+### Goals API
 
 ```bash
-# Создать цель
+# Create a goal
 curl -s -X POST "$CP/goals" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
-    "title": "Время ответа API в пределах SLO",
-    "desiredState": "p95 задержки публичного API ниже 300 мс за последние 7 дней",
+    "title": "API response time within SLO",
+    "desiredState": "p95 latency of the public API below 300 ms over the last 7 days",
     "workspaceId": "<workspace-id>",
     "ownerId": "<principal-id>",
     "criteria": [
       {"key": "p95", "kind": "external_state",
-       "description": "p95 < 300 мс по данным мониторинга",
+       "description": "p95 < 300 ms according to monitoring data",
        "spec": {"metric": "http_request_duration_p95", "threshold_ms": 300}}
     ]
   }'
 
-# Закрыть цель
+# Close a goal
 curl -s -X PATCH "$CP/goals/<goal-id>" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -H 'If-Match: "goal-1"' \
   -d '{"status": "achieved"}'
 
-# Работа цели вместе с подцелями, только незавершённая
+# Work of the goal together with subgoals, unfinished only
 curl -s "$CP/goals/<goal-id>/work?includeSubgoals=true&systemStatusCategory=active" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-| Метод | Путь | Права | Примечания |
+| Method | Path | Permissions | Notes |
 |---|---|---|---|
 | `POST` | `/goals` | `goals.write` | `201` |
-| `GET` | `/goals?status=&workspaceId=&ownerId=&parentGoalId=` | `goals.read` | Пагинация |
+| `GET` | `/goals?status=&workspaceId=&ownerId=&parentGoalId=` | `goals.read` | Pagination |
 | `GET` | `/goals/{id}` | `goals.read` | `ETag: "goal-<v>"` |
-| `PATCH` | `/goals/{id}` | `goals.write` | `If-Match`; `ownerId: null` / `parentGoalId: null` снимают значение |
-| `GET` | `/goals/{id}/work` | `goals.read` + `tasks.read` | Задачи цели, новые сверху; `?includeSubgoals=&systemStatusCategory=&limit=&cursor=` |
+| `PATCH` | `/goals/{id}` | `goals.write` | `If-Match`; `ownerId: null` / `parentGoalId: null` remove the value |
+| `GET` | `/goals/{id}/work` | `goals.read` + `tasks.read` | Tasks of the goal, newest first; `?includeSubgoals=&systemStatusCategory=&limit=&cursor=` |
 
-PATCH, повторяющий текущие значения, не считается изменением: цель
-возвращается как есть, без новой версии и без события. Пустой PATCH —
+A PATCH that repeats the current values is not considered a change: the goal
+is returned as is, without a new version and without an event. An empty PATCH is
 `422 empty_update`.
 
-!!! note "Права решаются на workspace цели"
-    `goals.read` и `goals.write` отделены от `tasks.*`: цель — то, что tenant
-    хочет считать истинным, и право заводить работу не даёт права это
-    переопределять. Оба права проверяются на workspace цели (цель уровня
-    tenant'а — на tenant'е). `GET /goals/{id}/work` требует и `goals.read`,
-    и `tasks.read`: цель не расширяет видимость задач. Выдачу прав
-    агентам и оператору выполняет bootstrap — см.
-    [Права и scopes](../reference/permissions.md).
+!!! note "Permissions are resolved on the goal's workspace"
+    `goals.read` and `goals.write` are separate from `tasks.*`: a goal is what the tenant
+    wants to consider true, and the permission to create work does not grant the permission to
+    redefine it. Both permissions are checked on the goal's workspace (a tenant-level goal —
+    on the tenant). `GET /goals/{id}/work` requires both `goals.read`
+    and `tasks.read`: a goal does not widen task visibility. Granting permissions
+    to agents and the operator is done by bootstrap — see
+    [Permissions and scopes](../reference/permissions.md).
 
-## Привязка задачи к цели
+## Linking a task to a goal
 
-Задача ссылается на цель полем `goalId` при создании или через `PATCH`.
+A task references a goal with the `goalId` field on creation or through `PATCH`.
 
-- Цель должна быть читаемой пишущему (`goals.read`) и обслуживать workspace
-  задачи — тот же workspace или цель уровня tenant'а. Иначе `404 not_found`,
-  неотличимый от несуществующей цели.
-- К цели в статусе `abandoned` привязать нельзя (`422 goal_abandoned`), к
-  `achieved` — можно.
-- `goalId: null` в PATCH отвязывает задачу.
-- Перенос задачи в другой workspace, оставляющий её при цели прежнего
-  workspace, — `422 goal_workspace_mismatch`: перепривязать или отвязать
-  нужно в том же PATCH.
-- Выборка задач цели: `GET /tasks?goalId=…` или `GET /goals/{id}/work`.
+- The goal must be readable by the writer (`goals.read`) and serve the task's
+  workspace — the same workspace or a tenant-level goal. Otherwise `404 not_found`,
+  indistinguishable from a nonexistent goal.
+- You cannot link to a goal in the `abandoned` status (`422 goal_abandoned`), but
+  you can link to an `achieved` one.
+- `goalId: null` in PATCH unlinks the task.
+- Moving a task to another workspace while leaving it with a goal of the former
+  workspace — `422 goal_workspace_mismatch`: you must relink or unlink it
+  in the same PATCH.
+- Querying a goal's tasks: `GET /tasks?goalId=…` or `GET /goals/{id}/work`.
 
-## Origin — откуда взялась работа
+## Origin — where the work came from
 
-`origin` — запись о происхождении задачи. Она пишется один раз при создании
-и **не меняется никогда**: поля `origin` в `PATCH /tasks` нет.
+`origin` is a record of the task's origin. It is written once on creation
+and **never changes**: there is no `origin` field in `PATCH /tasks`.
 
 ```json
 {"kind": "rule", "ruleId": "latency-slo-breach", "evidence": [
@@ -176,253 +177,252 @@ PATCH, повторяющий текущие значения, не считае
 ]}
 ```
 
-| `kind` | Смысл | Обязательно |
+| `kind` | Meaning | Required |
 |---|---|---|
-| `human` | Завёл человек | — |
-| `harness` | Завёл агент или харнесс по ходу своей работы | — |
-| `rule` | Сработало правило на наблюдённых фактах | `ruleId` и ≥ 1 evidence |
-| `parent` | Декомпозиция другой задачи | `ref` |
-| `process` | Шаг объявленного процесса, например исход approval | `ref` |
-| `external` | Импорт из внешней системы | `ref` |
+| `human` | Created by a human | — |
+| `harness` | Created by an agent or harness in the course of its work | — |
+| `rule` | A rule fired on observed facts | `ruleId` and ≥ 1 evidence |
+| `parent` | Decomposition of another task | `ref` |
+| `process` | A step of a declared process, for example an approval outcome | `ref` |
+| `external` | Import from an external system | `ref` |
 
-Правила:
+Rules:
 
-- `ruleId` — только у `kind: "rule"` (шаблон
-  `^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$`); у любого другого вида он
-  отклоняется, а не игнорируется;
-- `ref` — до 512 символов; внутренние ссылки принято писать как
+- `ruleId` only for `kind: "rule"` (pattern
+  `^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$`); for any other kind it is
+  rejected, not ignored;
+- `ref` — up to 512 characters; internal references are conventionally written as
   `<entity>:<uuid>` (`task:…`, `approval:…`);
-- `origin.evidence` — до 50 фактов; поле `check` в них запрещено: факт,
-  из-за которого работа появилась, не может подтверждать проверку работы,
-  которой ещё не было;
-- нарушение формы — `422 invalid_origin`.
+- `origin.evidence` — up to 50 facts; the `check` field is forbidden in them: a fact
+  that caused the work to appear cannot confirm a check of work
+  that did not exist yet;
+- a form violation — `422 invalid_origin`.
 
-### Как ядро выводит origin
+### How the core derives origin
 
-Если клиент не передал `origin`, ядро выводит его из того, **кто пишет**, а
-не из содержимого:
+If the client did not pass `origin`, the core derives it from **who writes**, not
+from the content:
 
 ```mermaid
 flowchart TD
-    A{"origin передан?"} -- да --> V["Проверка формы и evidence"]
-    A -- нет --> B{"parentTask в POST /tasks?"}
-    B -- да --> P["kind = parent<br/>ref = task:&lt;id родителя&gt;"]
-    B -- нет --> C{"вид principal"}
+    A{"origin passed?"} -- yes --> V["Check form and evidence"]
+    A -- no --> B{"parentTask in POST /tasks?"}
+    B -- yes --> P["kind = parent<br/>ref = task:&lt;parent id&gt;"]
+    B -- no --> C{"principal kind"}
     C -- human --> H["kind = human"]
     C -- agent / service --> R["kind = harness"]
 ```
 
-Исход approval (`ensureWork`) пишет `kind: "process"` с
+An approval outcome (`ensureWork`) writes `kind: "process"` with
 `ref = approval:<id>`.
 
-!!! warning "Явный ref — утверждение клиента"
-    Для явно переданного origin ядро проверяет форму и существование фактов
-    evidence, но **не проверяет**, что `task:<id>` в `ref` существует и
-    действительно породил работу. Доверенный `ref` дают только выводы ядра:
-    `parentTask` и `ensureWork`.
+!!! warning "An explicit ref is a client claim"
+    For an explicitly passed origin, the core checks the form and the existence of the evidence
+    facts, but **does not check** that the `task:<id>` in `ref` exists and
+    actually spawned the work. A trusted `ref` comes only from core derivations:
+    `parentTask` and `ensureWork`.
 
-## Acceptance — объявленные проверки { #acceptance }
+## Acceptance — declared checks { #acceptance }
 
-`acceptance` задачи (и `criteria` цели) — список проверок, которые отличают
-«сделано» от «не сделано». Ту же форму имеет `acceptance` версии типа задачи —
-критерии, которые действуют для всех задач типа (см. [Приёмка
-типа](task-types.md#type-acceptance)).
+A task's `acceptance` (and a goal's `criteria`) is a list of checks that distinguish
+"done" from "not done". A task type version's `acceptance` has the same form —
+criteria that apply to all tasks of the type (see [Type
+acceptance](task-types.md#type-acceptance)).
 
 ```json
 [
   {"key": "amount-matches", "kind": "deterministic",
-   "description": "Сумма платёжного поручения совпадает со счётом",
+   "description": "The payment order amount matches the invoice",
    "spec": {"skill": "invoice.amount_match@1",
             "inputs": {"invoice": "$.task.customFields.invoiceId"},
             "expect": {"status": "ok"}}},
   {"key": "payment-settled", "kind": "external_state",
-   "description": "Банк подтвердил проведение платежа",
+   "description": "The bank confirmed the payment was settled",
    "spec": {"event": "invoice.payment_settled"}},
   {"key": "director-approved", "kind": "human",
-   "description": "Оплату согласовал финансовый директор",
+   "description": "The finance director approved the payment",
    "spec": {"approverRole": "<role-id>"}}
 ]
 ```
 
-| Поле | Правило |
+| Field | Rule |
 |---|---|
-| `key` | `^[a-z0-9][a-z0-9._-]{0,62}$`, уникален в списке (`422 duplicate_check_key`) |
-| `kind` | `deterministic` (воспроизводимая проверка), `external_state` (состояние в другой системе), `human` (судит человек), `llm_judge` (судит модель по рубрике) |
-| `description` | 1–2000 символов |
-| `spec` | Объект до 16 КиБ по грамматике вида (таблица ниже), сканируется на секреты; неверный — `422 invalid_acceptance_spec`. У критериев цели `spec` не интерпретируется |
-| `when` | Необязательно: 1–8 путей с корнем `$.task`; критерий исполняется, только если каждый путь даёт значение, иначе результат `skipped` (см. [ниже](#when-and-skipped)). У критериев цели не принимается |
+| `key` | `^[a-z0-9][a-z0-9._-]{0,62}$`, unique in the list (`422 duplicate_check_key`) |
+| `kind` | `deterministic` (a reproducible check), `external_state` (state in another system), `human` (a human judges), `llm_judge` (a model judges by a rubric) |
+| `description` | 1–2000 characters |
+| `spec` | An object up to 16 KiB following the kind's grammar (table below), scanned for secrets; an invalid one — `422 invalid_acceptance_spec`. For goal criteria, `spec` is not interpreted |
+| `when` | Optional: 1–8 paths rooted at `$.task`; the criterion runs only if every path yields a value, otherwise the result is `skipped` (see [below](#when-and-skipped)). Not accepted for goal criteria |
 
-Не больше 50 проверок. Прочие нарушения — `422 invalid_acceptance`. Ключ,
-который уже есть у критериев версии типа задачи, — тоже `422
-invalid_acceptance` (`details.field = acceptance[i].key`): задача добавляет
-критерии к критериям типа, но не заменяет их.
-`PATCH` заменяет список целиком; удалить проверку, на которую ещё ссылается
-evidence, нельзя (`422 unknown_acceptance_check`).
+No more than 50 checks. Other violations — `422 invalid_acceptance`. A key
+that already exists among the criteria of the task type version is also `422
+invalid_acceptance` (`details.field = acceptance[i].key`): a task adds
+criteria to the type's criteria but does not replace them.
+`PATCH` replaces the list entirely; you cannot delete a check that evidence
+still references (`422 unknown_acceptance_check`).
 
-### Грамматика `spec` по видам
+### `spec` grammar by kind
 
-| `kind` | `spec` | Когда проверка пройдена |
+| `kind` | `spec` | When the check passes |
 |---|---|---|
-| `deterministic` | `{skill: "name@version", inputs?, expect?}` — `inputs` читают только `$.task.…`, в `expect` литералы | Вызов скилла вернул значения из `expect` |
-| `deterministic` | `{artifact: {type, mediaTypes?, content?}}` — взаимоисключает `skill`; `content`: `required` (по умолчанию) или `optional` | У задачи есть head-ревизия артефакта этого типа, подходящая по media type и, если нужно, с содержимым в хранилище (см. [Входы и выходы](task-types.md#artifact-schema)) |
-| `external_state` | `{}` или `{event: "<тип наблюдения или события>"}` | В evidence задачи есть факт с `check` = ключ проверки |
-| `human` | `{}`, `{approver: <principal-id>}` или `{approverRole: <role-id>}` | Gate-approval задачи одобрен |
-| `llm_judge` | как `human`, плюс `rubric` | Как `human`: решает человек, рубрика — подсказка ему |
+| `deterministic` | `{skill: "name@version", inputs?, expect?}` — `inputs` read only `$.task.…`, `expect` contains literals | The skill invocation returned the values from `expect` |
+| `deterministic` | `{artifact: {type, mediaTypes?, content?}}` — mutually exclusive with `skill`; `content`: `required` (default) or `optional` | The task has a head revision of an artifact of this type that matches the media type and, if required, has content in storage (see [Inputs and outputs](task-types.md#artifact-schema)) |
+| `external_state` | `{}` or `{event: "<observation or event type>"}` | The task's evidence contains a fact with `check` = the check key |
+| `human` | `{}`, `{approver: <principal-id>}`, or `{approverRole: <role-id>}` | The task's gate approval is approved |
+| `llm_judge` | like `human`, plus `rubric` | Like `human`: a human decides, the rubric is a hint for them |
 
-Скилл детерминированной проверки пишет во внешнюю систему (`sideEffects:
-external_write`) только **после решения человека в той же попытке**: раньше
-него в итоговом списке должен стоять `human` или `llm_judge` с тем же `when`,
-иначе запись критерия отвергается (`422 invalid_acceptance_spec`, `cause:
-external_write_without_decision`), а при исполнении без пройденного решения
-критерий проваливается с `no_decision`. Основание вызова — засчитанный
-gate-approval, полномочия — решившего (подробно — [Внешняя запись после
-решения](task-types.md#type-acceptance)). Проверки исполняются в объявленном
-порядке; рекомендуемый порядок — `deterministic` → `external_state` → `human`,
-а внешняя запись — сразу после решения, которое её разрешает.
+A deterministic check's skill writes to an external system (`sideEffects:
+external_write`) only **after a human decision in the same attempt**: a `human` or `llm_judge`
+with the same `when` must come before it in the final list,
+otherwise the criterion write is rejected (`422 invalid_acceptance_spec`, `cause:
+external_write_without_decision`), and when executed without a passed decision the
+criterion fails with `no_decision`. The grounds for the invocation is a counted
+gate approval, and the authority is the decider's (details in [External write after
+a decision](task-types.md#type-acceptance)). Checks run in the declared
+order; the recommended order is `deterministic` → `external_state` → `human`,
+with the external write immediately after the decision that authorizes it.
 
-## Стадия проверки { #verification-stage }
+## Verification stage { #verification-stage }
 
-Задача с проверками при завершении — `POST /tasks/{ref}:complete`,
-успешный run исполнителя или исход approval `completeTask` — не становится
-выполненной сразу. Claim снимается, задача остаётся в своём статусе и
-открывается **попытка проверки**; пока она идёт, задачу нельзя взять в работу
-(причина claimability `verification_pending`), а её зависимые не выдаются
-(`task_not_ready`): предшественник ещё не выполнен.
+A task with checks does not become done immediately on completion —
+`POST /tasks/{ref}:complete`, a successful executor run, or the approval outcome `completeTask`.
+The claim is released, the task stays in its status, and
+a **verification attempt** opens; while it is in progress, the task cannot be claimed
+(claimability reason `verification_pending`), and its dependents are not handed out
+(`task_not_ready`): the predecessor is not done yet.
 
-Проверки попытки собираются из трёх источников, в таком порядке:
+The checks of an attempt are gathered from three sources, in this order:
 
-| Порядок | Источник (`source`) | Что это |
+| Order | Source (`source`) | What it is |
 |---|---|---|
-| 1 | `output` | Неявные проверки `output.<key>` обязательных выходов типа (см. [Входы и выходы](task-types.md#artifact-schema)) |
-| 2 | `type` | Критерии по умолчанию версии типа (см. [Приёмка типа](task-types.md#type-acceptance)) |
-| 3 | `task` | Собственный acceptance задачи |
-| — | `rule` | Неявная проверка `rule-evidence`, если задачу закрывает правило, а критерии типа и задачи пусты |
+| 1 | `output` | Implicit `output.<key>` checks of the type's required outputs (see [Inputs and outputs](task-types.md#artifact-schema)) |
+| 2 | `type` | Default criteria of the type version (see [Type acceptance](task-types.md#type-acceptance)) |
+| 3 | `task` | The task's own acceptance |
+| — | `rule` | The implicit `rule-evidence` check, if a rule closes the task and the type and task criteria are empty |
 
-Задача, у которой все три списка пусты, завершается сразу.
+A task whose three lists are all empty is completed immediately.
 
 ```mermaid
 flowchart LR
-    C["Завершение задачи"] --> A{"Проверок нет?"}
-    A -- да --> D["Статус завершения"]
-    A -- нет --> V["Попытка проверки"]
-    V --> P{"Все проверки пройдены?"}
-    P -- да --> D
-    P -- нет --> R["Возврат исполнителю; 3-й провал подряд — blocked"]
+    C["Task completion"] --> A{"No checks?"}
+    A -- yes --> D["Completion status"]
+    A -- no --> V["Verification attempt"]
+    V --> P{"All checks passed?"}
+    P -- yes --> D
+    P -- no --> R["Return to executor; 3rd failure in a row — blocked"]
 ```
 
-Воркер ядра исполняет проверки по порядку. Перед каждой он вычисляет её
-условие `when` (если есть): невыполненное условие даёт `skipped`, и попытка
-идёт к следующей проверке.
+The core worker runs the checks in order. Before each one it evaluates its
+`when` condition (if any): an unmet condition yields `skipped`, and the attempt
+moves on to the next check.
 
-- **`deterministic`** — вызов скилла от имени проверки; нет результата за
-  `CP_VERIFICATION_SKILL_TIMEOUT_SECONDS` (по умолчанию 900) — провал
-  `no_result`. Скилл внешней записи вызывается полномочиями того, кто решил
-  gate ближайшей пройденной проверки `human` / `llm_judge` этой попытки;
-  без такого решения — провал `no_decision`;
-- **`external_state`** — ждёт факт в evidence задачи (его записывает, например,
-  правило `complete_work`), не дольше `CP_VERIFICATION_EXTERNAL_TIMEOUT_SECONDS`
-  (по умолчанию 86400);
-- **`human` / `llm_judge`** — решение gate-approval задачи. Если открытого
-  approval нет, ядро запрашивает его у `approver` / `approverRole`, иначе у
-  владельца или исполнителя задачи — **только если это человек**; агент никогда
-  не принимает собственную работу, при отсутствии человека проверка проваливается
-  с `no_approver`. Одобрение, которым исход approval закрыл задачу, засчитывается
-  сразу.
+- **`deterministic`** — a skill invocation on behalf of the check; no result within
+  `CP_VERIFICATION_SKILL_TIMEOUT_SECONDS` (900 by default) — failure
+  `no_result`. An external-write skill is invoked with the authority of whoever decided
+  the gate of the nearest passed `human` / `llm_judge` check of this attempt;
+  without such a decision — failure `no_decision`;
+- **`external_state`** — waits for a fact in the task's evidence (written, for example, by
+  a `complete_work` rule), no longer than `CP_VERIFICATION_EXTERNAL_TIMEOUT_SECONDS`
+  (86400 by default);
+- **`human` / `llm_judge`** — the decision of the task's gate approval. If there is no open
+  approval, the core requests one from `approver` / `approverRole`, otherwise from the
+  task's owner or assignee — **only if that is a human**; an agent never
+  accepts its own work, and if there is no human the check fails
+  with `no_approver`. An approval by which an approval outcome closed the task counts
+  immediately.
 
-Итог попытки:
+Attempt result:
 
-| Итог | Что происходит |
+| Result | What happens |
 |---|---|
-| Все пройдены или пропущены | Статус завершения, события `task.verified` и `task.completed`, артефакт `verification`; зависимые задачи становятся доступны; затем работа, объявленная типом после завершения |
-| Проверка провалена | Событие `task.verification_failed`, комментарий с причинами, задача возвращается в статус освобождения тому же исполнителю; третий провал подряд — в статус категории `blocked` |
-| Задача отменена | Попытка `cancelled`, запрошенный ядром approval отзывается |
+| All passed or skipped | Completion status, `task.verified` and `task.completed` events, a `verification` artifact; dependent tasks become available; then the post-completion work declared by the type |
+| A check failed | A `task.verification_failed` event, a comment with the reasons, the task returns to the release status for the same executor; the third failure in a row — to a status of the `blocked` category |
+| Task cancelled | The attempt is `cancelled`, an approval requested by the core is withdrawn |
 
-Повторное завершение, пока попытка открыта, новой попытки не создаёт.
+A repeated completion while an attempt is open does not create a new attempt.
 
-### Условие `when` и результат `skipped` { #when-and-skipped }
+### The `when` condition and the `skipped` result { #when-and-skipped }
 
 ```json
 {"key": "merge", "kind": "deterministic",
- "description": "Одобренный коммит влит в целевую ветку",
+ "description": "The approved commit is merged into the target branch",
  "spec": {"skill": "git.merge@1", "inputs": {"commit": "$.task.artifact[commit].metadata.commit!"},
           "expect": {"merged": true}},
  "when": ["$.task.artifact[commit].metadata.published"]}
 ```
 
-- Выражение выполнено, если его значение не `null`, не `""` и не `false`;
-  условие — если выполнены все выражения.
-- Условие вычисляется в момент, когда попытка подходит к проверке,
-  полномочиями завершившего задачу; то, что он прочитать не может, проваливает
-  проверку с кодом ошибки.
-- Невыполненное условие — результат `skipped`, `reason: condition_unmet`,
-  `details: {when: <первое невыполненное выражение>}`. `skipped` не считается
-  провалом: попытка, в которой проверки пропущены, пройдена.
-- В `results` попытки и в `task.verified.results[].status` встречается значение
-  `skipped`.
+- An expression is satisfied if its value is not `null`, not `""`, and not `false`;
+  the condition is satisfied if all expressions are satisfied.
+- The condition is evaluated when the attempt reaches the check,
+  with the authority of whoever completed the task; anything they cannot read fails
+  the check with an error code.
+- An unmet condition gives the result `skipped`, `reason: condition_unmet`,
+  `details: {when: <first unmet expression>}`. `skipped` is not counted as a
+  failure: an attempt in which checks were skipped passes.
+- The value `skipped` appears in the attempt's `results` and in `task.verified.results[].status`.
 
-### Возврат исполнителю и повторная сдача { #return-to-executor }
+### Return to the executor and resubmission { #return-to-executor }
 
-Провал попытки — отклонённый gate (`approval_rejected`), провал скилла, в том
-числе неудачное вливание, истёкшее ожидание — не заводит отдельных задач
-правок. Задача возвращается в `releaseStatus` своего типа, назначение не
-меняется, и её снова берёт **тот же исполнитель**. Комментарий провала
-объясняет причину.
+An attempt failure — a rejected gate (`approval_rejected`), a skill failure, including
+a failed merge, an expired wait — does not create separate rework
+tasks. The task returns to its type's `releaseStatus`, the assignment does not
+change, and **the same executor** picks it up again. The failure comment
+explains the reason.
 
-Демон исполнителя платформы передаёт причину в следующий прогон сам: если
-последняя попытка задачи `failed`, он читает её (`GET
-/tasks/{ref}/verifications?limit=1`) и после описания задачи добавляет в
-prompt блок **«Замечания последней проверки»** — номер попытки и результат
-каждого исполненного критерия, у проваленного — `reason` и `message`
-(комментарий решения ревьюера, причина провала скилла). Неисполненные
-критерии не перечисляются: они пойдут при следующей сдаче. Рабочая копия
-продолжает ветку задачи `task/<publicId>`, поэтому ревью видит новый коммит
-той же ветки (см. [Рабочие копии](../runner/execution-workspace.md)).
+The platform's executor daemon passes the reason into the next run itself: if
+the task's last attempt is `failed`, it reads it (`GET
+/tasks/{ref}/verifications?limit=1`) and, after the task description, adds a
+**"Last verification findings"** block to the prompt — the attempt number and the result of
+each executed criterion, and for a failed one, `reason` and `message`
+(the reviewer's decision comment, the reason for the skill failure). Unexecuted
+criteria are not listed: they will run on the next submission. The working copy
+continues the task branch `task/<publicId>`, so the review sees a new commit on
+the same branch (see [Working copies](../runner/execution-workspace.md)).
 
-Повторная сдача открывает новую попытку и запрашивает **новое** решение
-человека: gate засчитывается проверке, только если решён после начала
-попытки. Третий провал подряд — задача в статусе категории `blocked`, демон
-исполнителя её не берёт, пока человек не вернёт её в работу.
+A resubmission opens a new attempt and requests a **new** human
+decision: a gate counts toward a check only if it was decided after the attempt
+started. The third failure in a row puts the task in a status of the `blocked` category, and the executor
+daemon does not pick it up until a human returns it to work.
 
-### Попытки через API
+### Attempts via the API
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
   https://platform.example.com/api/v1/tasks/<task-ref>/verifications
 ```
 
-Каждая попытка: `attempt`, `status` (`running`, `waiting_human`,
+Each attempt: `attempt`, `status` (`running`, `waiting_human`,
 `waiting_external`, `passed`, `failed`, `cancelled`), `trigger`, `checks`
-(проверки попытки на момент открытия), `results` (`{key, kind, status,
-evidence, reason}` по каждой исполненной проверке; `status` — в том числе
-`skipped`), `startedAt`, `finishedAt`. У элементов `checks` и `results` есть
-поле `source` — `output`, `type`, `task` или `rule`; у попыток, открытых до
-появления поля, его нет. В ответе
-задачи поле `verification` — сводка последней попытки: `id`, `status`,
+(the attempt's checks at the time it opened), `results` (`{key, kind, status,
+evidence, reason}` for each executed check; `status` includes
+`skipped`), `startedAt`, `finishedAt`. Elements of `checks` and `results` have
+a `source` field — `output`, `type`, `task`, or `rule`; attempts opened before
+the field appeared do not have it. In the task
+response, the `verification` field is a summary of the last attempt: `id`, `status`,
 `attempt`, `updatedAt`.
 
-### Закрытие работы правилами
+### Closing work with rules
 
-Правило вывода работы может закрыть свою работу **как выполненную** действием
-`complete_work` — когда наблюдение показывает, что предпосылка исчезла потому,
-что работа сделана. Evidence наблюдения записывается в задачу, и задача
-проходит ту же стадию проверки; без acceptance — как одна неявная проверка
-`external_state`. `cancel_work` остаётся для работы, которая больше не нужна.
-Если над задачей работает исполнитель, правило просит остановить его run и
-применяет решение один раз, когда claim освобождён.
+A work rule can close its work **as done** with the
+`complete_work` action — when an observation shows that the precondition disappeared because
+the work was done. The observation's evidence is written to the task, and the task
+goes through the same verification stage; without acceptance — as a single implicit
+`external_state` check. `cancel_work` remains for work that is no longer needed.
+If an executor is working on the task, the rule asks to stop its run and
+applies the decision once, when the claim is released.
 
-## Evidence — указатели на факты
+## Evidence — pointers to facts
 
-Evidence — **ссылки**, а не копии фактов. Каждый элемент называет ровно один
-факт по его идентификатору там, где факт живёт.
+Evidence items are **references**, not copies of facts. Each element names exactly one
+fact by its identifier where the fact lives.
 
-| `kind` | Поле | Факт |
+| `kind` | Field | Fact |
 |---|---|---|
-| `observation` | `observationId` | Наблюдение журнала (`observation.recorded`, в том числе из архива журнала) |
-| `artifact` | `artifactId` | Артефакт |
-| `external` | `externalRef: {system, id, url?}` | Объект во внешней системе |
+| `observation` | `observationId` | A log observation (`observation.recorded`, including from the log archive) |
+| `artifact` | `artifactId` | An artifact |
+| `external` | `externalRef: {system, id, url?}` | An object in an external system |
 
-Необязательные поля: `check` — ключ проверки acceptance, к которой относится
-факт; `note` — до 1000 символов о том, почему факт важен.
+Optional fields: `check` — the key of the acceptance check the fact relates to;
+`note` — up to 1000 characters on why the fact matters.
 
 ```bash
 curl -s -X PATCH "$CP/tasks/TASK-000123" \
@@ -431,7 +431,7 @@ curl -s -X PATCH "$CP/tasks/TASK-000123" \
   -d '{
     "evidence": [
       {"kind": "artifact", "artifactId": "<artifact-id>", "check": "tests",
-       "note": "Отчёт прогона тестов"},
+       "note": "Test run report"},
       {"kind": "external",
        "externalRef": {"system": "git", "id": "<commit-sha>", "url": "https://git.example.com/…"},
        "check": "review"}
@@ -439,68 +439,68 @@ curl -s -X PATCH "$CP/tasks/TASK-000123" \
   }'
 ```
 
-Правила:
+Rules:
 
-- observation и artifact обязаны существовать **в этом tenant'е**; неизвестный
-  и чужой id дают одинаковый `404` до какой-либо записи;
-- `check` обязан быть объявлен в acceptance задачи — и при записи evidence, и
-  при замене acceptance (`422 unknown_acceptance_check`);
-- один и тот же факт для одной и той же проверки дважды —
+- an observation and an artifact must exist **in this tenant**; an unknown
+  id and another tenant's id both give the same `404` before any write;
+- `check` must be declared in the task's acceptance — both when evidence is written and
+  when acceptance is replaced (`422 unknown_acceptance_check`);
+- the same fact for the same check twice —
   `422 duplicate_evidence`;
-- до 200 элементов у задачи; прочие нарушения — `422 invalid_evidence`.
+- up to 200 elements per task; other violations — `422 invalid_evidence`.
 
-!!! tip "Evidence и живой claim"
-    Evidence меняется обычным `PATCH /tasks/{ref}`, поэтому при живом claim
-    запрос должен нести `claimId` и `fencingToken`. Исполнитель обычно
-    дописывает evidence перед `:succeed`.
+!!! tip "Evidence and a live claim"
+    Evidence is changed with a regular `PATCH /tasks/{ref}`, so with a live claim
+    the request must carry `claimId` and `fencingToken`. An executor usually
+    appends evidence before `:succeed`.
 
-## Что попадает в журнал и память
+## What goes into the log and memory
 
-Журнал событий читают шире, чем саму задачу, поэтому в него уходят только
-ссылки и счётчики:
+The event log is read more widely than the task itself, so only
+references and counters go into it:
 
-| Событие | Что содержит |
+| Event | What it contains |
 |---|---|
-| `goal.created` | `title`, `status`, `workspaceId`, `ownerId`, `parentGoalId`, `criteriaCount`, сводка `createdFrom` |
-| `goal.updated` | `changes` (`desired_state` → `true`, `criteria` → число), `fromStatus`/`status` при смене статуса, `version` |
-| `task.created` | `goalId`, сводка `origin` (kind, ref, ruleId и id фактов — без `note` и `url`), `acceptanceChecks` |
-| `task.updated` | `acceptance` и `evidence` в `changes` — числа элементов |
+| `goal.created` | `title`, `status`, `workspaceId`, `ownerId`, `parentGoalId`, `criteriaCount`, a `createdFrom` summary |
+| `goal.updated` | `changes` (`desired_state` → `true`, `criteria` → a number), `fromStatus`/`status` on a status change, `version` |
+| `task.created` | `goalId`, an `origin` summary (kind, ref, ruleId, and fact ids — without `note` and `url`), `acceptanceChecks` |
+| `task.updated` | `acceptance` and `evidence` in `changes` — element counts |
 
-Желаемое состояние цели и `spec` проверок в журнал и память не попадают.
-Context Adapter переносит в память `goalId` и `origin` из `task.created` и
-оба события целей (см. [Контекст задачи и память](context.md)).
+The goal's desired state and the checks' `spec` do not go into the log or memory.
+Context Adapter moves `goalId` and `origin` from `task.created` and
+both goal events into memory (see [Task context and memory](context.md)).
 
-## SDK и MCP
+## SDK and MCP
 
-- SDK-клиент: `create_goal`, `list_goals`, `get_goal`, `update_goal`,
-  `list_goal_work`; `create_task` / `update_task` / `list_tasks` принимают
-  `goal_id`, `origin` (только при создании), `acceptance`, `evidence`.
-- MCP: `cp_create_goal`, `cp_update_goal` (изменяющие; в том числе закрытие
-  цели статусом `achieved` / `abandoned`, `clear_owner` / `clear_parent`),
-  `cp_list_goals`, `cp_get_goal` (только чтение; вместе с первой страницей
-  работы цели), поля у `cp_create_task` / `cp_update_task` (`clear_goal`
-  отвязывает).
+- SDK client: `create_goal`, `list_goals`, `get_goal`, `update_goal`,
+  `list_goal_work`; `create_task` / `update_task` / `list_tasks` accept
+  `goal_id`, `origin` (only on creation), `acceptance`, `evidence`.
+- MCP: `cp_create_goal`, `cp_update_goal` (mutating; including closing
+  a goal with the status `achieved` / `abandoned`, `clear_owner` / `clear_parent`),
+  `cp_list_goals`, `cp_get_goal` (read-only; together with the first page of
+  the goal's work), fields on `cp_create_task` / `cp_update_task` (`clear_goal`
+  unlinks).
 
-Подробнее — в [CLI и MCP-сервере](cli-and-mcp.md).
+For details, see [CLI and MCP server](cli-and-mcp.md).
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина |
+| Symptom | Cause |
 |---|---|
-| `404` при привязке задачи к существующей цели | У пишущего нет `goals.read` на workspace цели, или цель принадлежит другому workspace |
-| `403` на любые операции с целями | Credential не имеет `goals.read` / `goals.write` — выдайте права |
-| `422 goal_workspace_mismatch` при переносе задачи | Задача остаётся при цели прежнего workspace; укажите `goalId` или `goalId: null` в том же PATCH |
-| `422 unknown_acceptance_check` при замене acceptance | Evidence задачи ссылается на удаляемую проверку; замените evidence в том же запросе |
-| `400 invalid_request` с `origin` в PATCH | Origin неизменяем |
-| `422 invalid_acceptance` на ключе критерия задачи | Такой ключ уже есть у критериев типа задачи — выберите другой |
-| Проверка провалена с `no_decision` | Внешняя запись без пройденного решения человека в этой попытке |
-| Задача вернулась исполнителю после одобрения | Одобрение прошло, но следующая проверка (например, вливание) провалена — причина в комментарии и в блоке «Замечания последней проверки» |
+| `404` when linking a task to an existing goal | The writer lacks `goals.read` on the goal's workspace, or the goal belongs to a different workspace |
+| `403` on any goal operation | The credential lacks `goals.read` / `goals.write` — grant the permissions |
+| `422 goal_workspace_mismatch` when moving a task | The task stays with a goal of the former workspace; specify `goalId` or `goalId: null` in the same PATCH |
+| `422 unknown_acceptance_check` when replacing acceptance | The task's evidence references the check being removed; replace evidence in the same request |
+| `400 invalid_request` with `origin` in PATCH | Origin is immutable |
+| `422 invalid_acceptance` on a task criterion key | This key already exists among the task type's criteria — choose another |
+| A check failed with `no_decision` | An external write without a passed human decision in this attempt |
+| The task returned to the executor after approval | The approval passed, but the next check (for example, the merge) failed — the reason is in the comment and in the "Last verification findings" block |
 
-## См. также
+## See also
 
-- [Модель работы](work-model.md)
-- [Типы задач и статусы](task-types.md#type-acceptance) — критерии приёмки типа.
-- [Правила вывода работы](work-rules.md) — `complete_work` и evidence правил.
-- [Approvals](approvals.md) — `ensureWork` и `origin.kind = process`.
-- [Артефакты и комментарии](artifacts.md) — факты для evidence.
-- [События](events.md)
+- [Work model](work-model.md)
+- [Task types and statuses](task-types.md#type-acceptance) — type acceptance criteria.
+- [Work rules](work-rules.md) — `complete_work` and rule evidence.
+- [Approvals](approvals.md) — `ensureWork` and `origin.kind = process`.
+- [Artifacts and comments](artifacts.md) — facts for evidence.
+- [Events](events.md)

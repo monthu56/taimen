@@ -1,257 +1,263 @@
-# Конфигурация исполнителя
 
-Откуда демон исполнителя `control-plane-agent` берёт настройки и какие переменные
-окружения он читает. В поставке демон запускается вручную и настраивается переменными
-окружения («режим env»). Если principal демона привязан к агенту реестра ядра (вид
-`Agent`), всё, что касается агента, демон берёт из ревизии описания. Статья-справочник
-для инженера эксплуатации.
+# Executor configuration
 
-## Два источника настроек
+Where the `control-plane-agent` executor daemon gets its settings and which environment
+variables it reads. In the delivery, you start the daemon manually and configure it with
+environment variables ("env mode"). If the daemon's principal is bound to an agent in the
+core registry (kind `Agent`), the daemon takes everything about the agent from the
+description revision. This is a reference article for operations engineers.
 
-| Что | Откуда | Кто задаёт |
+## Two sources of settings
+
+| What | Where from | Who sets it |
 |---|---|---|
-| Что это за агент: работа, вид исполнителя, модель, режим разрешений, инструкции, рабочая копия, соседи, ревью, скиллы, срок дренажа | ревизия агента, `GET /api/v1/agents/me`; для principal'а без агента — переменные режима env | автор описания в пакете ([Пакеты каталога](../control-plane/catalog-packages.md#agent)) или тот, кто запускает демон |
-| Что принадлежит машине: адрес Control Plane и IAM, credential, каталоги рабочих копий и зеркал, бинарники CLI, проброс MCP, локальные журналы, трасса, изоляция локальных скиллов, сторож прогресса | переменные окружения | тот, кто запускает демон (unit systemd, compose, контейнер) |
+| What the agent is: work, executor kind, model, permission mode, instructions, working copy, neighbours, review, skills, drain period | the agent revision, `GET /api/v1/agents/me`; for a principal without an agent — env mode variables | the author of the description in the package ([Catalog packages](../control-plane/catalog-packages.md#agent)) or whoever starts the daemon |
+| What belongs to the machine: Control Plane and IAM address, credential, working copy and mirror directories, CLI binaries, MCP passthrough, local logs, trace, isolation of local skills, progress watchdog | environment variables | whoever starts the daemon (systemd unit, compose, container) |
 
-!!! tip "Как менять настройки агента"
-    Модель, `permissionMode`, соседей, ревью или скиллы меняют правкой описания агента и
-    `cp_packages apply`: появится новая ревизия, исполнитель перейдёт на неё после
-    текущего прогона. Переменные `CONTROL_PLANE_AGENT_*`, `CONTROL_PLANE_CLAUDE_MODEL` и
-    подобные на агента с описанием не действуют.
+!!! tip "How to change agent settings"
+    Change the model, `permissionMode`, neighbours, review, or skills by editing the agent
+    description and running `cp_packages apply`: a new revision appears, and the executor
+    switches to it after the current run. The `CONTROL_PLANE_AGENT_*`,
+    `CONTROL_PLANE_CLAUDE_MODEL`, and similar variables have no effect on an agent with a
+    description.
 
-## Режим конфигурации
+## Configuration mode
 
-При старте демон решает, чей он, по `CONTROL_PLANE_AGENT_CONFIG`:
+At startup the daemon decides whose it is by `CONTROL_PLANE_AGENT_CONFIG`:
 
-| Значение | Поведение |
+| Value | Behavior |
 |---|---|
-| `auto` (по умолчанию) | `GET /agents/me`: principal привязан к агенту — режим ревизии; `404` — режим env |
-| `revision` | агент обязателен; principal без агента — выход с кодом `2` |
-| `env` | только окружение, для principal'а без агента |
+| `auto` (default) | `GET /agents/me`: the principal is bound to an agent — revision mode; `404` — env mode |
+| `revision` | an agent is required; a principal without an agent exits with code `2` |
+| `env` | environment only, for a principal without an agent |
 
-Режим `auto` — не удобство. Principal агента обязан называть ревизию в каждом
-`start-run`; в режиме env он не запустил бы ни одного прогона (`422
-agent_revision_required`). Если прочитать `/agents/me` при старте не удалось, демон
-завершается с кодом `75` и ждёт перезапуска, а не угадывает режим.
+`auto` mode is not a convenience. An agent principal must name the revision in every
+`start-run`; in env mode it would not start a single run (`422 agent_revision_required`).
+If reading `/agents/me` at startup fails, the daemon exits with code `75` and waits for a
+restart instead of guessing the mode.
 
-### Коды выхода
+### Exit codes
 
-| Код | Когда | Что делать надзирателю процесса |
+| Code | When | What the process supervisor should do |
 |---|---|---|
-| `0` | агент остановлен (`state: stopped`) или выведен из оборота | не перезапускать, пока агент не запущен снова |
-| `2` | конфигурация неисполнима: нет `CONTROL_PLANE_SERVER` или credential, неизвестный вид исполнителя, неверные `executor.params`, `review` без `reviewer`, зеркало с чужим `origin` | исправить конфигурацию; перезапуск без исправления бесполезен |
-| `75` | появилась новая ревизия агента (после текущего прогона) или не удалось прочитать `/agents/me` при старте | запустить снова сразу |
+| `0` | the agent is stopped (`state: stopped`) or retired | do not restart until the agent is started again |
+| `2` | the configuration cannot be executed: no `CONTROL_PLANE_SERVER` or credential, unknown executor kind, invalid `executor.params`, `review` without `reviewer`, a mirror with a foreign `origin` | fix the configuration; restarting without a fix is useless |
+| `75` | a new agent revision appeared (after the current run) or `/agents/me` could not be read at startup | start again immediately |
 
-## Что берётся из ревизии
+## What comes from the revision
 
-В режиме ревизии разделы описания заменяют переменные режима env:
+In revision mode, the description sections replace the env mode variables:
 
-| Раздел описания | Заменяет в режиме env |
+| Description section | Replaces in env mode |
 |---|---|
 | `work.workspace`, `work.project`, `work.includeSubprojects` | `CONTROL_PLANE_AGENT_WORKSPACE`, `…_PROJECT`, `…_SUBPROJECTS` |
-| `work.onlyAssigned` (по умолчанию `true`) | `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` (по умолчанию выкл.) |
-| `work.taskTypes` | — (фильтр по типу задачи есть только в описании) |
+| `work.onlyAssigned` (default `true`) | `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` (default off) |
+| `work.taskTypes` | — (the task type filter exists only in the description) |
 | `executor.kind` | `CONTROL_PLANE_AGENT_ADAPTER` |
-| `executor.params` (Claude Code) | `CONTROL_PLANE_CLAUDE_MODEL`, `…_PERMISSION_MODE`, `…_TIMEOUT`, `…_RESUME`; `tools.allow`/`tools.deny` — только в описании |
+| `executor.params` (Claude Code) | `CONTROL_PLANE_CLAUDE_MODEL`, `…_PERMISSION_MODE`, `…_TIMEOUT`, `…_RESUME`; `tools.allow`/`tools.deny` — description only |
 | `executor.params` (Codex) | `CONTROL_PLANE_CODEX_MODEL`, `…_SANDBOX`, `…_TIMEOUT`, `…_RESUME`, `…_CREDENTIAL_CLASS` |
-| `executor.instructions` | файл `CONTROL_PLANE_CLAUDE_PROMPT_FILE` |
-| `workingCopy.repository`, `neighbours`, `superproject` (URL) | `CONTROL_PLANE_AGENT_REPO`, `…_NEIGHBOURS`, `…_SUPERPROJECT` (пути к зеркалам) |
+| `executor.instructions` | the `CONTROL_PLANE_CLAUDE_PROMPT_FILE` file |
+| `workingCopy.repository`, `neighbours`, `superproject` (URL) | `CONTROL_PLANE_AGENT_REPO`, `…_NEIGHBOURS`, `…_SUPERPROJECT` (paths to mirrors) |
 | `workingCopy.directory`, `baseRef` | `CONTROL_PLANE_AGENT_REPO_DIR`, `…_BASE_REF` |
-| `workingCopy.publish` | `CONTROL_PLANE_AGENT_PUSH_REMOTE`, `…_SUPERPROJECT_REMOTE` (в режиме ревизии — `origin` зеркала) |
+| `workingCopy.publish` | `CONTROL_PLANE_AGENT_PUSH_REMOTE`, `…_SUPERPROJECT_REMOTE` (in revision mode — the mirror's `origin`) |
 | `skills.protocols`, `local`, `httpOrigins`, `mcpOrigins`, `audiences`, `concurrency` | `CONTROL_PLANE_SKILLS_PROTOCOLS`, `…_LOCAL_PACKAGES`, `…_HTTP_ALLOWED_ORIGINS`, `…_MCP_ALLOWED_ORIGINS`, `…_ALLOWED_AUDIENCES`, `…_CONCURRENCY` |
 | `placement.drainSeconds` | `CONTROL_PLANE_AGENT_DRAIN_SECONDS` |
 
-Чего нет в разделе `skills` описания, того нет и у исполнителя, даже если переменная
-`CONTROL_PLANE_SKILLS_*` из этой таблицы задана на хосте.
+What is missing from the `skills` section of the description is missing from the executor
+too, even if a `CONTROL_PLANE_SKILLS_*` variable from this table is set on the host.
 
-## Переменные хоста
+## Host variables
 
-Эти переменные демон и адаптеры читают в обоих режимах. Значения по умолчанию подходят
-большинству установок.
+The daemon and the adapters read these variables in both modes. The defaults suit most
+installations.
 
-### Подключение и credential
+### Connection and credential
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_SERVER` | — (обязательна) | базовый URL Control Plane, например `https://platform.example.com` |
-| `CONTROL_PLANE_IAM_URL` | — | URL IAM; наличие включает IAM-identity |
-| `CONTROL_PLANE_IAM_TENANT` | — | IAM tenant; обязателен вместе с `CONTROL_PLANE_IAM_URL` (`iam_tenant_required`) |
-| `CONTROL_PLANE_IAM_AUDIENCE` | `control-plane` | audience обмениваемого access token |
-| `CONTROL_PLANE_IAM_SCOPES` | весь потолок PAT ∩ audience | scopes через пробел или запятую |
-| `IAM_PRINCIPAL` | — | IAM principal этого процесса; нужен, если в хранилище несколько PAT одного tenant'а |
-| `IAM_CREDENTIAL_MODE` | — | `environment` (или `ci`) — разрешает PAT из `IAM_PLATFORM_ACCESS_TOKEN` |
-| `IAM_PLATFORM_ACCESS_TOKEN` | — | PAT в окружении; без `IAM_CREDENTIAL_MODE` — `iam_environment_mode_required` |
-| `IAM_NO_KEYCHAIN` | — | `1` — не искать PAT в Keychain macOS |
-| `XDG_CONFIG_HOME` | `~/.config` | где искать `iam/credentials.json` |
-| `CONTROL_PLANE_API_KEY` | — | legacy API-ключ; только если IAM не настроен и сервер ещё принимает такие ключи |
-| `HOME` | — | должен быть задан: от него зависят `~/.config`, `~/.gitconfig`, каталоги runtime по умолчанию |
+| `CONTROL_PLANE_SERVER` | — (required) | Control Plane base URL, for example `https://platform.example.com` |
+| `CONTROL_PLANE_IAM_URL` | — | IAM URL; setting it turns on IAM identity |
+| `CONTROL_PLANE_IAM_TENANT` | — | IAM tenant; required together with `CONTROL_PLANE_IAM_URL` (`iam_tenant_required`) |
+| `CONTROL_PLANE_IAM_AUDIENCE` | `control-plane` | audience of the exchanged access token |
+| `CONTROL_PLANE_IAM_SCOPES` | the whole PAT ceiling ∩ audience | scopes separated by spaces or commas |
+| `IAM_PRINCIPAL` | — | the IAM principal of this process; needed if the store has several PATs of the same tenant |
+| `IAM_CREDENTIAL_MODE` | — | `environment` (or `ci`) — allows a PAT from `IAM_PLATFORM_ACCESS_TOKEN` |
+| `IAM_PLATFORM_ACCESS_TOKEN` | — | PAT in the environment; without `IAM_CREDENTIAL_MODE` — `iam_environment_mode_required` |
+| `IAM_NO_KEYCHAIN` | — | `1` — do not look for the PAT in the macOS Keychain |
+| `XDG_CONFIG_HOME` | `~/.config` | where to look for `iam/credentials.json` |
+| `CONTROL_PLANE_API_KEY` | — | legacy API key; only if IAM is not configured and the server still accepts such keys |
+| `HOME` | — | must be set: `~/.config`, `~/.gitconfig`, and the default runtime directories depend on it |
 
-Подробно — [Identity агента](agent-identity.md).
+Details: [Agent identity](agent-identity.md).
 
-### Демон и рабочие копии
+### Daemon and working copies
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_AGENT_CONFIG` | `auto` | режим конфигурации (см. выше) |
-| `CONTROL_PLANE_AGENT_POLL` | `5` | пауза между опросами очереди без работы, секунды |
-| `CONTROL_PLANE_AGENT_WORKTREE_ROOT` | в режиме ревизии `~/.control-plane-agent/worktrees` | каталог рабочих копий |
-| `CONTROL_PLANE_AGENT_MIRRORS` | `<WORKTREE_ROOT>/.mirrors` | где лежат bare-зеркала репозиториев ревизии; недостающее зеркало клонируется |
-| `CONTROL_PLANE_AGENT_KEEP_WORKSPACES` | выкл. | `1` — не удалять копию после успеха |
-| `CONTROL_PLANE_AGENT_MAX_WORKSPACES` | `8` | сколько простаивающих копий держать на диске |
-| `CONTROL_PLANE_AGENT_RUNTIME_DIR` | `<WORKTREE_ROOT>/.runtime`, без пула — `~/.control-plane-agent/runtime` | куда скачиваются входы задач: `<каталог>/<publicId>/inputs/<key>/<имя>` (см. [Входы задачи](adapters.md#task-inputs)) |
+| `CONTROL_PLANE_AGENT_CONFIG` | `auto` | configuration mode (see above) |
+| `CONTROL_PLANE_AGENT_POLL` | `5` | pause between queue polls when there is no work, seconds |
+| `CONTROL_PLANE_AGENT_WORKTREE_ROOT` | in revision mode `~/.control-plane-agent/worktrees` | working copy directory |
+| `CONTROL_PLANE_AGENT_MIRRORS` | `<WORKTREE_ROOT>/.mirrors` | where the bare mirrors of the revision's repositories live; a missing mirror is cloned |
+| `CONTROL_PLANE_AGENT_KEEP_WORKSPACES` | off | `1` — do not delete the copy after success |
+| `CONTROL_PLANE_AGENT_MAX_WORKSPACES` | `8` | how many idle copies to keep on disk |
+| `CONTROL_PLANE_AGENT_RUNTIME_DIR` | `<WORKTREE_ROOT>/.runtime`, without a pool — `~/.control-plane-agent/runtime` | where task inputs are downloaded: `<directory>/<publicId>/inputs/<key>/<name>` (see [Task inputs](adapters.md#task-inputs)) |
 
-За один цикл демон просматривает до 10 доступных задач и берёт первую, которую может
-исполнить. Heartbeat сессии и claim — раз в 60 секунд. В режиме ревизии между прогонами
-(не чаще раза в 30 секунд в простое) демон перечитывает `/agents/me`.
+In one cycle the daemon looks through up to 10 available tasks and takes the first one it
+can execute. The session and claim heartbeat runs every 60 seconds. In revision mode the
+daemon re-reads `/agents/me` between runs (no more often than once every 30 seconds when
+idle).
 
-### Сторож прогона
+### Run watchdog
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_AGENT_CONTROL_POLL_SECONDS` | `15` | как часто читать прогон ради запроса отмены (не реже раза в 30 с) |
-| `CONTROL_PLANE_AGENT_STALL_WARN_SECONDS` | `600` | без новых actions столько секунд — checkpoint `stall`; `0` отключает шаг |
-| `CONTROL_PLANE_AGENT_STALL_STOP_SECONDS` | `1800` | после этого исполнитель останавливается, run проваливается `no_progress`, задача возвращается в очередь; `0` отключает |
-| `CONTROL_PLANE_AGENT_ACTION_MAX_SECONDS` | `3600` | сколько живёт незавершённое последнее action (долгие тесты, сборка), прежде чем сторож остановит прогон; не меньше `STALL_STOP` |
+| `CONTROL_PLANE_AGENT_CONTROL_POLL_SECONDS` | `15` | how often to read the run for a cancellation request (at least once every 30 s) |
+| `CONTROL_PLANE_AGENT_STALL_WARN_SECONDS` | `600` | after this many seconds without new actions — a `stall` checkpoint; `0` disables the step |
+| `CONTROL_PLANE_AGENT_STALL_STOP_SECONDS` | `1800` | after this the executor stops, the run fails with `no_progress`, the task returns to the queue; `0` disables |
+| `CONTROL_PLANE_AGENT_ACTION_MAX_SECONDS` | `3600` | how long an unfinished last action (long tests, a build) may live before the watchdog stops the run; not less than `STALL_STOP` |
 
-### Адаптеры: часть хоста
+### Adapters: host part
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | токен подписки Claude Code (`claude setup-token`); наследуется CLI |
-| `ANTHROPIC_API_KEY` | — | альтернатива подписке; наследуется CLI |
-| `CONTROL_PLANE_CLAUDE_BINARY` | `claude` | путь к CLI |
-| `CONTROL_PLANE_CLAUDE_MCP` | `1` | `0` — не передавать MCP `control-plane` внутрь агента |
-| `CONTROL_PLANE_CLAUDE_LOGS` | `1` | `0` — не писать локальный журнал сессии |
-| `CONTROL_PLANE_CLAUDE_RUNTIME_DIR` | `~/.claude-runner` | `mcp.json` и `sessions/` |
-| `CODEX_HOME` | `~/.codex` | каталог `auth.json` Codex; должен быть записываемым и постоянным |
-| `OPENAI_API_KEY` | — | альтернатива входу по подписке; наследуется CLI |
-| `CONTROL_PLANE_CODEX_BINARY` | `codex` | путь к CLI |
-| `CONTROL_PLANE_CODEX_LOGS` | `1` | `0` — без локального журнала |
-| `CONTROL_PLANE_CODEX_RUNTIME_DIR` | `~/.codex-runner` | каталог `sessions/` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Claude Code subscription token (`claude setup-token`); inherited by the CLI |
+| `ANTHROPIC_API_KEY` | — | alternative to the subscription; inherited by the CLI |
+| `CONTROL_PLANE_CLAUDE_BINARY` | `claude` | path to the CLI |
+| `CONTROL_PLANE_CLAUDE_MCP` | `1` | `0` — do not pass the `control-plane` MCP into the agent |
+| `CONTROL_PLANE_CLAUDE_LOGS` | `1` | `0` — do not write the local session log |
+| `CONTROL_PLANE_CLAUDE_RUNTIME_DIR` | `~/.claude-runner` | `mcp.json` and `sessions/` |
+| `CODEX_HOME` | `~/.codex` | Codex `auth.json` directory; must be writable and persistent |
+| `OPENAI_API_KEY` | — | alternative to subscription login; inherited by the CLI |
+| `CONTROL_PLANE_CODEX_BINARY` | `codex` | path to the CLI |
+| `CONTROL_PLANE_CODEX_LOGS` | `1` | `0` — no local log |
+| `CONTROL_PLANE_CODEX_RUNTIME_DIR` | `~/.codex-runner` | `sessions/` directory |
 
-### Контекст и трасса
+### Context and trace
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` | `12000` | бюджет раздела «Контекст задачи» в prompt (все адаптеры); некорректное значение — умолчание |
-| `CONTROL_PLANE_TRACE_TRANSCRIPT` | `1` | публиковать артефакт `transcript` |
-| `CONTROL_PLANE_TRACE_ACTIONS` | `1` | писать run actions `tool.*` |
-| `CONTROL_PLANE_TRACE_TOOL_RESULTS` | `1` | хранить результаты инструментов в транскрипте |
+| `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` | `12000` | budget of the task context section in the prompt (all adapters); an invalid value falls back to the default |
+| `CONTROL_PLANE_TRACE_TRANSCRIPT` | `1` | publish the `transcript` artifact |
+| `CONTROL_PLANE_TRACE_ACTIONS` | `1` | write `tool.*` run actions |
+| `CONTROL_PLANE_TRACE_TOOL_RESULTS` | `1` | keep tool results in the transcript |
 
-Флаги трассы выключаются значениями `0`, `false`, `no`, `off`. Подробно —
-[Трасса прогонов](trace.md).
+Trace flags are turned off with the values `0`, `false`, `no`, `off`. Details:
+[Run trace](trace.md).
 
-### Скиллы: часть хоста
+### Skills: host part
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_SKILLS_LOCAL_ISOLATION` | `process` | `process` — дочерний процесс, убиваемый по таймауту и потере аренды; `thread` — поток, который остановить нельзя |
-| `CONTROL_PLANE_SKILLS_MCP_SERVERS` | — | JSON `{имя: {command, args, env}}` для эндпоинтов `stdio:<имя>` |
-| `CONTROL_PLANE_SKILLS_PRIVATE_HOSTS` | — | хосты разрешённых origins, которым можно резолвиться в непубличные адреса (сервисы внутри кластера) |
+| `CONTROL_PLANE_SKILLS_LOCAL_ISOLATION` | `process` | `process` — a child process killed on timeout and lease loss; `thread` — a thread that cannot be stopped |
+| `CONTROL_PLANE_SKILLS_MCP_SERVERS` | — | JSON `{name: {command, args, env}}` for `stdio:<name>` endpoints |
+| `CONTROL_PLANE_SKILLS_PRIVATE_HOSTS` | — | hosts of allowed origins that may resolve to non-public addresses (services inside the cluster) |
 
-Principal'у исполнителя для скиллов нужно право `skills.execute`. Подробнее —
+The executor principal needs the `skills.execute` permission for skills. Details:
 [skill-sdk](../sdk/skill-sdk.md).
 
-## Режим env: конфигурация без описания { #env-mode }
+## Env mode: configuration without a description { #env-mode }
 
-Для principal'а, который не привязан к агенту, всё берётся из окружения. Это штатный
-способ запустить демон вручную: unit systemd, сервис compose или контейнер со своими
-переменными. На агента с описанием эти переменные не действуют.
+For a principal that is not bound to an agent, everything comes from the environment. This
+is the standard way to start the daemon manually: a systemd unit, a compose service, or a
+container with its own variables. These variables have no effect on an agent with a
+description.
 
-### Очередь
+### Queue
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_AGENT_ADAPTER` | `echo` | `echo`, `claude-code` или `codex` |
-| `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` | выкл. | `1` — только задачи, назначенные этому principal'у |
-| `CONTROL_PLANE_AGENT_WORKSPACE` | — | Workspace Control Plane, из которого брать задачи (с поддеревом) |
-| `CONTROL_PLANE_AGENT_PROJECT` | — | проект |
-| `CONTROL_PLANE_AGENT_SUBPROJECTS` | выкл. | `1` — включая подпроекты |
-| `CONTROL_PLANE_AGENT_DRAIN_SECONDS` | — | сколько ждать прогон в полёте на `SIGTERM`; без неё прогон доводится до конца |
+| `CONTROL_PLANE_AGENT_ADAPTER` | `echo` | `echo`, `claude-code`, or `codex` |
+| `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` | off | `1` — only tasks assigned to this principal |
+| `CONTROL_PLANE_AGENT_WORKSPACE` | — | the Control Plane Workspace to take tasks from (with its subtree) |
+| `CONTROL_PLANE_AGENT_PROJECT` | — | project |
+| `CONTROL_PLANE_AGENT_SUBPROJECTS` | off | `1` — including subprojects |
+| `CONTROL_PLANE_AGENT_DRAIN_SECONDS` | — | how long to wait for an in-flight run on `SIGTERM`; without it the run is finished to the end |
 
-!!! warning "Без сужения очереди"
-    Демон без `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` и без `CONTROL_PLANE_AGENT_WORKSPACE`
-    возьмёт любую доступную задачу tenant'а. Для проверок заводите отдельный workspace.
+!!! warning "No queue narrowing"
+    A daemon without `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` and without
+    `CONTROL_PLANE_AGENT_WORKSPACE` takes any available task of the tenant. Create a separate
+    workspace for checks.
 
-### Рабочие копии
+### Working copies
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_AGENT_REPO` | — | bare-зеркало, из которого нарезаются копии; вместе с `WORKTREE_ROOT` включает пул |
-| `CONTROL_PLANE_AGENT_REPO_DIR` | имя репозитория без `.git` | имя каталога копии внутри контейнера задачи |
-| `CONTROL_PLANE_AGENT_BASE_REF` | `HEAD` | от чего ветвиться |
-| `CONTROL_PLANE_AGENT_PUSH_REMOTE` | — | remote для публикации веток `task/<publicId>` и обновления базы; пусто — работа остаётся локальной |
-| `CONTROL_PLANE_AGENT_NEIGHBOURS` | — | соседи: `имя=путь-к-зеркалу` через запятую или пробел |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT` | — | зеркало суперпроекта, закрепляющего ревизии соседей; обязателен при соседях |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT_REF` | `HEAD` | ref суперпроекта для чтения ревизий |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT_REMOTE` | — | remote для обновления суперпроекта перед раскладкой |
+| `CONTROL_PLANE_AGENT_REPO` | — | bare mirror from which copies are cut; together with `WORKTREE_ROOT` turns on the pool |
+| `CONTROL_PLANE_AGENT_REPO_DIR` | repository name without `.git` | name of the copy directory inside the task container |
+| `CONTROL_PLANE_AGENT_BASE_REF` | `HEAD` | what to branch from |
+| `CONTROL_PLANE_AGENT_PUSH_REMOTE` | — | remote for publishing `task/<publicId>` branches and updating the base; empty — the work stays local |
+| `CONTROL_PLANE_AGENT_NEIGHBOURS` | — | neighbours: `name=mirror-path` separated by commas or spaces |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT` | — | mirror of the superproject that pins the neighbour revisions; required with neighbours |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT_REF` | `HEAD` | superproject ref for reading revisions |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT_REMOTE` | — | remote for updating the superproject before the layout |
 
-Подробно — [Рабочие копии](execution-workspace.md).
+Details: [Working copies](execution-workspace.md).
 
-### Ревью
+### Review
 
-Переменных ревью у демона нет: ревью и вливание объявляет тип задачи критериями
-приёмки, а исполняет ядро (см. [Приёмка типа](../control-plane/task-types.md#type-acceptance)).
-Демон кладёт в артефакт `commit` всё, что нужно критериям, — ветку, коммит, признак
-публикации, адрес remote и целевую ветку.
+The daemon has no review variables: review and merge are declared by the task type as
+acceptance criteria and executed by the core (see
+[Type acceptance](../control-plane/task-types.md#type-acceptance)). The daemon puts
+everything the criteria need into the `commit` artifact — the branch, the commit, the
+published flag, the remote address, and the target branch.
 
-### Адаптеры
+### Adapters
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_CLAUDE_MODEL` | как у CLI | модель |
+| `CONTROL_PLANE_CLAUDE_MODEL` | as in the CLI | model |
 | `CONTROL_PLANE_CLAUDE_PERMISSION_MODE` | `acceptEdits` | `--permission-mode` |
-| `CONTROL_PLANE_CLAUDE_TIMEOUT` | `3600` | потолок хода, секунды |
-| `CONTROL_PLANE_CLAUDE_RESUME` | `1` | `0` — не продолжать сессию прошлой попытки |
-| `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | — | файл соглашений, дописывается в каждый prompt; перечитывается на каждый ход |
-| `CONTROL_PLANE_CODEX_MODEL` | как у CLI | модель |
+| `CONTROL_PLANE_CLAUDE_TIMEOUT` | `3600` | turn cap, seconds |
+| `CONTROL_PLANE_CLAUDE_RESUME` | `1` | `0` — do not continue the session of the previous attempt |
+| `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | — | conventions file appended to every prompt; re-read on every turn |
+| `CONTROL_PLANE_CODEX_MODEL` | as in the CLI | model |
 | `CONTROL_PLANE_CODEX_SANDBOX` | `workspace-write` | `--sandbox` |
-| `CONTROL_PLANE_CODEX_TIMEOUT` | `3600` | потолок хода, секунды |
-| `CONTROL_PLANE_CODEX_RESUME` | `1` | `0` — не продолжать сессию |
-| `CONTROL_PLANE_CODEX_CREDENTIAL_CLASS` | — | метка класса credential в metadata артефакта (`credentialClass`) |
+| `CONTROL_PLANE_CODEX_TIMEOUT` | `3600` | turn cap, seconds |
+| `CONTROL_PLANE_CODEX_RESUME` | `1` | `0` — do not continue the session |
+| `CONTROL_PLANE_CODEX_CREDENTIAL_CLASS` | — | credential class label in the artifact metadata (`credentialClass`) |
 
-### Скиллы
+### Skills
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_SKILLS_PROTOCOLS` | `local`, если заданы пакеты; иначе выкл. | протоколы: `local`, `http`, `mcp` |
-| `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES` | — | точки входа `module:function` или пакеты с `CONTRACT` и `local`-реализацией |
-| `CONTROL_PLANE_SKILLS_HTTP_ALLOWED_ORIGINS` | — | `scheme://host[:port]`, куда можно ходить протоколу `http` |
-| `CONTROL_PLANE_SKILLS_MCP_ALLOWED_ORIGINS` | — | то же для удалённых MCP-серверов |
-| `CONTROL_PLANE_SKILLS_ALLOWED_AUDIENCES` | — | IAM audiences, токен которых может получить скилл; `control-plane`, `iam` и собственный audience демона запрещены |
-| `CONTROL_PLANE_SKILLS_CONCURRENCY` | `1` | одновременных вызовов рядом с кодовой работой; `0` — только когда её нет |
+| `CONTROL_PLANE_SKILLS_PROTOCOLS` | `local` if packages are set; otherwise off | protocols: `local`, `http`, `mcp` |
+| `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES` | — | `module:function` entry points or packages with `CONTRACT` and a `local` implementation |
+| `CONTROL_PLANE_SKILLS_HTTP_ALLOWED_ORIGINS` | — | `scheme://host[:port]` that the `http` protocol may call |
+| `CONTROL_PLANE_SKILLS_MCP_ALLOWED_ORIGINS` | — | the same for remote MCP servers |
+| `CONTROL_PLANE_SKILLS_ALLOWED_AUDIENCES` | — | IAM audiences whose token a skill may obtain; `control-plane`, `iam`, and the daemon's own audience are forbidden |
+| `CONTROL_PLANE_SKILLS_CONCURRENCY` | `1` | concurrent calls alongside coding work; `0` — only when there is none |
 
-## Харнесс OpenCode
+## OpenCode harness
 
-Отдельный процесс `control-plane-opencode` описанием агента не настраивается:
+The separate `control-plane-opencode` process is not configured by an agent description:
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_SERVER` | — (обязательна) | URL Control Plane |
-| `CONTROL_PLANE_API_KEY` | из хранилища `control-plane login` | API-ключ (IAM-identity харнесс не поддерживает) |
-| `OPENCODE_SERVER` | `http://127.0.0.1:4096` | адрес `opencode serve` |
-| `OPENCODE_SERVER_PASSWORD` | — | пароль сервера OpenCode |
-| `OPENCODE_MODEL`, `OPENCODE_AGENT` | — | модель и агент OpenCode |
-| `CONTROL_PLANE_AGENT_WORKSPACE`, `…_PROJECT`, `…_SUBPROJECTS`, `…_POLL` | как у демона | очередь |
-| `CP_LOG_LEVEL` | `INFO` | уровень журнала |
+| `CONTROL_PLANE_SERVER` | — (required) | Control Plane URL |
+| `CONTROL_PLANE_API_KEY` | from the `control-plane login` store | API key (the harness does not support IAM identity) |
+| `OPENCODE_SERVER` | `http://127.0.0.1:4096` | address of `opencode serve` |
+| `OPENCODE_SERVER_PASSWORD` | — | OpenCode server password |
+| `OPENCODE_MODEL`, `OPENCODE_AGENT` | — | OpenCode model and agent |
+| `CONTROL_PLANE_AGENT_WORKSPACE`, `…_PROJECT`, `…_SUBPROJECTS`, `…_POLL` | as for the daemon | queue |
+| `CP_LOG_LEVEL` | `INFO` | log level |
 
-## Ошибки конфигурации при старте
+## Configuration errors at startup
 
-| Сообщение | Что поправить |
+| Message | What to fix |
 |---|---|
-| `control-plane-agent requires CONTROL_PLANE_SERVER` | задать `CONTROL_PLANE_SERVER` |
-| `control-plane-agent has no credentials for <server>` | настроить IAM (`CONTROL_PLANE_IAM_URL`, `CONTROL_PLANE_IAM_TENANT` + PAT) или API-ключ |
-| `CONTROL_PLANE_AGENT_CONFIG='…': expected one of auto, revision, env` | значение режима |
-| `CONTROL_PLANE_AGENT_CONFIG=revision, but this principal is not an agent` | principal не привязан к агенту: опубликовать описание или убрать `revision` |
-| `could not read this principal's agent: …` (выход 75) | Control Plane недоступен при старте; перезапустить процесс |
-| `<key>@<N> cannot be run here: …` | ревизия неисполнима на этом образе: вид исполнителя, `executor.params`, `workingCopy`, `review`, `skills` — текст после двоеточия |
-| `unknown adapter '<name>' (available: [...])` | `CONTROL_PLANE_AGENT_ADAPTER` (режим env) |
-| `adapter '<name>' is not installed on this runner` | поставить пакет с адаптером |
-| `skill executor misconfigured: …` | переменные `CONTROL_PLANE_SKILLS_*` (режим env) |
-| `neighbours require a superproject that pins their revisions` | соседи без суперпроекта: `workingCopy.superproject` или `CONTROL_PLANE_AGENT_SUPERPROJECT` |
+| `control-plane-agent requires CONTROL_PLANE_SERVER` | set `CONTROL_PLANE_SERVER` |
+| `control-plane-agent has no credentials for <server>` | configure IAM (`CONTROL_PLANE_IAM_URL`, `CONTROL_PLANE_IAM_TENANT` + PAT) or an API key |
+| `CONTROL_PLANE_AGENT_CONFIG='…': expected one of auto, revision, env` | the mode value |
+| `CONTROL_PLANE_AGENT_CONFIG=revision, but this principal is not an agent` | the principal is not bound to an agent: publish a description or remove `revision` |
+| `could not read this principal's agent: …` (exit 75) | Control Plane is unavailable at startup; restart the process |
+| `<key>@<N> cannot be run here: …` | the revision cannot run on this image: executor kind, `executor.params`, `workingCopy`, `review`, `skills` — see the text after the colon |
+| `unknown adapter '<name>' (available: [...])` | `CONTROL_PLANE_AGENT_ADAPTER` (env mode) |
+| `adapter '<name>' is not installed on this runner` | install the package with the adapter |
+| `skill executor misconfigured: …` | `CONTROL_PLANE_SKILLS_*` variables (env mode) |
+| `neighbours require a superproject that pins their revisions` | neighbours without a superproject: `workingCopy.superproject` or `CONTROL_PLANE_AGENT_SUPERPROJECT` |
 
-## См. также
+## See also
 
-- [Адаптеры исполнителей](adapters.md)
-- [Переменные окружения (сводный справочник)](../reference/environment.md)
-- [Права и scopes](../reference/permissions.md)
+- [Executor adapters](adapters.md)
+- [Environment variables (consolidated reference)](../reference/environment.md)
+- [Permissions and scopes](../reference/permissions.md)

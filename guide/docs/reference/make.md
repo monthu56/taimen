@@ -1,55 +1,56 @@
-# Цели make
 
-Все цели корневого `Makefile` суперпроекта — единого механизма запуска,
-проверки и документации платформы. Статья для инженера, который поднимает
-стенд, прогоняет проверки перед коммитом или собирает это руководство.
-Запускайте `make` из корня суперпроекта; `make` без аргументов печатает
-список целей с описаниями (`make help`).
+# Make targets
 
-## Сводка
+All targets of the superproject's root `Makefile`, the single mechanism for
+launching, checking, and documenting the platform. This page is for an
+engineer who brings up a deployment, runs checks before a commit, or builds
+this guide. Run `make` from the superproject root; `make` without arguments
+prints the list of targets with descriptions (`make help`).
 
-| Цель | Параметры | Что делает |
+## Summary
+
+| Target | Parameters | What it does |
 |---|---|---|
-| `help` | — | Список целей с описаниями (цель по умолчанию). |
-| `secrets` | — | Создаёт `.env` из `.env.example` (если его нет), заполняет пустые секреты, генерирует ключи подписи. |
-| `config` | `PROFILES` | Проверяет `compose.yml` после интерполяции для выбранных профилей. |
-| `build` | `PROFILES` | Собирает образы выбранных профилей. |
-| `up` | `PROFILES` | Собирает и поднимает выбранные профили в фоне. |
-| `down` | — | Останавливает и удаляет контейнеры всех профилей; volumes сохраняются. |
-| `ps` | — | Состояние контейнеров всех профилей. |
-| `logs` | `svc` | Поток логов сервиса (или всех). |
-| `smoke` | — | Проверяет health поднятых сервисов через порты `127.0.0.1`. |
-| `bootstrap` | `ARGS` | Первичная инициализация: tenant, principals, PAT, bindings, каталог. |
-| `reset-state` | — | После сброса volumes переносит state bootstrap и выданные им credentials в `secrets/stale-<время>/`. |
-| `check` | — | Lint + unit-тесты всех компонентов ядра (как обязательный CI). |
-| `check-frozen` | — | То же для замороженного периметра. |
-| `check-<компонент>` | — | Lint + тесты одного компонента. |
-| `lint-<компонент>` | — | Только lint одного компонента. |
-| `test-<компонент>` | — | Только тесты одного компонента. |
-| `packages-check` | — | Проверка пакетов каталога `packages/`. |
-| `linkcheck` | — | Проверяет относительные ссылки в документации. |
-| `submodules` | — | Инициализирует сабмодули на закреплённых ревизиях. |
-| `status` | — | Указатели сабмодулей и незакоммиченные изменения. |
-| `guide` | — | Собирает это руководство в `guide/site`. |
-| `guide-serve` | — | Руководство с живой перезагрузкой на `http://127.0.0.1:8008`. |
+| `help` | — | List of targets with descriptions (the default target). |
+| `secrets` | — | Creates `.env` from `.env.example` (if it does not exist), fills empty secrets, generates signing keys. |
+| `config` | `PROFILES` | Validates `compose.yml` after interpolation for the selected profiles. |
+| `build` | `PROFILES` | Builds the images of the selected profiles. |
+| `up` | `PROFILES` | Builds and starts the selected profiles in the background. |
+| `down` | — | Stops and removes the containers of all profiles; volumes are kept. |
+| `ps` | — | Container status for all profiles. |
+| `logs` | `svc` | Log stream of a service (or of all services). |
+| `smoke` | — | Checks the health of running services through `127.0.0.1` ports. |
+| `bootstrap` | `ARGS` | Initial setup: tenant, principals, PAT, bindings, catalog. |
+| `reset-state` | — | After a volume reset, moves the bootstrap state and the credentials it issued to `secrets/stale-<time>/`. |
+| `check` | — | Lint + unit tests of all core components (same as the required CI). |
+| `check-frozen` | — | The same for the frozen perimeter. |
+| `check-<component>` | — | Lint + tests of a single component. |
+| `lint-<component>` | — | Lint only, for a single component. |
+| `test-<component>` | — | Tests only, for a single component. |
+| `packages-check` | — | Checks the catalog packages in `packages/`. |
+| `linkcheck` | — | Checks relative links in the documentation. |
+| `submodules` | — | Initializes submodules at the pinned revisions. |
+| `status` | — | Submodule pointers and uncommitted changes. |
+| `guide` | — | Builds this guide into `guide/site`. |
+| `guide-serve` | — | The guide with live reload on `http://127.0.0.1:8008`. |
 
-## Переменные make
+## Make variables
 
-| Переменная | По умолчанию | Где используется |
+| Variable | Default | Where it is used |
 |---|---|---|
-| `PROFILES` | `core edge` | `config`, `build`, `up`: превращается в `docker compose --profile <p> …` для каждого профиля. |
-| `svc` | пусто (все сервисы) | `logs`. |
-| `ARGS` | пусто | `bootstrap`: дополнительные аргументы `deploy/bootstrap.py`. |
-| `BOOTSTRAP_PY` | `uv run --no-project --quiet --with pyyaml --with jsonschema python3`, если uv установлен; иначе `python3` | `bootstrap`: интерпретатор скрипта. |
-| `ENV_NAME` | `COMPOSE_PROJECT_NAME` из `.env`, иначе `taimen` | `reset-state`: имя файла состояния. |
+| `PROFILES` | `core edge` | `config`, `build`, `up`: expands to `docker compose --profile <p> …` for each profile. |
+| `svc` | empty (all services) | `logs`. |
+| `ARGS` | empty | `bootstrap`: extra arguments for `deploy/bootstrap.py`. |
+| `BOOTSTRAP_PY` | `uv run --no-project --quiet --with pyyaml --with jsonschema python3` if uv is installed; otherwise `python3` | `bootstrap`: the script interpreter. |
+| `ENV_NAME` | `COMPOSE_PROJECT_NAME` from `.env`, otherwise `taimen` | `reset-state`: the state file name. |
 
-Внутренние списки компонентов:
+Internal component lists:
 
-| Список | Состав |
+| List | Members |
 |---|---|
-| `COMPONENTS_PY` (ядро, `make check`) | `platform-auth-sdk`, `platform-llm`, `skill-sdk`, `iam-service`, `control-plane`, `memory-service` |
+| `COMPONENTS_PY` (core, `make check`) | `platform-auth-sdk`, `platform-llm`, `skill-sdk`, `iam-service`, `control-plane`, `memory-service` |
 
-## Запуск стека
+## Running the stack
 
 ### make secrets
 
@@ -58,25 +59,25 @@ make secrets
 ```
 
 
-1. Если `.env` нет — копирует `.env.example` в `.env` и ставит права `600`.
-2. `tools/fill_secrets.py .env` заполняет **только пустые** значения из
-   фиксированного списка случайными hex-строками (`secrets.token_hex`):
-   пароли БД (`CP_`, `IAM_`, `MEMORY_`, `NOTIFY_`), bootstrap-токены
-   (`CP_`, `IAM_`), `MEMORY_API_KEY`, `S3_ACCESS_KEY_ID`,
-   `S3_SECRET_ACCESS_KEY`, `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY`.
-   Существующие значения не трогаются; повторный запуск безопасен.
-3. Создаёт каталог `secrets`.
-4. Генерирует RSA 3072 ключ `secrets/iam-signing.pem`, если его нет, и
-   ставит `600`.
+1. If there is no `.env`, copies `.env.example` to `.env` and sets mode `600`.
+2. `tools/fill_secrets.py .env` fills **only empty** values from a fixed list
+   with random hex strings (`secrets.token_hex`): database passwords (`CP_`,
+   `IAM_`, `MEMORY_`, `NOTIFY_`), bootstrap tokens (`CP_`, `IAM_`),
+   `MEMORY_API_KEY`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+   `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY`. Existing values are left
+   untouched; running it again is safe.
+3. Creates the `secrets` directory.
+4. Generates an RSA 3072 key `secrets/iam-signing.pem` if it does not exist,
+   and sets mode `600`.
 
-!!! note "На Linux — владелец uid 10001"
-    Контейнеры читают ключи под uid 10001. После `make secrets` выполните
-    `chown 10001 secrets/*.pem`, иначе IAM не прочитает ключ подписи.
+!!! note "On Linux, the owner is uid 10001"
+    Containers read the keys as uid 10001. After `make secrets`, run
+    `chown 10001 secrets/*.pem`, otherwise IAM cannot read the signing key.
 
 
-`IAM_TENANT_ID` цель не заполняет: сгенерировать его нечем. В `compose.yml`
-он по умолчанию пуст, поэтому `make up` для `core edge` работает сразу после
-`make secrets` — см. [Переменные окружения](environment.md).
+The target does not fill `IAM_TENANT_ID`: there is nothing to generate it
+from. In `compose.yml` it is empty by default, so `make up` for `core edge`
+works right after `make secrets`; see [Environment variables](environment.md).
 
 ### make config
 
@@ -86,22 +87,23 @@ make config
 make config PROFILES="core notify edge"
 ```
 
-`docker compose … config --quiet`; при успехе печатает
-`compose.yml корректен для профилей: …`. Ловит пустые обязательные
-переменные и ошибки интерполяции до запуска.
+`docker compose … config --quiet`; on success it prints
+`compose.yml корректен для профилей: …` ("compose.yml is valid for profiles:
+…"). It catches empty required variables and interpolation errors before
+launch.
 
 ### make build / make up
 
 
 ```bash
 make up                                   # core edge
-make up PROFILES="core notify edge"      # с уведомлениями
+make up PROFILES="core notify edge"      # with notifications
 make build PROFILES="core"
 ```
 
 
-`up` выполняет `docker compose --profile … up -d --build`: пересобирает
-изменившиеся образы и пересоздаёт контейнеры.
+`up` runs `docker compose --profile … up -d --build`: it rebuilds changed
+images and recreates containers.
 
 ### make down / ps / logs
 
@@ -109,11 +111,11 @@ make build PROFILES="core"
 make down
 make ps
 make logs svc=control-plane-api
-make logs                       # все сервисы
+make logs                       # all services
 ```
 
-Эти цели работают с `--profile "*"` — со всеми профилями сразу,
-независимо от `PROFILES`. `down` не удаляет volumes: данные сохраняются.
+These targets work with `--profile "*"`, that is, with all profiles at once,
+regardless of `PROFILES`. `down` does not remove volumes: data is kept.
 
 ### make smoke
 
@@ -121,11 +123,11 @@ make logs                       # все сервисы
 make smoke
 ```
 
-`tools/smoke.py` читает порты из `.env` (или окружения) и опрашивает
-health-эндпоинты поднятых сервисов; не запущенные помечает «не запущен»
-и ошибкой не считает. Код выхода `1`, если хотя бы один поднятый сервис
-ответил `≥ 400`. Перечень проверок — в
-[Сервисы и порты](services-and-ports.md#healthchecks).
+`tools/smoke.py` reads ports from `.env` (or the environment) and polls the
+health endpoints of running services; services that are not running are
+marked `не запущен` ("not running") and do not count as an error. The exit
+code is `1` if at least one running service responded with `≥ 400`. The list
+of checks is in [Services and ports](services-and-ports.md#healthchecks).
 
 ### make bootstrap
 
@@ -135,61 +137,60 @@ make bootstrap
 make bootstrap ARGS="--name local --secrets-dir secrets --packages deploy/packages.yaml"
 ```
 
-Запускает `deploy/bootstrap.py --env .env $(ARGS)`: если uv установлен —
-через `uv run --no-project --quiet --with pyyaml --with jsonschema python3`
-(PyYAML и jsonschema ставить в систему не нужно), иначе системным `python3`,
-в котором тогда должны быть PyYAML и jsonschema. Скрипт
-идемпотентен: состояние хранится в `deploy/state/<env>.json`, повторный
-запуск пропускает сделанное. Аргументы:
+Runs `deploy/bootstrap.py --env .env $(ARGS)`: if uv is installed, through
+`uv run --no-project --quiet --with pyyaml --with jsonschema python3` (you do
+not need to install PyYAML and jsonschema system-wide); otherwise with the
+system `python3`, which then must have PyYAML and jsonschema. The script is
+idempotent: state is stored in `deploy/state/<env>.json`, and a repeated run
+skips what is already done. Arguments:
 
-| Аргумент | По умолчанию | Назначение |
+| Argument | Default | Purpose |
 |---|---|---|
-| `--env` | `.env` | Файл окружения (цель передаёт `.env`). |
-| `--name` | `COMPOSE_PROJECT_NAME` | Имя окружения — имя файла состояния. |
-| `--operator` | значение из кода | Отображаемое имя human-оператора. |
-| `--tenant-slug` | `COMPOSE_PROJECT_NAME` | Slug tenant. |
-| `--pat-ttl` | `15552000` (180 дней) | Срок выпускаемых PAT, секунды. |
-| `--secrets-dir` | `secrets` | Куда писать PAT и env-файлы service accounts. |
-| `--packages` | `deploy/packages.yaml` | Файл установки каталога (`kind: Installation`). |
+| `--env` | `.env` | Environment file (the target passes `.env`). |
+| `--name` | `COMPOSE_PROJECT_NAME` | Environment name, which is also the state file name. |
+| `--operator` | value from code | Display name of the human operator. |
+| `--tenant-slug` | `COMPOSE_PROJECT_NAME` | Tenant slug. |
+| `--pat-ttl` | `15552000` (180 days) | Lifetime of issued PATs, in seconds. |
+| `--secrets-dir` | `secrets` | Where to write PATs and service account env files. |
+| `--packages` | `deploy/packages.yaml` | Catalog installation file (`kind: Installation`). |
 
-Что делает по шагам и какие права выдаёт — [Bootstrap](../getting-started/bootstrap.md)
-и [Права и scopes](permissions.md#bootstrap-grants).
+What it does step by step and which permissions it grants: [Bootstrap](../getting-started/bootstrap.md)
+and [Permissions and scopes](permissions.md#bootstrap-grants).
 
 ### make reset-state
 
 ```bash
-docker compose --profile "*" down -v   # сброс volumes
+docker compose --profile "*" down -v   # reset volumes
 make reset-state
 make up && make bootstrap
 ```
 
-Нужна после удаления volumes: файл состояния bootstrap ссылается на tenant и
-principals, которых в пустых базах уже нет, и bootstrap в этом случае
-останавливается с подсказкой `make reset-state`. Цель переносит в
-`secrets/stale-<ГГГГММДД-ЧЧММСС>/`:
+You need it after removing volumes: the bootstrap state file refers to a tenant
+and principals that no longer exist in the empty databases, and in that case
+bootstrap stops with the hint `make reset-state`. The target moves the
+following into `secrets/stale-<YYYYMMDD-HHMMSS>/`:
 
 - `deploy/state/<ENV_NAME>.json`;
 
 - `secrets/harness-pat`, `secrets/control-plane-iam.env`,
   `secrets/memory-service-iam.env`.
 
-Ключи подписи (`secrets/*.pem`) и `.env` не трогает. Если переносить нечего,
-печатает `нечего убирать`. Файлы не удаляются — старые credentials можно
-отозвать или удалить вручную позже.
+It does not touch the signing keys (`secrets/*.pem`) or `.env`. If there is
+nothing to move, it prints `нечего убирать` ("nothing to clean up"). Files are
+not deleted: you can revoke or delete the old credentials manually later.
 
-## Проверки
+## Checks
 
 
 ### make check
 
 ```bash
-make check            # ядро: как обязательный CI
+make check            # core: same as the required CI
 ```
 
-Для каждого компонента выполняется `lint-<компонент>` и
-`test-<компонент>`.
+For each component, `lint-<component>` and `test-<component>` run.
 
-### make check-&lt;компонент&gt;, lint-&lt;компонент&gt;, test-&lt;компонент&gt;
+### make check-&lt;component&gt;, lint-&lt;component&gt;, test-&lt;component&gt;
 
 ```bash
 make check-control-plane
@@ -197,22 +198,22 @@ make lint-memory-service
 make test-iam-service
 ```
 
-`lint-<компонент>` — `uv run ruff check .` и `uv run ruff format --check .`
-в каталоге компонента.
+`lint-<component>` runs `uv run ruff check .` and `uv run ruff format --check .`
+in the component directory.
 
-`test-<компонент>` по умолчанию — `uv run pytest -q` в каталоге
-компонента. Для некоторых компонентов есть свои правила:
+`test-<component>` runs `uv run pytest -q` in the component directory by
+default. Some components have their own rules:
 
-| Цель | Что делает дополнительно |
+| Target | What it does in addition |
 |---|---|
-| `test-control-plane` | Поднимает `db-test` из `control-plane/docker-compose.yml` (профиль `test`, порт 5434), запускает `pytest tests/unit tests/client`, затем останавливает БД. |
-| `test-skill-sdk` | Тесты `skill-sdk` со всеми extras, затем сквозной тест исполнителя через `control-plane` (`tests/test_executor_e2e.py`). |
-| `test-memory-service` | `pytest` с extra `mcp`, без `tests/integration`. |
+| `test-control-plane` | Starts `db-test` from `control-plane/docker-compose.yml` (profile `test`, port 5434), runs `pytest tests/unit tests/client`, then stops the database. |
+| `test-skill-sdk` | `skill-sdk` tests with all extras, then an end-to-end executor test through `control-plane` (`tests/test_executor_e2e.py`). |
+| `test-memory-service` | `pytest` with the `mcp` extra, without `tests/integration`. |
 
-!!! tip "Тестовые БД занимают порты хоста"
+!!! tip "Test databases occupy host ports"
 
-    `test-control-plane` поднимает контейнер на порту 5434. Если порт занят,
-    тесты не стартуют.
+    `test-control-plane` starts a container on port 5434. If the port is busy,
+    the tests do not start.
 
 ### make packages-check
 
@@ -221,28 +222,28 @@ make packages-check
 ```
 
 
-1. `tools/cp_packages.py check` — схема, ссылки и валидаторы ядра для
-   пакетов в `packages/`.
-2. `tools/cp_packages.py check --install <файл установки>` —
-   проверка файла установки.
-3. `pytest -q tools/tests` (через `uv run --no-project` с `pytest`,
+1. `tools/cp_packages.py check`: schema, references, and core validators for
+   the packages in `packages/`.
+2. `tools/cp_packages.py check --install <installation file>`: checks the
+   installation file.
+3. `pytest -q tools/tests` (through `uv run --no-project` with `pytest`,
    `pyyaml`, `jsonschema`, `regex`, `ruamel.yaml`).
 
-См. [Пакеты каталога](../control-plane/catalog-packages.md).
+See [Catalog packages](../control-plane/catalog-packages.md).
 
-## Документация и репозиторий
+## Documentation and repository
 
-| Цель | Команда | Примечание |
+| Target | Command | Note |
 |---|---|---|
-| `linkcheck` | `python3 tools/linkcheck.py` | Относительные ссылки в документации суперпроекта. |
-| `submodules` | `git submodule update --init --recursive` | После клонирования и после bump указателей. |
-| `status` | `git submodule status` и `git status --short` | Быстрый обзор состояния. |
-| `guide` | `cd guide && uv run --with-requirements requirements.txt mkdocs build --strict` | Любое предупреждение MkDocs — ошибка сборки. |
-| `guide-serve` | `… mkdocs serve -a 127.0.0.1:8008` | Живой просмотр руководства. |
+| `linkcheck` | `python3 tools/linkcheck.py` | Relative links in the superproject documentation. |
+| `submodules` | `git submodule update --init --recursive` | After cloning and after bumping pointers. |
+| `status` | `git submodule status` and `git status --short` | A quick status overview. |
+| `guide` | `cd guide && uv run --with-requirements requirements.txt mkdocs build --strict` | Any MkDocs warning fails the build. |
+| `guide-serve` | `… mkdocs serve -a 127.0.0.1:8008` | Live preview of the guide. |
 
-## Типичные последовательности
+## Typical sequences
 
-=== "Первый запуск"
+=== "First launch"
 
     ```bash
     make submodules
@@ -251,11 +252,11 @@ make packages-check
     make up
     make smoke
     make bootstrap
-    # вписать выведенный IAM_TENANT_ID в .env, затем
+    # put the printed IAM_TENANT_ID into .env, then
     make up
     ```
 
-=== "Заново после сброса volumes"
+=== "Again after a volume reset"
 
     ```bash
     docker compose --profile "*" down -v
@@ -264,13 +265,13 @@ make packages-check
     make bootstrap
     ```
 
-=== "Перед коммитом в компонент"
+=== "Before a commit to a component"
 
     ```bash
     make check-control-plane
     ```
 
-=== "Обновление стенда"
+=== "Updating a deployment"
 
     ```bash
     git pull --ff-only
@@ -279,9 +280,9 @@ make packages-check
     make smoke
     ```
 
-## См. также
+## See also
 
-- [Установка и первый запуск](../getting-started/quickstart.md)
+- [Installation and first launch](../getting-started/quickstart.md)
 - [Bootstrap](../getting-started/bootstrap.md)
-- [Сервисы и порты](services-and-ports.md)
-- [Обновление и миграции](../operations/upgrades.md)
+- [Services and ports](services-and-ports.md)
+- [Upgrades and migrations](../operations/upgrades.md)

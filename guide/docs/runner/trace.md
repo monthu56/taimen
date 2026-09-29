@@ -1,42 +1,43 @@
-# Трасса прогонов
 
-Что автономный исполнитель сообщает Control Plane о ходе своей работы (CP-ADR-0051):
-ограниченный отредактированный транскрипт как артефакт `transcript` и по одному run action
-на каждый вызов инструмента в реальном времени. Статья для оператора, читающего прогоны, и
-для инженера, решающего, что можно публиковать с конкретной площадки.
+# Run trace
 
-## Что публикуется, а что нет
+What an autonomous executor reports to Control Plane about the progress of its work
+(CP-ADR-0051): a bounded, redacted transcript as a `transcript` artifact and one run action
+per tool call in real time. The article is for operators who read runs and for engineers who
+decide what may be published from a specific site.
 
-| Данные | Куда | Условие |
+## What is published and what is not
+
+| Data | Where | Condition |
 |---|---|---|
-| Итоговое summary агента | артефакт `report` (`content.summary`, до 60000 символов, пути вырезаны) | всегда |
-| Счётчики хода (модель, число ходов, длительность, стоимость, токены) | metadata артефакта `report` | всегда |
-| Сообщения агента, вызовы инструментов с входом и результатом, итог | артефакт `transcript` (`agent-transcript/1`) | `CONTROL_PLANE_TRACE_TRANSCRIPT` |
-| Результаты инструментов внутри транскрипта | там же | `CONTROL_PLANE_TRACE_TOOL_RESULTS` |
-| Один action на вызов инструмента | run actions `tool.<имя>` | `CONTROL_PLANE_TRACE_ACTIONS` |
-| Action хода целиком | `claude-code.turn` / `codex.turn` | всегда |
-| Prompt | — | **никогда** |
-| Скрытые рассуждения (`thinking`, reasoning summaries) | — | **никогда**; только счётчик `hiddenReasoningBlocks` |
-| Сырой поток CLI | локальный журнал на хосте runner'а | `CONTROL_PLANE_CLAUDE_LOGS` / `CONTROL_PLANE_CODEX_LOGS` |
+| Final agent summary | `report` artifact (`content.summary`, up to 60000 characters, paths stripped) | always |
+| Turn counters (model, number of turns, duration, cost, tokens) | metadata of the `report` artifact | always |
+| Agent messages, tool calls with input and result, final answer | `transcript` artifact (`agent-transcript/1`) | `CONTROL_PLANE_TRACE_TRANSCRIPT` |
+| Tool results inside the transcript | same place | `CONTROL_PLANE_TRACE_TOOL_RESULTS` |
+| One action per tool call | run actions `tool.<name>` | `CONTROL_PLANE_TRACE_ACTIONS` |
+| Action for the whole turn | `claude-code.turn` / `codex.turn` | always |
+| Prompt | — | **never** |
+| Hidden reasoning (`thinking`, reasoning summaries) | — | **never**; only the `hiddenReasoningBlocks` counter |
+| Raw CLI stream | local log on the runner host | `CONTROL_PLANE_CLAUDE_LOGS` / `CONTROL_PLANE_CODEX_LOGS` |
 
-Трассу публикуют адаптеры `claude-code` и `codex`. Харнесс OpenCode и адаптер `echo`
-транскрипт не публикуют.
+The trace is published by the `claude-code` and `codex` adapters. The OpenCode harness and
+the `echo` adapter do not publish a transcript.
 
-## Флаги
+## Flags
 
-| Переменная | По умолчанию | `0` / `false` / `no` / `off` означает |
+| Variable | Default | `0` / `false` / `no` / `off` means |
 |---|---|---|
-| `CONTROL_PLANE_TRACE_TRANSCRIPT` | `1` | не публиковать артефакт `transcript` |
-| `CONTROL_PLANE_TRACE_ACTIONS` | `1` | не писать run actions `tool.*` |
-| `CONTROL_PLANE_TRACE_TOOL_RESULTS` | `1` | в транскрипте у результатов инструментов оставить только размер и флаг ошибки |
+| `CONTROL_PLANE_TRACE_TRANSCRIPT` | `1` | do not publish the `transcript` artifact |
+| `CONTROL_PLANE_TRACE_ACTIONS` | `1` | do not write `tool.*` run actions |
+| `CONTROL_PLANE_TRACE_TOOL_RESULTS` | `1` | keep only the size and the error flag of tool results in the transcript |
 
-!!! tip "Площадка, где вывод инструментов не должен покидать хост"
-    Выключите только `CONTROL_PLANE_TRACE_TOOL_RESULTS`. Разговор агента, список вызовов и
-    аудит в run actions останутся, а содержимое файлов и вывод команд — нет.
+!!! tip "A site where tool output must not leave the host"
+    Turn off only `CONTROL_PLANE_TRACE_TOOL_RESULTS`. The agent conversation, the list of
+    calls, and the audit in run actions remain, while file contents and command output do not.
 
-## Артефакт `transcript`
+## The `transcript` artifact
 
-Один JSON-документ схемы `agent-transcript/1`, не больше **512 КиБ**.
+One JSON document with the `agent-transcript/1` schema, no larger than **512 KiB**.
 
 ```json
 {
@@ -46,7 +47,7 @@
   "model": "<model-id>",
   "tools": ["Bash", "Read", "Edit", "mcp__control-plane__cp_get_run_context"],
   "entries": [
-    {"seq": 1, "at": "2026-01-15T10:00:01.120Z", "kind": "assistant", "text": "Смотрю структуру модуля."},
+    {"seq": 1, "at": "2026-01-15T10:00:01.120Z", "kind": "assistant", "text": "Looking at the module structure."},
     {"seq": 2, "at": "…", "kind": "tool_call", "call": 1, "callId": "toolu_…", "tool": "Read",
      "input": "{\n \"file_path\": \"<path>/service.py\"\n}"},
     {"seq": 3, "at": "…", "kind": "tool_result", "call": 1, "callId": "toolu_…", "isError": false,
@@ -56,7 +57,7 @@
     {"seq": 5, "at": "…", "kind": "tool_result", "call": 2, "isError": false,
      "withheld": true, "outputChars": 1830}
   ],
-  "final": {"text": "Сделано: …", "truncated": false},
+  "final": {"text": "Done: …", "truncated": false},
   "usage": {"inputTokens": 120345, "outputTokens": 8812, "costUsd": 0.61, "durationMs": 412000, "turns": 28},
   "stats": {
     "assistantMessages": 14, "userMessages": 0, "toolCalls": 31, "toolErrors": 2,
@@ -66,49 +67,49 @@
 }
 ```
 
-### Виды записей
+### Entry kinds
 
-| `kind` | Поля | Откуда |
+| `kind` | Fields | Source |
 |---|---|---|
-| `assistant` | `text` | текстовые блоки ответа агента |
-| `user` | `text` | текстовый ввод в ходе (не prompt) |
-| `tool_call` | `call` (порядковый номер), `callId`, `tool`, `input` | вызов инструмента |
-| `tool_result` | `call`, `callId`, `isError`, `output` **или** `withheld: true` + `outputChars` | результат инструмента |
+| `assistant` | `text` | text blocks of the agent response |
+| `user` | `text` | text input during the turn (not the prompt) |
+| `tool_call` | `call` (sequence number), `callId`, `tool`, `input` | tool call |
+| `tool_result` | `call`, `callId`, `isError`, `output` **or** `withheld: true` + `outputChars` | tool result |
 
-У каждой записи есть `seq` и `at`; запись, обрезанная по лимиту, помечена `truncated: true`.
+Every entry has `seq` and `at`; an entry cut by a limit is marked `truncated: true`.
 
-### Лимиты
+### Limits
 
-| Что | Лимит |
+| What | Limit |
 |---|---|
-| Весь документ | 512 КиБ; записи сверх бюджета не сохраняются, а считаются в `droppedEntries` |
-| Текст сообщения | 20000 символов |
-| Вход инструмента | 6000 символов |
-| Результат инструмента | 6000 символов |
-| Итоговый ответ | 60000 символов, у него свой слот вне бюджета записей |
+| Whole document | 512 KiB; entries over budget are not stored but counted in `droppedEntries` |
+| Message text | 20000 characters |
+| Tool input | 6000 characters |
+| Tool result | 6000 characters |
+| Final answer | 60000 characters, in its own slot outside the entry budget |
 
-Обрезанный текст заканчивается пометкой `… [truncated N chars]`.
+Truncated text ends with the marker `… [truncated N chars]`.
 
-### Редакция
+### Redaction
 
-Каждая строка перед сохранением проходит две редакции:
+Every string passes two redactions before it is stored:
 
-- **пути хоста** заменяются на `<path>`; у глубоких путей (от четырёх сегментов) сохраняется
-  имя файла — `<path>/README.md` говорит читателю, какой файл агент трогал, не раскрывая
-  раскладку хоста;
-- **credentials** заменяются на `<redacted>`: префиксы `cp_`, `sk-`, `ghp_`, `github_pat_`,
-  `xox?-`, JWT вида `eyJ….….…`, пары `token=…`, `password: …`, `api_key=…`,
-  `authorization: …`, `client_secret=…` и подобные; приватные ключи PEM — на
+- **host paths** are replaced with `<path>`; deep paths (four segments or more) keep the file
+  name — `<path>/README.md` tells the reader which file the agent touched without revealing
+  the host layout;
+- **credentials** are replaced with `<redacted>`: prefixes `cp_`, `sk-`, `ghp_`, `github_pat_`,
+  `xox?-`, JWTs of the form `eyJ….….…`, pairs `token=…`, `password: …`, `api_key=…`,
+  `authorization: …`, `client_secret=…` and similar; PEM private keys become
   `<redacted private key>`.
 
-После сборки документ целиком проверяется тем же guard'ом переносимости, что и все
-артефакты. Если что-то всё же не прошло, транскрипт **не публикуется текстом**: вместо него
-уходит документ с `withheld: true`, `reason: "unsafe_payload"`, счётчиками и usage — run
-при этом не падает.
+After assembly, the whole document is checked by the same portability guard as all
+artifacts. If something still fails, the transcript is **not published as text**: instead, a
+document with `withheld: true`, `reason: "unsafe_payload"`, counters, and usage is sent — the
+run does not fail because of this.
 
 ### Metadata
 
-Metadata артефакта — то, что читатель хочет знать до открытия документа:
+The artifact metadata is what a reader wants to know before opening the document:
 
 ```json
 {
@@ -131,8 +132,9 @@ Metadata артефакта — то, что читатель хочет зна�
 
 ## Run actions `tool.*`
 
-Пока ход идёт, адаптер на каждый `tool_use` пишет run action и закрывает его по
-`tool_result`. Так клиенты видят ход прогона вживую, не дожидаясь транскрипта.
+While a turn is in progress, the adapter writes a run action for every `tool_use` and closes
+it on `tool_result`. This way clients see the run's progress live without waiting for the
+transcript.
 
 ```http
 POST /api/v1/runs/<run-id>/actions
@@ -146,48 +148,47 @@ POST /api/v1/runs/<run-id>/actions
 
 ```http
 POST /api/v1/runs/<run-id>/actions/<action-id>:finish
-{"status": "completed"}        // или "failed", если результат с is_error
+{"status": "completed"}        // or "failed" if the result has is_error
 ```
 
-| Поле | Правило |
+| Field | Rule |
 |---|---|
-| `action` | `tool.<имя>`; из имени остаются только `[A-Za-z0-9_.:/-]`, остальное заменяется на `_`; до 200 символов |
-| `metadata.summary` | одна строка до 160 символов: первое содержательное поле входа (`command`, `cmd`, `file_path`, `path`, `pattern`, `query`, `url`, `prompt`, `skill`), отредактированное |
-| `externalReference` | указатель в транскрипт: `<адаптер>:session/<id>#call/<n>` |
+| `action` | `tool.<name>`; only `[A-Za-z0-9_.:/-]` is kept from the name, everything else becomes `_`; up to 200 characters |
+| `metadata.summary` | one line up to 160 characters: the first meaningful input field (`command`, `cmd`, `file_path`, `path`, `pattern`, `query`, `url`, `prompt`, `skill`), redacted |
+| `externalReference` | pointer into the transcript: `<adapter>:session/<id>#call/<n>` |
 
-Run actions несут **ссылки, а не полезную нагрузку**: входы и выходы живут только в
-артефакте.
+Run actions carry **references, not payload**: inputs and outputs live only in the artifact.
 
-Особые случаи:
+Special cases:
 
-- вызов, результат которого так и не пришёл (падение, таймаут), по окончании хода
-  закрывается со статусом `failed`;
-- если run упёрся в свой бюджет actions (`budget_exceeded`), адаптер перестаёт писать
-  actions, но продолжает работу; транскрипт по-прежнему содержит всё;
-- сбой записи action пишется в журнал runner'а и проглатывается — учёт не должен
-  превращать сделанную работу в провал.
+- a call whose result never arrived (crash, timeout) is closed with status `failed` when the
+  turn ends;
+- if the run hits its actions budget (`budget_exceeded`), the adapter stops writing actions
+  but keeps working; the transcript still contains everything;
+- a failure to write an action is logged to the runner log and swallowed — bookkeeping must
+  not turn completed work into a failure.
 
-Кроме `tool.*` каждый ход оборачивается action'ом `claude-code.turn` / `codex.turn` со
-ссылкой на сессию агента.
+Besides `tool.*`, every turn is wrapped in a `claude-code.turn` / `codex.turn` action with a
+reference to the agent session.
 
-## Checkpoints прогона
+## Run checkpoints
 
-Трасса дополняется checkpoints, которые пишут адаптер и демон:
+The trace is complemented by checkpoints written by the adapter and the daemon:
 
-| `kind` | Кто | Данные |
+| `kind` | Who | Data |
 |---|---|---|
-| `execution.workspace` | демон | ключ копии, ветка, базовый коммит, ревизии соседей; после коммита — `head`, `published` |
-| `claude-code.session` | адаптер | `claudeSessionId`, `resumed`, `phase` (`started` / `finished` / `failed`), `subtype`, `turns` |
-| `codex.session` | адаптер | `codexSessionId`, `phase` |
-| `opencode.session` | харнесс OpenCode | `openCodeSessionId`, `lastMessageId` |
+| `execution.workspace` | daemon | copy key, branch, base commit, neighbour revisions; after the commit — `head`, `published` |
+| `claude-code.session` | adapter | `claudeSessionId`, `resumed`, `phase` (`started` / `finished` / `failed`), `subtype`, `turns` |
+| `codex.session` | adapter | `codexSessionId`, `phase` |
+| `opencode.session` | OpenCode harness | `openCodeSessionId`, `lastMessageId` |
 
-## Где это читать
+## Where to read it
 
 === "MCP"
 
     ```text
-    cp_get_run(run_id)              → сам run
-    cp_get_run_context(run_id)      → checkpoints, артефакты, approvals
+    cp_get_run(run_id)              → the run itself
+    cp_get_run_context(run_id)      → checkpoints, artifacts, approvals
     cp_list_artifacts(task_id)      → report, transcript, commit
     ```
 
@@ -199,17 +200,18 @@ Run actions несут **ссылки, а не полезную нагрузку
     curl -sS "$CP/api/v1/artifacts?taskId=<task-id>" -H "Authorization: Bearer $TOKEN"
     ```
 
-## Локальный журнал на хосте
+## Local log on the host
 
-Сырой поток CLI (stream-json Claude Code или JSON-события Codex) и stderr пишутся в
-`<runtime>/sessions/<publicId>-<session>.jsonl` с правами `0600`. Потолок — 32 МБ на файл за
-всю его жизнь, включая продолженные ходы; сверх потолка строки не пишутся. Это единственное
-место, где остаётся prompt и полный вывод, — доступ к нему ограничен доступом к хосту
-runner'а. Выключается `CONTROL_PLANE_CLAUDE_LOGS=0` / `CONTROL_PLANE_CODEX_LOGS=0`.
+The raw CLI stream (Claude Code stream-json or Codex JSON events) and stderr are written to
+`<runtime>/sessions/<publicId>-<session>.jsonl` with permissions `0600`. The cap is 32 MB per
+file over its whole lifetime, including resumed turns; lines beyond the cap are not written.
+This is the only place where the prompt and the full output remain — access to it is limited
+by access to the runner host. Turn it off with `CONTROL_PLANE_CLAUDE_LOGS=0` /
+`CONTROL_PLANE_CODEX_LOGS=0`.
 
-## См. также
+## See also
 
-- [Артефакты и комментарии](../control-plane/artifacts.md)
-- [Исполнение — claims и runs](../control-plane/execution.md)
-- [Адаптеры исполнителей](adapters.md)
-- [Модель безопасности](../overview/security-model.md)
+- [Artifacts and comments](../control-plane/artifacts.md)
+- [Execution — claims and runs](../control-plane/execution.md)
+- [Executor adapters](adapters.md)
+- [Security model](../overview/security-model.md)

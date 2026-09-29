@@ -1,5 +1,5 @@
-site_name: Taimen — руководство по платформе
-site_description: Техническая и эксплуатационная документация платформы Taimen
+site_name: Taimen Platform Guide
+site_description: Technical and operations documentation for the Taimen platform
 docs_dir: docs
 site_dir: site
 use_directory_urls: false
@@ -7,7 +7,7 @@ strict: true
 
 theme:
   name: material
-  language: ru
+  language: en
   features:
     - navigation.tabs
     - navigation.sections
@@ -28,14 +28,14 @@ theme:
       accent: teal
       toggle:
         icon: material/weather-night
-        name: Тёмная тема
+        name: Dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: blue grey
       accent: teal
       toggle:
         icon: material/weather-sunny
-        name: Светлая тема
+        name: Light mode
   font:
     text: Inter
     code: JetBrains Mono
@@ -45,7 +45,101 @@ extra_css:
 
 plugins:
   - search:
-      lang: [ru, en]
+      lang:
+        - en
+        - ru
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: ru
+          name: Русский
+          build: true
+          site_name: Taimen — руководство по платформе
+          site_description: Техническая и эксплуатационная документация платформы Taimen
+          nav_translations:
+            Home: Главная
+            Overview: Обзор
+            What is Taimen: Что такое Taimen
+            Architecture: Архитектура
+            Key concepts: Ключевые понятия
+            Components: Состав поставки
+            Security model: Модель безопасности
+            Getting started: Быстрый старт
+            Requirements: Требования
+            Installation and first run: Установка и первый запуск
+            .env configuration: Конфигурация .env
+            First task: Первая задача
+            Work model: Модель работы
+            Task types and statuses: Типы задач и статусы
+            Goals, acceptance and evidence: Цели, приёмка и evidence
+            Work rules: Правила вывода работы
+            'Execution: claims and runs': Исполнение — claims и runs
+            Artifacts and comments: Артефакты и комментарии
+            Events: События
+            Event subscriptions: Подписки на события
+            Harness protocol: Харнесс-протокол
+            Task context and memory: Контекст задачи и память
+            Catalog packages: Пакеты каталога
+            Authorization and permissions: Авторизация и права
+            CLI and MCP server: CLI и MCP-сервер
+            Configuration: Конфигурация
+            Processes: Процессы
+            Processes and the knowledge base: Процессы и база знаний
+            Expressions: Выражения
+            Package tests: Тесты пакета
+            Tenants and principals: Tenants и principals
+            Credentials and PATs: Credentials и PAT
+            Tokens, audiences, scopes: Токены, audiences, scopes
+            Identity federation: Федерация identity
+            Memory: Память
+            Knowledge model: Модель знаний
+            Namespaces and access: Namespaces и доступ
+            Knowledge ingestion: Загрузка знаний
+            Retrieval and context assembly: Поиск и сборка контекста
+            Notifications: Уведомления
+            Notification rules: Правила уведомлений
+            Agents and runner: Агенты и runner
+            Agent identity: Identity агента
+            Executor adapters: Адаптеры исполнителей
+            Execution workspaces: Рабочие копии
+            Run trace: Трасса прогонов
+            Operator guide: Работа оператора
+            MCP plugin for Claude Code: MCP-плагин для Claude Code
+            Everyday workflows: Повседневные сценарии
+            SDKs and integrations: SDK и интеграции
+            Service clients: Клиенты сервисов
+            Vertical packages: Вертикальные пакеты
+            Operations: Эксплуатация
+            Production deployment: Промышленное развёртывание
+            Edge and TLS: Периметр и TLS
+            Upgrades and migrations: Обновление и миграции
+            Secrets and rotation: Секреты и ротация
+            Backup: Резервное копирование
+            Object storage (MinIO): Хранилище объектов (MinIO)
+            Monitoring and health: Мониторинг и здоровье
+            Capacity and scaling: Ресурсы и масштабирование
+            Emergency procedures: Аварийные процедуры
+            Troubleshooting: Диагностика
+            Installation and startup: Установка и запуск
+            Authentication and access: Аутентификация и доступ
+            Execution and runner: Исполнение и runner
+            Memory and context: Память и контекст
+            Reference: Справочник
+            Environment variables: Переменные окружения
+            Core service APIs: API сервисов ядра
+            Services and ports: Сервисы и порты
+            Permissions and scopes: Права и scopes
+            Process language schema: Схема языка процессов
+            Error codes: Коды ошибок
+            Make targets: Цели make
+            Glossary: Глоссарий
 
 markdown_extensions:
   - abbr
@@ -85,107 +179,107 @@ validation:
     unrecognized_links: info
 
 nav:
-  - Главная: index.md
-  - Обзор:
+  - Home: index.md
+  - Overview:
       - overview/index.md
-      - Что такое Taimen: overview/what-is-taimen.md
-      - Архитектура: overview/architecture.md
-      - Ключевые понятия: overview/concepts.md
-      - Состав поставки: overview/components.md
-      - Модель безопасности: overview/security-model.md
-  - Быстрый старт:
+      - What is Taimen: overview/what-is-taimen.md
+      - Architecture: overview/architecture.md
+      - Key concepts: overview/concepts.md
+      - Components: overview/components.md
+      - Security model: overview/security-model.md
+  - Getting started:
       - getting-started/index.md
-      - Требования: getting-started/requirements.md
-      - Установка и первый запуск: getting-started/quickstart.md
-      - Конфигурация .env: getting-started/configuration.md
+      - Requirements: getting-started/requirements.md
+      - Installation and first run: getting-started/quickstart.md
+      - .env configuration: getting-started/configuration.md
       - Bootstrap: getting-started/bootstrap.md
-      - Первая задача: getting-started/first-task.md
+      - First task: getting-started/first-task.md
   - Control Plane:
       - control-plane/index.md
-      - Модель работы: control-plane/work-model.md
-      - Типы задач и статусы: control-plane/task-types.md
-      - Цели, приёмка и evidence: control-plane/goals-and-evidence.md
-      - Правила вывода работы: control-plane/work-rules.md
-      - Исполнение — claims и runs: control-plane/execution.md
+      - Work model: control-plane/work-model.md
+      - Task types and statuses: control-plane/task-types.md
+      - Goals, acceptance and evidence: control-plane/goals-and-evidence.md
+      - Work rules: control-plane/work-rules.md
+      - 'Execution: claims and runs': control-plane/execution.md
       - Approvals: control-plane/approvals.md
-      - Артефакты и комментарии: control-plane/artifacts.md
-      - События: control-plane/events.md
-      - Подписки на события: control-plane/event-subscriptions.md
-      - Харнесс-протокол: control-plane/harness-protocol.md
-      - Контекст задачи и память: control-plane/context.md
-      - Пакеты каталога: control-plane/catalog-packages.md
-      - Авторизация и права: control-plane/authorization.md
-      - CLI и MCP-сервер: control-plane/cli-and-mcp.md
+      - Artifacts and comments: control-plane/artifacts.md
+      - Events: control-plane/events.md
+      - Event subscriptions: control-plane/event-subscriptions.md
+      - Harness protocol: control-plane/harness-protocol.md
+      - Task context and memory: control-plane/context.md
+      - Catalog packages: control-plane/catalog-packages.md
+      - Authorization and permissions: control-plane/authorization.md
+      - CLI and MCP server: control-plane/cli-and-mcp.md
       - API: control-plane/api.md
-      - Конфигурация: control-plane/configuration.md
-  - Процессы:
+      - Configuration: control-plane/configuration.md
+  - Processes:
       - processes/index.md
-      - Процессы и база знаний: processes/knowledge.md
-      - Выражения: processes/expressions.md
-      - Тесты пакета: processes/package-tests.md
+      - Processes and the knowledge base: processes/knowledge.md
+      - Expressions: processes/expressions.md
+      - Package tests: processes/package-tests.md
   - IAM:
       - iam/index.md
-      - Tenants и principals: iam/principals.md
-      - Credentials и PAT: iam/credentials.md
-      - Токены, audiences, scopes: iam/tokens.md
+      - Tenants and principals: iam/principals.md
+      - Credentials and PATs: iam/credentials.md
+      - Tokens, audiences, scopes: iam/tokens.md
       - Service accounts: iam/service-accounts.md
-      - Федерация identity: iam/federation.md
+      - Identity federation: iam/federation.md
       - API: iam/api.md
-      - Конфигурация: iam/configuration.md
-  - Память:
+      - Configuration: iam/configuration.md
+  - Memory:
       - memory/index.md
-      - Модель знаний: memory/knowledge-model.md
-      - Namespaces и доступ: memory/namespaces.md
-      - Загрузка знаний: memory/ingestion.md
-      - Поиск и сборка контекста: memory/retrieval.md
+      - Knowledge model: memory/knowledge-model.md
+      - Namespaces and access: memory/namespaces.md
+      - Knowledge ingestion: memory/ingestion.md
+      - Retrieval and context assembly: memory/retrieval.md
       - API: memory/api.md
-      - Конфигурация: memory/configuration.md
-  - Уведомления:
+      - Configuration: memory/configuration.md
+  - Notifications:
       - notifications/index.md
-      - Правила уведомлений: notifications/notification-rules.md
+      - Notification rules: notifications/notification-rules.md
       - Telegram: notifications/telegram.md
-  - Агенты и runner:
+  - Agents and runner:
       - runner/index.md
-      - Identity агента: runner/agent-identity.md
-      - Адаптеры исполнителей: runner/adapters.md
-      - Рабочие копии: runner/execution-workspace.md
-      - Трасса прогонов: runner/trace.md
-      - Конфигурация: runner/configuration.md
-  - Работа оператора:
+      - Agent identity: runner/agent-identity.md
+      - Executor adapters: runner/adapters.md
+      - Execution workspaces: runner/execution-workspace.md
+      - Run trace: runner/trace.md
+      - Configuration: runner/configuration.md
+  - Operator guide:
       - operator/index.md
-      - MCP-плагин для Claude Code: operator/mcp-plugin.md
-      - Повседневные сценарии: operator/workflows.md
-  - SDK и интеграции:
+      - MCP plugin for Claude Code: operator/mcp-plugin.md
+      - Everyday workflows: operator/workflows.md
+  - SDKs and integrations:
       - sdk/index.md
       - platform-auth-sdk: sdk/platform-auth-sdk.md
-      - Клиенты сервисов: sdk/clients.md
+      - Service clients: sdk/clients.md
       - skill-sdk: sdk/skill-sdk.md
       - platform-llm: sdk/platform-llm.md
-      - Вертикальные пакеты: sdk/vertical-packages.md
-  - Эксплуатация:
+      - Vertical packages: sdk/vertical-packages.md
+  - Operations:
       - operations/index.md
-      - Промышленное развёртывание: operations/deployment.md
-      - Периметр и TLS: operations/edge-and-tls.md
-      - Обновление и миграции: operations/upgrades.md
-      - Секреты и ротация: operations/secrets.md
-      - Резервное копирование: operations/backup.md
-      - Хранилище объектов (MinIO): operations/object-storage.md
-      - Мониторинг и здоровье: operations/monitoring.md
-      - Ресурсы и масштабирование: operations/capacity.md
-      - Аварийные процедуры: operations/emergency.md
-  - Диагностика:
+      - Production deployment: operations/deployment.md
+      - Edge and TLS: operations/edge-and-tls.md
+      - Upgrades and migrations: operations/upgrades.md
+      - Secrets and rotation: operations/secrets.md
+      - Backup: operations/backup.md
+      - Object storage (MinIO): operations/object-storage.md
+      - Monitoring and health: operations/monitoring.md
+      - Capacity and scaling: operations/capacity.md
+      - Emergency procedures: operations/emergency.md
+  - Troubleshooting:
       - troubleshooting/index.md
-      - Установка и запуск: troubleshooting/startup.md
-      - Аутентификация и доступ: troubleshooting/auth.md
-      - Исполнение и runner: troubleshooting/runner.md
-      - Память и контекст: troubleshooting/memory.md
-  - Справочник:
+      - Installation and startup: troubleshooting/startup.md
+      - Authentication and access: troubleshooting/auth.md
+      - Execution and runner: troubleshooting/runner.md
+      - Memory and context: troubleshooting/memory.md
+  - Reference:
       - reference/index.md
-      - Переменные окружения: reference/environment.md
-      - API сервисов ядра: reference/api.md
-      - Сервисы и порты: reference/services-and-ports.md
-      - Права и scopes: reference/permissions.md
-      - Схема языка процессов: reference/process-schema.md
-      - Коды ошибок: reference/errors.md
-      - Цели make: reference/make.md
-      - Глоссарий: reference/glossary.md
+      - Environment variables: reference/environment.md
+      - Core service APIs: reference/api.md
+      - Services and ports: reference/services-and-ports.md
+      - Permissions and scopes: reference/permissions.md
+      - Process language schema: reference/process-schema.md
+      - Error codes: reference/errors.md
+      - Make targets: reference/make.md
+      - Glossary: reference/glossary.md

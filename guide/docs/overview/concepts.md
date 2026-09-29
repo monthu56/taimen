@@ -1,27 +1,28 @@
-# Ключевые понятия
 
-Статья — словарь сущностей платформы в том виде, в каком они существуют в коде:
-в таблицах и API Control Plane, IAM и Memory Service. Для каждой сущности указано,
-какой компонент ею владеет, из чего она состоит и чем отличается от соседних
-понятий. Подробные контракты — в разделах компонентов, ссылки даны в конце
-каждого блока.
+# Key concepts
 
-## Карта сущностей
+This page is a dictionary of platform entities as they exist in the code: in
+the tables and APIs of Control Plane, IAM, and Memory Service. For each entity
+it states which component owns it, what it consists of, and how it differs from
+related concepts. Detailed contracts are in the component sections; links are
+given at the end of each block.
+
+## Entity map
 
 ```mermaid
 erDiagram
-    TENANT ||--o{ WORKSPACE : "дерево"
-    WORKSPACE ||--o| PROJECT_PROFILE : "профиль"
+    TENANT ||--o{ WORKSPACE : "tree"
+    WORKSPACE ||--o| PROJECT_PROFILE : "profile"
     TENANT ||--o{ PRINCIPAL : ""
-    PRINCIPAL ||--o{ IAM_BINDING : "identity IAM"
-    TENANT ||--o{ TASK_TYPE : "версии"
-    TASK_TYPE ||--o{ TASK : "задачи типа"
+    PRINCIPAL ||--o{ IAM_BINDING : "IAM identity"
+    TENANT ||--o{ TASK_TYPE : "versions"
+    TASK_TYPE ||--o{ TASK : "tasks of type"
     WORKSPACE ||--o{ TASK : ""
     GOAL ||--o{ TASK : "goalId"
-    TASK ||--o{ CLAIM : "аренда"
-    PRINCIPAL ||--o{ SESSION : "клиент"
+    TASK ||--o{ CLAIM : "lease"
+    PRINCIPAL ||--o{ SESSION : "client"
     SESSION ||--o{ CLAIM : ""
-    CLAIM ||--o{ RUN : "попытки"
+    CLAIM ||--o{ RUN : "attempts"
     RUN ||--o{ CHECKPOINT : ""
     RUN ||--o{ RUN_ACTION : ""
     TASK ||--o{ ARTIFACT : ""
@@ -29,330 +30,341 @@ erDiagram
     TASK ||--o{ COMMENT : ""
 ```
 
-## Организационный scope
+## Organizational scope
 
 ### Tenant
 
-Организация-арендатор: граница изоляции данных. У tenant есть запись и в IAM
-(`/api/v1/tenants`), и в Control Plane (таблица `tenants`). В новой инсталляции
-bootstrap создаёт tenant Control Plane **с тем же UUID**, что и tenant IAM, —
-один идентификатор организации на всю платформу. Все запросы Control Plane
-выполняются в tenant того principal, чей токен предъявлен; поле `tenant_id`
-приходит из токена, а не из тела запроса.
+The tenant organization: the boundary of data isolation. A tenant has a record
+both in IAM (`/api/v1/tenants`) and in Control Plane (the `tenants` table). In a
+new installation, bootstrap creates the Control Plane tenant **with the same
+UUID** as the IAM tenant, so the organization has one identifier across the
+whole platform. Every Control Plane request runs in the tenant of the principal
+whose token is presented; the `tenant_id` field comes from the token, not from
+the request body.
 
 ### Workspace
 
-Узел **единственного дерева** организационного scope внутри tenant: портфель,
-программа, проект, команда, поток работ — всё это workspace разных типов.
-Workspace одновременно:
+A node in the **single tree** of organizational scope within a tenant:
+portfolio, program, project, team, and workstream are all workspaces of
+different types. A workspace is at once:
 
-- узел иерархии (`parent`, `GET /api/v1/workspaces/tree`);
-- область прав (участники `workspace_members` с ролями);
-- scope для задач, артефактов, approvals и памяти (namespace
+- a node in the hierarchy (`parent`, `GET /api/v1/workspaces/tree`);
+- a permission scope (members in `workspace_members` with roles);
+- the scope for tasks, artifacts, approvals, and memory (namespace
   `tenant:<tenant-id>:ws:<workspace-id>`).
 
-Тип узла задаёт **Workspace Type** (`/api/v1/workspace-types`): схема полей и
-допустимые дочерние типы. Системный тип — `generic`. Статусы workspace —
-`active`, `archived`.
+The node type is set by a **Workspace Type** (`/api/v1/workspace-types`): a
+field schema and the allowed child types. The system type is `generic`.
+Workspace statuses are `active` and `archived`.
 
-### Project Profile и Project Template
+### Project Profile and Project Template
 
-**Project** — не второе дерево, а конфигурируемый профиль, прикреплённый к
-workspace (`/api/v1/projects`). Иерархия проектов выводится из дерева workspace
-и нигде не хранится отдельно; поле `projectId` у задачи вычисляется при чтении.
+A **Project** is not a second tree but a configurable profile attached to a
+workspace (`/api/v1/projects`). The project hierarchy is derived from the
+workspace tree and is not stored separately anywhere; a task's `projectId` field
+is computed on read.
 
-Профиль создаётся из **Project Template** (`/api/v1/project-templates`) —
-версионированного шаблона со схемой полей, жизненным циклом проекта, конфигурацией
-по умолчанию, представлениями, governance и настройками памяти. Изменения
-конфигурации профиля записываются как **config revisions**, а
-`GET /api/v1/projects/{id}/effective-config` показывает итоговую конфигурацию с
-происхождением каждого значения.
+A profile is created from a **Project Template** (`/api/v1/project-templates`),
+a versioned template with a field schema, a project lifecycle, default
+configuration, views, governance, and memory settings. Changes to a profile's
+configuration are recorded as **config revisions**, and
+`GET /api/v1/projects/{id}/effective-config` shows the resulting configuration
+with the origin of each value.
 
-См. [Модель работы](../control-plane/work-model.md).
+See [Work model](../control-plane/work-model.md).
 
-## Участники
+## Participants
 
 ### Principal
 
-Участник работы в Control Plane: человек, агент или сервис.
+A participant in work in Control Plane: a human, an agent, or a service.
 
-| Поле | Значения |
+| Field | Values |
 |---|---|
 | `kind` | `human`, `agent`, `service` |
 | `status` | `active`, `paused`, `disabled` |
 
-Principal Control Plane — локальная запись, к которой привязываются права. Сама
-identity живёт в IAM: там у principal виды `human`, `agent`, `service_account`,
-`workload` (последние два в Control Plane отображаются в `service`).
+A Control Plane principal is a local record to which permissions are attached.
+The identity itself lives in IAM, where principals have the kinds `human`,
+`agent`, `service_account`, and `workload` (the last two map to `service` in
+Control Plane).
 
 ### IAM binding
 
-Связь identity IAM с локальным principal Control Plane — строка
-`iam_principal_bindings`, адресуемая парой **(issuer, IAM principal id)**. В ней
-же лежат **permissions** principal в Control Plane (например, `tasks.read`,
-`tasks.claim`, `admin`). Статусы binding: `active`, `disabled`, `revoked`.
-Управляется API `POST /api/v1/principals/{id}/iam-bindings`.
+The link between an IAM identity and a local Control Plane principal: a row in
+`iam_principal_bindings`, addressed by the pair **(issuer, IAM principal id)**.
+The same row holds the principal's **permissions** in Control Plane (for
+example, `tasks.read`, `tasks.claim`, `admin`). Binding statuses are `active`,
+`disabled`, and `revoked`. It is managed through the API
+`POST /api/v1/principals/{id}/iam-bindings`.
 
-!!! warning "Смена issuer"
-    Binding ищется по issuer. Если сменить публичный адрес платформы
-    (`TAIMEN_PUBLIC_URL`), issuer токенов изменится, и все bindings перестанут
-    находиться — их нужно перенести тем же действием. См.
-    [Модель безопасности](security-model.md).
+!!! warning "Changing the issuer"
+    Bindings are looked up by issuer. If you change the platform's public
+    address (`TAIMEN_PUBLIC_URL`), the token issuer changes and none of the
+    bindings will be found anymore; you must migrate them in the same step. See
+    the [Security model](security-model.md).
 
 ### Delegation
 
-Разрешение человека агенту действовать от его имени с подмножеством прав и
-окном действия (`humanPrincipalId`, `agentPrincipalId`, `permissions`,
-`startsAt`, `expiresAt`). Сессия агента открывается с `onBehalfOf`, и Control
-Plane проверяет наличие действующей делегации.
+Permission from a human for an agent to act on their behalf with a subset of
+permissions and a validity window (`humanPrincipalId`, `agentPrincipalId`,
+`permissions`, `startsAt`, `expiresAt`). The agent's session is opened with
+`onBehalfOf`, and Control Plane checks that a valid delegation exists.
 
 ### Role, Capability, Skill
 
-Три способа описать, **кто может** взять работу:
+Three ways to describe **who can** take on work:
 
-| Понятие | Что это | API |
+| Concept | What it is | API |
 |---|---|---|
-| **Role** | организационная роль (slug), назначается principal в tenant или workspace | `/api/v1/roles`, `/api/v1/principals/{id}/roles` |
-| **Capability** | именованная способность исполнителя («умеет X») | `/api/v1/capabilities`, `/api/v1/principals/{id}/capabilities` |
-| **Skill** | версионированный вызываемый контракт: `protocol` (`http`, `local`, `mcp`), `inputSchema`/`outputSchema`, `sideEffects` (`none`, `external_read`, `external_write`), `riskLevel` (`low`, `medium`, `high`), статус `active`/`deprecated`/`disabled` | `/api/v1/skills`, `/api/v1/principals/{id}/skills` |
+| **Role** | an organizational role (slug), assigned to a principal in a tenant or workspace | `/api/v1/roles`, `/api/v1/principals/{id}/roles` |
+| **Capability** | a named ability of an executor ("can do X") | `/api/v1/capabilities`, `/api/v1/principals/{id}/capabilities` |
+| **Skill** | a versioned callable contract: `protocol` (`http`, `local`, `mcp`), `inputSchema`/`outputSchema`, `sideEffects` (`none`, `external_read`, `external_write`), `riskLevel` (`low`, `medium`, `high`), status `active`/`deprecated`/`disabled` | `/api/v1/skills`, `/api/v1/principals/{id}/skills` |
 
-Задача объявляет **requirements** — списки ролей, capabilities и skills; только
-principal, удовлетворяющий им, увидит её в доступной работе и сможет взять.
-Вызов скилла ядром — **Skill Invocation** (`/api/v1/skill-invocations`, статусы
-`pending`, `running`, `succeeded`, `failed`, `cancelled`); право просить вызов
-(`skills.invoke`) и право исполнять вызовы (`skills.execute`) разделены.
+A task declares **requirements**: lists of roles, capabilities, and skills. Only
+a principal that satisfies them sees the task in available work and can claim
+it. A skill call made by the core is a **Skill Invocation**
+(`/api/v1/skill-invocations`, statuses `pending`, `running`, `succeeded`,
+`failed`, `cancelled`); the right to request an invocation (`skills.invoke`) and
+the right to execute invocations (`skills.execute`) are separate.
 
-Не путайте capability principal с **capabilities харнесса** — это разное: второе
-описывает, что умеет клиентская программа (см. Session ниже).
+Do not confuse a principal's capabilities with **harness capabilities**. They
+are different things: the latter describe what the client program can do (see
+Session below).
 
-## Работа
+## Work
 
 ### Task (Work Item)
 
-Типизированная единица работы — центральная сущность платформы.
+A typed unit of work and the central entity of the platform.
 
-| Поле | Смысл |
+| Field | Meaning |
 |---|---|
-| `id`, `publicId` | UUID и человекочитаемый номер вида `TASK-000123` (сквозной счётчик tenant) |
-| `typeId`, `typeKey`, `typeVersion` | тип задачи; задача закреплена за конкретной версией типа |
-| `status`, `systemStatusCategory` | ключ статуса из словаря типа и его системная категория |
+| `id`, `publicId` | UUID and a human-readable number such as `TASK-000123` (a tenant-wide counter) |
+| `typeId`, `typeKey`, `typeVersion` | the task type; a task is pinned to a specific version of its type |
+| `status`, `systemStatusCategory` | the status key from the type's vocabulary and its system category |
 | `priority` | `critical`, `high`, `medium`, `low` |
-| `ownerId`, `assigneeId` | владелец и назначенный исполнитель |
-| `workspaceId`, `projectId` | scope; `projectId` вычисляется из дерева |
-| `customFields`, `startDate`, `dueDate` | поля по схеме типа и плановые даты |
-| `goalId`, `origin`, `acceptance`, `evidence` | связь с целью и документы Work Graph (см. ниже) |
-| `version`, `claimEpoch`, `activeClaimId` | оптимистическая версия (для `If-Match`) и состояние аренды |
+| `ownerId`, `assigneeId` | the owner and the assigned executor |
+| `workspaceId`, `projectId` | scope; `projectId` is computed from the tree |
+| `customFields`, `startDate`, `dueDate` | fields defined by the type's schema, and planned dates |
+| `goalId`, `origin`, `acceptance`, `evidence` | the link to a goal and the Work Graph documents (see below) |
+| `version`, `claimEpoch`, `activeClaimId` | the optimistic version (for `If-Match`) and lease state |
 
-Задачи связываются **relations** направленных типов:
+Tasks are connected by **relations** of directed types:
 
-| Тип | Смысл (`from → to`) |
+| Type | Meaning (`from → to`) |
 |---|---|
-| `parent` | `from` — подзадача `to` |
-| `blocks` | `from` должна завершиться, прежде чем `to` можно взять |
-| `depends_on` | `from` нельзя взять, пока `to` не завершена |
-| `spawned_by` | `from` создана как следствие `to` |
-| `related_to` | свободная связь без семантики исполнения |
+| `parent` | `from` is a subtask of `to` |
+| `blocks` | `from` must finish before `to` can be claimed |
+| `depends_on` | `from` cannot be claimed until `to` is finished |
+| `spawned_by` | `from` was created as a consequence of `to` |
+| `related_to` | a free-form link with no execution semantics |
 
-`blocks` и `depends_on` образуют граф предпосылок и влияют на готовность задачи.
+`blocks` and `depends_on` form a prerequisite graph and affect whether a task is
+ready.
 
-### Task Type и статусы
+### Task Type and statuses
 
-Словарь статусов принадлежит **типу задачи** tenant, а не платформе. Тип
-(`/api/v1/task-types`) версионирован и неизменяем после публикации: изменение —
-это новая версия, прежняя переходит в `deprecated`. Задача всегда помнит версию,
-по которой создана.
+The status vocabulary belongs to the tenant's **task type**, not to the
+platform. A type (`/api/v1/task-types`) is versioned and immutable once
+published: a change is a new version, and the previous one becomes
+`deprecated`. A task always remembers the version it was created with.
 
-Тип состоит из:
+A type consists of:
 
-- `lifecycleSchema` — статусы (ключ + категория + отображаемое имя), переходы,
-  `initialStatus`, `claimStatus` (куда задача переходит при claim),
+- `lifecycleSchema`: statuses (key + category + display name), transitions,
+  `initialStatus`, `claimStatus` (the status a task moves to on claim),
   `releaseStatus`, `completionStatus`;
-- `fieldSchema` — JSON Schema для `customFields`;
-- `approvalSchema` — gates и декларативные **исходы** approval (например,
-  «одобрено → `completeTask`», «отклонено → `ensureWork` задачи правок»);
-- `execution` — привязка типа к скиллу-исполнителю.
+- `fieldSchema`: a JSON Schema for `customFields`;
+- `approvalSchema`: gates and declarative approval **outcomes** (for example,
+  "approved → `completeTask`", "rejected → `ensureWork` for a rework task");
+- `execution`: binds the type to an executor skill.
 
-Ядро принимает решения **только по категории** статуса:
+The core makes decisions **only by status category**:
 
-| Категория | Смысл |
+| Category | Meaning |
 |---|---|
-| `backlog` | работа не начата и не готова |
-| `active` | работа в очереди или в процессе |
-| `blocked` | работа стоит |
-| `terminal_success` | работа сделана |
-| `terminal_cancelled` | работа отменена |
+| `backlog` | work has not started and is not ready |
+| `active` | work is queued or in progress |
+| `blocked` | work is stalled |
+| `terminal_success` | work is done |
+| `terminal_cancelled` | work is cancelled |
 
-Если тип не указан, используется системный тип `task` со статусами `backlog`,
-`todo`, `in_progress`, `blocked`, `done`, `cancelled` (начальный — `todo`, при
-claim — `in_progress`). Типы и другие объекты каталога поставляются как YAML-
-**пакеты каталога** (`packages/`), которые bootstrap приводит к стенду. См.
-[Типы задач и статусы](../control-plane/task-types.md) и
-[Пакеты каталога](../control-plane/catalog-packages.md).
+If no type is given, the system type `task` is used, with the statuses
+`backlog`, `todo`, `in_progress`, `blocked`, `done`, `cancelled` (initial:
+`todo`; on claim: `in_progress`). Types and other catalog objects ship as YAML
+**catalog packages** (`packages/`), which bootstrap applies to the deployment.
+See [Task types and statuses](../control-plane/task-types.md) and
+[Catalog packages](../control-plane/catalog-packages.md).
 
 ### Goal, origin, acceptance, evidence
 
-Документы Work Graph, которые отвечают на вопросы «зачем эта работа» и «как
-понять, что она сделана»:
+Work Graph documents that answer "why does this work exist" and "how do we know
+it is done":
 
-| Понятие | Где | Содержимое |
+| Concept | Where | Contents |
 |---|---|---|
-| **Goal** | `/api/v1/goals` | `title`, `desiredState`, `criteria`, `ownerId`, `workspaceId`, `parentGoalId`, статус `active` / `achieved` / `abandoned` |
-| **origin** | поле задачи (у цели — `createdFrom`) | `{kind, ref?, ruleId?, evidence[]}`; `kind`: `human`, `harness`, `rule`, `parent`, `process`, `external`. Неизменяем после создания |
-| **acceptance** | поле задачи (у цели — `criteria`) | список проверок `{key, kind, description, spec?}`; `kind`: `deterministic`, `external_state`, `human`, `llm_judge` |
-| **evidence** | поле задачи | ссылки на факты `{kind: observation\|artifact\|external, …, check?, note?}` — указатель, а не копия |
+| **Goal** | `/api/v1/goals` | `title`, `desiredState`, `criteria`, `ownerId`, `workspaceId`, `parentGoalId`, status `active` / `achieved` / `abandoned` |
+| **origin** | a task field (on a goal: `createdFrom`) | `{kind, ref?, ruleId?, evidence[]}`; `kind`: `human`, `harness`, `rule`, `parent`, `process`, `external`. Immutable after creation |
+| **acceptance** | a task field (on a goal: `criteria`) | a list of checks `{key, kind, description, spec?}`; `kind`: `deterministic`, `external_state`, `human`, `llm_judge` |
+| **evidence** | a task field | references to facts `{kind: observation\|artifact\|external, …, check?, note?}`: a pointer, not a copy |
 
-Если `origin` не передан, ядро выводит его само: `parent` для подзадачи, иначе по
-виду пишущего principal. Проверки `acceptance` сейчас объявляются и хранятся;
-их автоматическая оценка — отдельный этап. См.
-[Цели, приёмка и evidence](../control-plane/goals-and-evidence.md).
+If `origin` is not supplied, the core derives it: `parent` for a subtask,
+otherwise based on the kind of the writing principal. `acceptance` checks are
+currently declared and stored; evaluating them automatically is a separate
+stage. See [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md).
 
 ### Observation
 
-Явно зафиксированный факт: результат «запомни» от харнесса или наблюдение
-внешней системы, пришедшее через коннектор (`POST /api/v1/observations`). У
-внешнего наблюдения есть `source`, `dedupKey` (повтор возвращает `200` с
-существующим наблюдением вместо `201`) и `observedAt`. Наблюдения попадают в
-журнал Control Plane и оттуда — в память; на них можно ссылаться как на evidence.
+An explicitly recorded fact: the result of a "remember" from a harness, or an
+observation from an external system that arrives through a connector
+(`POST /api/v1/observations`). An external observation has a `source`, a
+`dedupKey` (a repeat returns `200` with the existing observation instead of
+`201`), and `observedAt`. Observations go into the Control Plane log and from
+there into memory; you can reference them as evidence.
 
-## Исполнение
+## Execution
 
-### Session и Harness
+### Session and Harness
 
-**Session** — открытое подключение клиента от имени principal
-(`POST /api/v1/sessions`): `clientName`, `clientVersion`, TTL (по умолчанию
-300 с, от 10 до 3600), heartbeat, статусы `active` / `stale` / `closed`.
-Claim всегда берётся в рамках сессии.
+A **Session** is an open client connection on behalf of a principal
+(`POST /api/v1/sessions`): `clientName`, `clientVersion`, a TTL (default 300 s,
+from 10 to 3600), heartbeat, and statuses `active` / `stale` / `closed`. A
+claim is always taken within a session.
 
-**Harness** — клиентская программа, через которую работает исполнитель (MCP-
-сервер в Claude Code, runner-демон или собственный клиент). При открытии сессии харнесс
-может объявить себя блоком `harness`: `type`, `version`, `protocolVersion`
-(поддерживаются `1` и `2` протокола `control-harness`), `capabilities` —
-например `tasks.interactive`, `checkpoints`, `events.realtime`,
-`active_turn_control.v1`, `child_run_handle.v1`, `skills.protocol.http`.
+A **Harness** is the client program through which an executor works (the MCP
+server in Claude Code, the runner daemon, or your own client). When opening a
+session, the harness can declare itself with a `harness` block: `type`,
+`version`, `protocolVersion` (versions `1` and `2` of the `control-harness`
+protocol are supported), and `capabilities`, for example `tasks.interactive`,
+`checkpoints`, `events.realtime`, `active_turn_control.v1`,
+`child_run_handle.v1`, `skills.protocol.http`.
 
-Сессия получает наблюдаемый `controlLevel` — `human_operated` для человека,
-`connected` для агента или сервиса. Это описание режима, **не** вход
-авторизации. См. [Харнесс-протокол](../control-plane/harness-protocol.md).
+The session gets an observed `controlLevel`: `human_operated` for a human,
+`connected` for an agent or a service. This describes the mode; it is **not**
+an authorization input. See [Harness protocol](../control-plane/harness-protocol.md).
 
-### Claim и fencing token
+### Claim and fencing token
 
-**Claim** — эксклюзивная аренда задачи одним principal в рамках сессии
+A **Claim** is an exclusive lease on a task by one principal within a session
 (`POST /api/v1/tasks/{ref}:claim`):
 
-- у аренды есть TTL (по умолчанию 300 с, от 10 до 3600) и heartbeat
+- the lease has a TTL (default 300 s, from 10 to 3600) and a heartbeat
   (`POST /api/v1/claims/{id}:heartbeat`);
-- статусы: `active`, `released`, `stale` (истёк);
-- освобождение — `:release`, перехват истёкшей аренды — `:reclaim`;
-- при claim задача переходит в `claimStatus` своего типа.
+- statuses: `active`, `released`, `stale` (expired);
+- release is `:release`; taking over an expired lease is `:reclaim`;
+- on claim, the task moves to its type's `claimStatus`.
 
-**Fencing token** — монотонно растущее число, выдаваемое при каждом claim
-(связано с `claimEpoch` задачи). Все записи, меняющие состояние под claim
-(старт run, завершение задачи, изменение с активным claim), обязаны предъявить
-`claimId` и `fencingToken`. Если аренда перехвачена, у старого исполнителя
-устаревший токен, и его записи отвергаются (`stale_claim`). Так «зависший»
-агент, очнувшийся после истечения lease, не может перетереть чужую работу.
+A **fencing token** is a monotonically increasing number issued with every claim
+(tied to the task's `claimEpoch`). Every write that changes state under a claim
+(starting a run, completing a task, a change with an active claim) must present
+`claimId` and `fencingToken`. If the lease has been taken over, the previous
+executor holds an outdated token, and its writes are rejected (`stale_claim`).
+This way a "stuck" agent that wakes up after its lease expired cannot overwrite
+someone else's work.
 
 ### Run
 
-**Run** — одна попытка исполнения задачи под живым claim
-(`POST /api/v1/tasks/{ref}:start-run` с `claimId` и `fencingToken`).
+A **Run** is one attempt to execute a task under a live claim
+(`POST /api/v1/tasks/{ref}:start-run` with `claimId` and `fencingToken`).
 
-| Статус | Смысл |
+| Status | Meaning |
 |---|---|
-| `running` | идёт |
-| `succeeded` | успешно (`:succeed`; по умолчанию атомарно завершает задачу) |
-| `failed` | честный провал (`:fail` с `failureReason`), claim сохраняется |
-| `cancelled` | отменён |
-| `suspended` | приостановлен (ожидание approval, передача человеку); продолжение — новый claim и новый run, читающий checkpoints |
+| `running` | in progress |
+| `succeeded` | succeeded (`:succeed`; by default it completes the task atomically) |
+| `failed` | an honest failure (`:fail` with `failureReason`); the claim is kept |
+| `cancelled` | cancelled |
+| `suspended` | paused (waiting for approval, handed off to a human); continuing means a new claim and a new run that reads the checkpoints |
 
-Внутри run живут:
+A run contains:
 
-- **Checkpoint** — упорядоченная (`seq`) запись состояния для возобновления
-  (`POST /api/v1/runs/{id}/checkpoints`), например `handoff` при передаче;
-- **Run action** — аудит действий исполнителя (вызов инструмента, внешнее
-  действие) со статусами `started` / `completed` / `failed`;
-- **Control messages** — durable-управление активным ходом: `queue`, `steer`,
+- **Checkpoint**: an ordered (`seq`) state record for resumption
+  (`POST /api/v1/runs/{id}/checkpoints`), for example `handoff` during a
+  handoff;
+- **Run action**: an audit record of an executor action (a tool call, an
+  external action) with statuses `started` / `completed` / `failed`;
+- **Control messages**: durable control of the active turn: `queue`, `steer`,
   `redirect`, `request_cancel`, `force_cancel`;
-- **Child handles** — дочерние runs, запущенные из родительского.
+- **Child handles**: child runs launched from the parent run.
 
-Ограничители `maxDurationSeconds` и `maxActions` задаются при старте. См.
-[Исполнение — claims и runs](../control-plane/execution.md).
+The limits `maxDurationSeconds` and `maxActions` are set at start. See
+[Execution — claims and runs](../control-plane/execution.md).
 
 ### Approval
 
-Запрос решения человека по задаче или артефакту (`POST /api/v1/approvals`):
-назначается конкретному principal (`assignedPrincipalId`) или роли
-(`requiredRoleId`), статусы `pending`, `approved`, `rejected`, `cancelled`.
-Решение — `:approve` / `:reject`, для него нужно право `approvals.decide`
-(агентам его не выдают).
+A request for a human decision on a task or an artifact
+(`POST /api/v1/approvals`). It is assigned to a specific principal
+(`assignedPrincipalId`) or to a role (`requiredRoleId`), with statuses
+`pending`, `approved`, `rejected`, `cancelled`. The decision is `:approve` /
+`:reject` and requires the `approvals.decide` permission (agents never get it).
 
-**Gate-approval** (`gate: true`) блокирует завершение задачи, пока не решён.
-Тип задачи может объявить **исходы**: какие действия ядро выполнит после
-решения (завершить задачу, завести задачу правок и т.п.); исполняет их
-`control-plane-worker`, результат виден в `GET /api/v1/approvals/{id}/outcome`.
-См. [Approvals](../control-plane/approvals.md).
+A **gate approval** (`gate: true`) blocks task completion until it is decided.
+A task type can declare **outcomes**: the actions the core performs after the
+decision (complete the task, create a rework task, and so on). They are
+executed by `control-plane-worker`, and the result is visible in
+`GET /api/v1/approvals/{id}/outcome`. See [Approvals](../control-plane/approvals.md).
 
-### Artifact и Comment
+### Artifact and Comment
 
-**Artifact** — зарегистрированный результат работы (`POST /api/v1/artifacts`):
-`type`, `name`, ссылка `uri` или встроенный `content`, `metadata`, привязка к
-задаче, run или workspace, `supersedesArtifactId` для новой версии. Примеры:
-коммит с веткой, транскрипт прогона агента, документ.
+An **Artifact** is a registered result of work (`POST /api/v1/artifacts`):
+`type`, `name`, a `uri` reference or inline `content`, `metadata`, a link to a
+task, run, or workspace, and `supersedesArtifactId` for a new version. Examples:
+a commit with a branch, an agent run transcript, a document.
 
-**Comment** — комментарий к задаче с append-only историей правок; автор берётся
-из credential, а не из тела запроса. См.
-[Артефакты и комментарии](../control-plane/artifacts.md).
+A **Comment** is a comment on a task with an append-only edit history; the
+author is taken from the credential, not from the request body. See
+[Artifacts and comments](../control-plane/artifacts.md).
 
-## Журнал и знание
+## Log and knowledge
 
 ### Event
 
-Каждое изменение пишется в **append-only журнал событий** Control Plane в той
-же транзакции, что и команда: `type`, `entityType`, `entityId`, `actorId`,
-`iamActorId`, `sessionId`, `correlationId`, `payload`, `occurredAt`.
-Чтение — `GET /api/v1/events` с непрозрачным курсором (`nextCursor`,
-`hasMore`) или поток WebSocket `/api/v1/events/ws`. `sequence` — идентификатор
-для аудита, а не курсор. См. [События](../control-plane/events.md).
+Every change is written to the Control Plane **append-only event log** in the
+same transaction as the command: `type`, `entityType`, `entityId`, `actorId`,
+`iamActorId`, `sessionId`, `correlationId`, `payload`, `occurredAt`. You read it
+with `GET /api/v1/events` using an opaque cursor (`nextCursor`, `hasMore`) or
+through the WebSocket stream `/api/v1/events/ws`. `sequence` is an identifier
+for audit, not a cursor. See [Events](../control-plane/events.md).
 
 ### Namespace
 
-Единица изоляции в Memory Service. Control Plane отображает tenant в namespace
-`tenant:<tenant-id>`, а workspace — в поддерево
-`tenant:<tenant-id>:ws:<workspace-id>`. Доступ к namespace определяется
-credential вызывающего (scopes `memory:read`, `memory:write`, `memory:pii` и
-т.д.). См. [Namespaces и доступ](../memory/namespaces.md).
+The unit of isolation in Memory Service. Control Plane maps a tenant to the
+namespace `tenant:<tenant-id>`, and a workspace to the subtree
+`tenant:<tenant-id>:ws:<workspace-id>`. Access to a namespace is determined by
+the caller's credential (scopes `memory:read`, `memory:write`, `memory:pii`,
+and so on). See [Namespaces and access](../memory/namespaces.md).
 
 ### Context Pack
 
-Ограниченный по токенам пакет контекста с provenance, собранный памятью для
-человека или агента. Запрашивается через Control Plane
-(`POST /api/v1/context`) со стратегией `semantic`, `exact`, `graph`, `hybrid`,
-`context` или `briefing` и, при необходимости, `asOf` — состоянием знаний на
-момент времени. См. [Поиск и сборка контекста](../memory/retrieval.md).
+A token-bounded package of context with provenance, assembled by memory for a
+human or an agent. You request it through Control Plane
+(`POST /api/v1/context`) with the strategy `semantic`, `exact`, `graph`,
+`hybrid`, `context`, or `briefing` and, if needed, `asOf`: the state of
+knowledge at a point in time. See
+[Retrieval and context assembly](../memory/retrieval.md).
 
-## Identity и доступ
+## Identity and access
 
-| Понятие | Кратко | Подробно |
+| Concept | In brief | Details |
 |---|---|---|
-| **Audience** | сервис, для которого выпущен токен (`control-plane`, `memory-service`, …); у audience есть реестр `allowedScopes` | [Токены, audiences, scopes](../iam/tokens.md) |
-| **Scope** | потолок прав токена (`control-plane:read`, `control-plane:write`, `control-plane:admin`) | [Права и scopes](../reference/permissions.md) |
-| **Permission** | доменное право Control Plane (`tasks.claim`, `approvals.decide`, `admin`, …), хранится в binding | [Авторизация и права](../control-plane/authorization.md) |
-| **PAT** | Platform Access Token — долгоживущий секрет human/agent, предъявляется только IAM | [Credentials и PAT](../iam/credentials.md) |
-| **Service account** | `clientId` + `clientSecret` сервиса, обмениваются на токен audience | [Service accounts](../iam/service-accounts.md) |
+| **Audience** | the service a token is issued for (`control-plane`, `memory-service`, …); each audience has an `allowedScopes` registry | [Tokens, audiences, scopes](../iam/tokens.md) |
+| **Scope** | the token's permission ceiling (`control-plane:read`, `control-plane:write`, `control-plane:admin`) | [Permissions and scopes](../reference/permissions.md) |
+| **Permission** | a Control Plane domain permission (`tasks.claim`, `approvals.decide`, `admin`, …), stored in the binding | [Authorization and permissions](../control-plane/authorization.md) |
+| **PAT** | Platform Access Token: a long-lived secret of a human or agent, presented only to IAM | [Credentials and PAT](../iam/credentials.md) |
+| **Service account** | a service's `clientId` + `clientSecret`, exchanged for an audience token | [Service accounts](../iam/service-accounts.md) |
 
-## Идемпотентность и версии
+## Idempotency and versions
 
-- Любой изменяющий запрос Control Plane можно послать с заголовком
-  `Idempotency-Key` (1–200 символов): повтор с тем же ключом и тем же телом
-  вернёт сохранённый ответ с заголовком `Idempotency-Replayed: true`.
-  Некоторые операции (управляющие сообщения run, выпуск PAT в IAM) требуют
-  ключ обязательно.
-- Изменение задачи принимает `If-Match` с ожидаемой версией (ETag) — защита от
-  потерянных обновлений.
+- You can send any mutating Control Plane request with an `Idempotency-Key`
+  header (1–200 characters): a repeat with the same key and the same body
+  returns the stored response with the header `Idempotency-Replayed: true`.
+  Some operations (run control messages, PAT issuance in IAM) require the key.
+- A task update accepts `If-Match` with the expected version (ETag), which
+  protects against lost updates.
 
-## См. также
+## See also
 
-- [Глоссарий](../reference/glossary.md)
-- [Архитектура](architecture.md)
-- [Модель безопасности](security-model.md)
-- [Модель работы](../control-plane/work-model.md)
+- [Glossary](../reference/glossary.md)
+- [Architecture](architecture.md)
+- [Security model](security-model.md)
+- [Work model](../control-plane/work-model.md)

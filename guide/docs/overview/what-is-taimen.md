@@ -1,128 +1,134 @@
-# Что такое Taimen
 
-Taimen — Organizational Runtime: среда, в которой работа организации
-исполняется людьми, AI-агентами, детерминированными процессами и программными
-сервисами под общим управлением. Статья объясняет продуктовую идею, организационный
-цикл, на который опирается платформа, и честно разделяет то, что уже реализовано,
-и то, что является целевым направлением.
+# What is Taimen
 
-## Главная сущность — Work
+Taimen is an Organizational Runtime: an environment in which an organization's
+work is carried out by people, AI agents, deterministic processes, and software
+services under shared governance. This page explains the product idea and the
+organizational loop the platform is built on, and it clearly separates what is
+already implemented from what is a target direction.
 
-Большинство систем с AI строятся вокруг агента, чата или модели. В Taimen
-центральная сущность — **работа** (Work): организационное обязательство,
-которое существует независимо от того, кто и чем его исполняет.
+## The central entity is Work
 
-- Работа описывается типизированной задачей — `Task` в Control Plane. Отдельной
-  параллельной сущности «work item» нет: Work Item — это и есть `Task` с
-  версионированным типом (`Task Type`), статусами, полями и правилами.
-- Попытка исполнения — `Run`. Задачу можно исполнять несколько раз, каждый раз
-  новым `Run` под новым `Claim`.
-- Исполнитель заменяем. Человек в рабочем месте, Claude Code или Codex через
-  runner-демон, сервис через HTTP — все работают через одни и те же команды
-  Control Plane: взять задачу (claim), начать run, записать checkpoints и
-  артефакты, завершить.
+Most AI systems are built around an agent, a chat, or a model. In Taimen the
+central entity is **work** (Work): an organizational commitment that exists
+independently of who carries it out and with what tools.
 
-Отсюда главный архитектурный принцип: **Work Graph и authority живут в Control
-Plane, а harness, модель и исполнитель — сменные.**
+- Work is described by a typed task, `Task` in Control Plane. There is no
+  separate, parallel "work item" entity: a Work Item is a `Task` with a
+  versioned type (`Task Type`), statuses, fields, and rules.
+- An attempt to carry out the work is a `Run`. A task can be executed several
+  times, each time as a new `Run` under a new `Claim`.
+- The executor is replaceable. A person at a workstation, Claude Code or Codex
+  through the runner daemon, a service over HTTP: all of them use the same
+  Control Plane commands. They claim the task, start a run, record checkpoints
+  and artifacts, and complete the run.
 
-## Кто исполняет работу
+This gives the main architectural principle: **the Work Graph and authority
+live in Control Plane, while the harness, the model, and the executor are
+replaceable.**
 
-| Исполнитель | Как подключается | Identity |
+## Who carries out the work
+
+| Executor | How it connects | Identity |
 |---|---|---|
-| Человек | MCP-плагин в Claude Code / Codex, CLI `control-plane`, собственный клиент харнесс-протокола | principal вида `human` в IAM и в Control Plane |
-| AI-агент | демон `control-plane-agent` (runner) с адаптерами Claude Code и Codex | principal вида `agent`; права урезаны: без `admin` и `approvals.decide` |
-| Сервис, коннектор | HTTP-клиент с service account IAM или PAT агента | principal вида `service` в Control Plane |
-| Детерминированный процесс | [процесс](../processes/index.md) пакета каталога, который исполняет само ядро; правила исхода approval в типе задачи | действует от личности процесса — описания агента вида `service` или `agent` |
+| Human | MCP plugin in Claude Code / Codex, the `control-plane` CLI, or your own harness protocol client | a principal of kind `human` in IAM and in Control Plane |
+| AI agent | the `control-plane-agent` daemon (runner) with Claude Code and Codex adapters | a principal of kind `agent`; permissions are restricted: no `admin` and no `approvals.decide` |
+| Service, connector | an HTTP client with an IAM service account or an agent PAT | a principal of kind `service` in Control Plane |
+| Deterministic process | a [process](../processes/index.md) from a catalog package, executed by the core itself; approval outcome rules in the task type | acts as the process identity, an agent description of kind `service` or `agent` |
 
-Все исполнители предъявляют Control Plane токен IAM одного audience
-(`control-plane`), а Control Plane сам решает, что им разрешено. Подробности —
-в [Модели безопасности](security-model.md).
+Every executor presents Control Plane with an IAM token for a single audience
+(`control-plane`), and Control Plane itself decides what the executor is allowed
+to do. For details, see the [Security model](security-model.md).
 
-## Организационный цикл
+## The organizational loop
 
-Платформа проектируется вокруг замкнутого цикла:
+The platform is designed around a closed loop:
 
 ```mermaid
 flowchart LR
-    A[Текущее состояние] --> G[Цель<br/>Goal]
-    G --> W[Вывод работы<br/>Task]
-    W --> D[Делегирование<br/>assignee, claim]
-    D --> E[Исполнение<br/>Run]
-    E --> O[Наблюдение<br/>observations, artifacts]
-    O --> V[Проверка<br/>acceptance, evidence, approval]
+    A[Current state] --> G[Goal]
+    G --> W[Work derivation<br/>Task]
+    W --> D["Delegation<br/>assignee, claim"]
+    D --> E[Execution<br/>Run]
+    E --> O["Observation<br/>observations, artifacts"]
+    O --> V["Verification<br/>acceptance, evidence, approval"]
     V --> A
 ```
 
-Как звенья цикла выражены в коде сегодня:
+How each link of the loop is expressed in the code today:
 
-| Звено | Что есть в Control Plane | Состояние |
+| Link | What exists in Control Plane | State |
 |---|---|---|
-| Цель | `Goal` с `desiredState`, `criteria`, иерархией целей (CP-ADR-0062) | реализовано |
-| Работа | `Task` с `origin` (почему существует), `acceptance` (как проверить), `evidence` (ссылки на факты), связью с `goalId` | реализовано; проверки `acceptance` пока только объявляются |
-| Вывод работы из фактов | приём внешних наблюдений `POST /api/v1/observations` с дедупликацией (CP-ADR-0057); декларативные действия `ensureWork` в исходах approval | частично: общего движка правил «наблюдение → работа» пока нет |
-| Делегирование | `assigneeId`, требования ролей/capabilities/skills, `GET /api/v1/work/available`, claim с lease и fencing token | реализовано |
-| Исполнение | `Run`, checkpoints, run actions, управление активным ходом, дочерние runs, вызов скиллов | реализовано |
-| Проверка | approvals с исходами, объявленными типом задачи (CP-ADR-0061); ревью кода вторым исполнителем | реализовано; автоматическая оценка `acceptance` — целевое направление |
-| Память | события Control Plane доставляются в Memory Service; контекст задачи собирается из памяти | реализовано |
+| Goal | `Goal` with `desiredState`, `criteria`, and a goal hierarchy (CP-ADR-0062) | implemented |
+| Work | `Task` with `origin` (why it exists), `acceptance` (how to verify it), `evidence` (references to facts), and a link to `goalId` | implemented; `acceptance` checks are only declared for now |
+| Deriving work from facts | intake of external observations via `POST /api/v1/observations` with deduplication (CP-ADR-0057); declarative `ensureWork` actions in approval outcomes | partial: there is no general "observation → work" rule engine yet |
+| Delegation | `assigneeId`, role/capability/skill requirements, `GET /api/v1/work/available`, claim with a lease and a fencing token | implemented |
+| Execution | `Run`, checkpoints, run actions, control of the active turn, child runs, skill invocation | implemented |
+| Verification | approvals with outcomes declared by the task type (CP-ADR-0061); code review by a second executor | implemented; automatic evaluation of `acceptance` is a target direction |
+| Memory | Control Plane events are delivered to Memory Service; task context is assembled from memory | implemented |
 
-!!! note "Честный статус"
-    Периметр платформы — identity, авторизация, исполнение, память — работает.
-    Центр цикла (автоматический вывод работы из состояния и автоматическая
-    проверка результата) строится: сущности и контракты уже есть, движки правил
-    и оценки acceptance — в разработке. Руководство описывает то, что есть в
-    коде, и помечает остальное.
+!!! note "Current status"
+    The platform perimeter (identity, authorization, execution, memory) works.
+    The center of the loop (automatically deriving work from state and
+    automatically verifying results) is under construction: the entities and
+    contracts exist, while the rule engines and acceptance evaluation are in
+    development. This guide describes what exists in the code and marks
+    everything else.
 
-## Принципы
+## Principles
 
-1. **Один факт — один авторитетный дом.** Работа — в Control Plane, identity —
-   в IAM, знание — в Memory Service, код и конфигурация — в Git.
-2. **Память не управляет работой.** Контекст из памяти может быть устаревшим и
-   никогда не заменяет проверку в Control Plane: claim, fencing token, статус и
-   права проверяются там.
-3. **Identity не равна праву.** IAM подтверждает, *кто* пришёл, и ограничивает
-   токен scope'ами; *что* ему можно, решает сервис-владелец ресурса.
-4. **Внешнее действие начинается с разрешения.** Исполнитель пишет в Control
-   Plane только под живым claim с актуальным fencing token; рискованные шаги
-   проходят через approval.
-5. **Deterministic-first.** LLM закрывает семантическую неопределённость, но не
-   становится источником истины и не заменяет дешёвую детерминированную
-   проверку.
-6. **Product-neutral core.** Компоненты ядра не знают имени продукта, клиента
-   или отрасли; предметная специфика приходит данными — типами задач, шаблонами
-   проектов, скиллами, пакетами каталога.
-7. **Локальная деградация.** Недоступность памяти не блокирует авторитетные
-   операции Control Plane; недоступность внешней системы не повреждает журнал.
+1. **One fact, one authoritative home.** Work lives in Control Plane, identity
+   in IAM, knowledge in Memory Service, code and configuration in Git.
+2. **Memory does not manage work.** Context from memory can be stale and never
+   replaces a check in Control Plane: the claim, fencing token, status, and
+   permissions are verified there.
+3. **Identity is not permission.** IAM confirms *who* is calling and limits the
+   token with scopes; the service that owns the resource decides *what* the
+   caller may do.
+4. **An external action starts with permission.** An executor writes to Control
+   Plane only under a live claim with a current fencing token; risky steps go
+   through approval.
+5. **Deterministic-first.** An LLM resolves semantic uncertainty, but it does
+   not become a source of truth and does not replace a cheap deterministic
+   check.
+6. **Product-neutral core.** Core components do not know the name of the
+   product, the customer, or the industry; domain specifics arrive as data:
+   task types, project templates, skills, catalog packages.
+7. **Local degradation.** Memory being unavailable does not block authoritative
+   Control Plane operations; an external system being unavailable does not
+   corrupt the log.
 
-## Чем Taimen не является
+## What Taimen is not
 
-- **Не чат-бот и не агентный фреймворк.** Агентный цикл живёт в харнессе
-  (Claude Code, Codex); платформа даёт ему работу, права, контекст и журнал.
-- **Не трекер задач.** Задачи здесь — операционные обязательства с lease,
-  fencing и аудитом, а не карточки на доске; интерфейс человека — одна из
-  поверхностей, а не центр системы.
-- **Не хранилище секретов и не CI.** Секреты живут в `.env`/`secrets/` или
-  внешнем Secret Manager; сборка и выкладка — во внешних системах, с которыми
-  исполнители работают под claim.
-- **Не LLM-провайдер.** Память и скиллы используют любой OpenAI-совместимый
-  endpoint; память умеет работать офлайн на заглушках.
+- **Not a chatbot or an agent framework.** The agent loop lives in the harness
+  (Claude Code, Codex); the platform gives it work, permissions, context, and a
+  log.
+- **Not a task tracker.** Tasks here are operational commitments with leases,
+  fencing, and audit, not cards on a board. The human interface is one of
+  several surfaces, not the center of the system.
+- **Not a secret store or a CI system.** Secrets live in `.env`/`secrets/` or an
+  external Secret Manager; builds and deployments happen in external systems
+  that executors work with under a claim.
+- **Not an LLM provider.** Memory and skills use any OpenAI-compatible
+  endpoint; memory can also run offline on stubs.
 
-## Из чего собирается продукт
+## How the product is assembled
 
-Taimen — имя сборки. Компоненты — отдельные product-neutral репозитории,
-подключённые к суперпроекту git-сабмодулями, и запускаются одним `compose.yml`
-с профилями:
+Taimen is the name of the build. The components are separate product-neutral
+repositories, attached to the superproject as git submodules, and they run from
+a single `compose.yml` with profiles:
 
-- ядро (`core`): IAM Service, Control Plane (API, worker, context adapter),
-  Memory Service и их PostgreSQL;
-- периметр (`edge`): Caddy — единственный контейнер, смотрящий наружу;
-- опциональный профиль уведомлений (`notify`).
+- the core (`core`): IAM Service, Control Plane (API, worker, context adapter),
+  Memory Service, and their PostgreSQL databases;
+- the edge (`edge`): Caddy, the only container exposed to the outside;
+- an optional notifications profile (`notify`).
 
-Состав и статусы — в [Составе поставки](components.md), связи — в
-[Архитектуре](architecture.md).
+For contents and statuses, see [Delivery contents](components.md); for how the
+parts connect, see [Architecture](architecture.md).
 
-## См. также
+## See also
 
-- [Ключевые понятия](concepts.md)
-- [Модель работы Control Plane](../control-plane/work-model.md)
-- [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)
-- [Быстрый старт](../getting-started/index.md)
+- [Key concepts](concepts.md)
+- [Work model](../control-plane/work-model.md)
+- [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)
+- [Getting started](../getting-started/index.md)

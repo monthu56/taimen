@@ -1,41 +1,44 @@
-# Тесты пакета
 
-Пакет процессов проверяется без стенда: ядро находит ошибки описания,
-прогоняет тесты сценариев в песочнице с виртуальным временем и заглушками,
-сравнивает новую версию с журналами живых экземпляров и показывает план
-применения. Применяется ровно показанный план — по его хэшу. Статья для
-авторов пакетов и администраторов инсталляции. Обоснование — TAI-ADR-0054
-п.8, CP-ADR-0074 §10–11.
+# Package tests
+
+A process package is verified without a deployment: the core finds errors
+in the description, runs scenario tests in a sandbox with virtual time and
+stubs, compares the new version with the logs of live instances, and shows
+the apply plan. Exactly the plan that was shown is applied, by its hash.
+This article is for package authors and installation administrators.
+Rationale: TAI-ADR-0054 item 8, CP-ADR-0074 §10–11.
 
 ```mermaid
 flowchart LR
-    C[Проверка<br/>checkOnly] --> T[Тесты<br/>песочница] --> R[Replay<br/>по журналу] --> P[План<br/>planHash] --> A[Применение<br/>по хэшу]
-    T -.->|пробный прогон| F[given.fromInstance]
+    C[Check<br/>checkOnly] --> T[Tests<br/>sandbox] --> R[Replay<br/>against the log] --> P[Plan<br/>planHash] --> A[Apply<br/>by hash]
+    T -.->|dry run| F[given.fromInstance]
 ```
 
-Все шаги до применения **ничего не пишут**: транзакция ядра — только на
-чтение, исходящих вызовов у песочницы нет.
+All steps before applying **write nothing**: the core transaction is
+read-only, and the sandbox makes no outgoing calls.
 
-## Проверка { #check }
+## Check { #check }
 
-Две ступени:
+Two stages:
 
-1. **Форма и ссылки — локально**, без стенда:
-   `python3 tools/cp_packages.py check --package packages/<пакет>` сверяет
-   файлы со схемой `packages/schema/v1` и ссылки между объектами пакета.
-2. **Язык — в ядре**: с `--server` те же файлы уходят в
-   `POST /api/v1/packages:test?checkOnly=true`. Ядро проверяет типы всех
-   выражений, неизвестные поля данных, входы и выходы шагов против схемы
-   данных, входы скиллов по их схемам, достижимость шагов и стадий, тупики,
-   ссылки на типы задач, скиллы, календари и агента-личность, перекрытия и
-   пробелы таблиц решений, а также регламенты `governedBy` через базу знаний.
+1. **Form and references, locally**, without a deployment:
+   `python3 tools/cp_packages.py check --package packages/<package>` checks
+   the files against the `packages/schema/v1` schema and the references
+   between the package's objects.
+2. **The language, in the core**: with `--server`, the same files go to
+   `POST /api/v1/packages:test?checkOnly=true`. The core checks the types of
+   all expressions, unknown data fields, step inputs and outputs against the
+   data schema, skill inputs against their schemas, reachability of steps
+   and stages, dead ends, references to task types, skills, calendars, and
+   the identity agent, overlaps and gaps in decision tables, and
+   `governedBy` regulations through the knowledge base.
 
 ```bash
-python3 tools/cp_packages.py check --package packages/<пакет> \
+python3 tools/cp_packages.py check --package packages/<package> \
     --server https://platform.example.com --json
 ```
 
-Каждая находка — машиночитаемая, с местом в файле и подсказкой:
+Every finding is machine-readable, with the location in the file and a hint:
 
 ```json
 {"code": "unknown_data_field", "severity": "error",
@@ -44,31 +47,31 @@ python3 tools/cp_packages.py check --package packages/<пакет> \
  "message": "data has no field decison", "hint": "did you mean decision?"}
 ```
 
-| Группа | Коды (примеры) |
+| Group | Codes (examples) |
 |---|---|
-| форма | `schema_violation`, `invalid_yaml`, `invalid_document`, `unresolved_install_variable`, `unresolved_data_ref` |
-| выражения | `expression_syntax_error`, `expression_type_error`, `expression_too_complex` |
-| данные | `unknown_data_field`, `data_type_mismatch` |
-| ссылки | `unknown_skill`, `unknown_task_type`, `unknown_agent`, `unknown_calendar`, `unknown_decision_table`, `skill_input_missing` |
-| структура | `duplicate_element_id`, `element_kind_changed`, `unreachable_step`, `unreachable_stage`, `dead_end` |
-| таблицы решений | `invalid_table_cell`, `table_overlap`; предупреждения `table_gap`, `table_rule_unreachable` |
-| предупреждения | `process_owner_missing`, `element_removed`, `unwritten_data_field`, `unreachable_milestone`, `governed_by_unknown_document`, `governed_by_unchecked` |
+| form | `schema_violation`, `invalid_yaml`, `invalid_document`, `unresolved_install_variable`, `unresolved_data_ref` |
+| expressions | `expression_syntax_error`, `expression_type_error`, `expression_too_complex` |
+| data | `unknown_data_field`, `data_type_mismatch` |
+| references | `unknown_skill`, `unknown_task_type`, `unknown_agent`, `unknown_calendar`, `unknown_decision_table`, `skill_input_missing` |
+| structure | `duplicate_element_id`, `element_kind_changed`, `unreachable_step`, `unreachable_stage`, `dead_end` |
+| decision tables | `invalid_table_cell`, `table_overlap`; warnings `table_gap`, `table_rule_unreachable` |
+| warnings | `process_owner_missing`, `element_removed`, `unwritten_data_field`, `unreachable_milestone`, `governed_by_unknown_document`, `governed_by_unchecked` |
 
-Ошибка блокирует тесты и применение; предупреждения — нет.
+An error blocks tests and applying; warnings do not.
 
-## Формат теста
+## Test format
 
-Тест — файл `tests/<имя>.test.yaml` пакета по схеме
-`packages/schema/v1/test.schema.json`. Один файл — один сценарий одного
-процесса.
+A test is a package file `tests/<name>.test.yaml` following the schema
+`packages/schema/v1/test.schema.json`. One file is one scenario for one
+process.
 
 ```yaml
 # yaml-language-server: $schema=../../schema/v1/test.schema.json
 process: supplier-invoice
-name: загрузивший счёт не согласует его оплату
+name: the invoice uploader does not approve its payment
 given:
   clock: "2026-10-01T09:00:00+03:00"
-  principals:                       # роль → вымышленные principal'ы теста
+  principals:                       # role → fictitious test principals
     accounting: [1a000000-0000-4000-8000-000000000001, 1a000000-0000-4000-8000-000000000002]
     finance-director: [1f000000-0000-4000-8000-000000000001]
 mocks:
@@ -79,7 +82,7 @@ steps:
   - emit:
       observation: invoice.received
       payload:
-        data: {invoice: "СЧ-1", supplier: "ООО «Поставщик»", supplierInn: "7701234567",
+        data: {invoice: "INV-1", supplier: "Supplier LLC", supplierInn: "7701234567",
                amount: 45000, currency: RUB, uploadedBy: 1a000000-0000-4000-8000-000000000001}
   - complete: {step: check-invoice, by: 1a000000-0000-4000-8000-000000000002, output: {verdict: ok}}
   - approve:
@@ -94,21 +97,22 @@ steps:
 coverage: {minimum: 60}
 ```
 
-### `given` — начальное состояние
+### `given`: the initial state
 
-| Поле | Что задаёт |
+| Field | What it sets |
 |---|---|
-| `clock` | начальное виртуальное время; без него — `2026-01-05T09:00:00Z`, чтобы тест всегда давал один ответ |
-| `data` | начальные данные: явный старт экземпляра с ключом `test` без события старта |
-| `principals` | роль → вымышленные principal'ы теста: кому назначаются задачи роли и кто держит роль при голосовании |
-| `calendar` | ключ календаря вместо календаря процесса |
-| `fromInstance` | пробный прогон: состояние копируется из живого экземпляра (см. [ниже](#dry-run)) |
+| `clock` | the initial virtual time; without it, `2026-01-05T09:00:00Z`, so the test always gives the same answer |
+| `data` | initial data: an explicit instance start with the key `test` without a start event |
+| `principals` | role → fictitious test principals: who receives the role's tasks and who holds the role when voting |
+| `calendar` | a calendar key instead of the process calendar |
+| `fromInstance` | a dry run: the state is copied from a live instance (see [below](#dry-run)) |
 
-### `mocks` — заглушки { #mocks }
+### `mocks`: stubs { #mocks }
 
-Скиллы, агенты и база знаний в тесте — заглушки. Ответы берутся по порядку
-вызовов; после последнего повторяется последний. `step` и `when` (CEL над
-входом вызова) выбирают ответ для конкретного шага или входа.
+Skills, agents, and the knowledge base are stubs in a test. Responses are
+taken in call order; after the last one, the last one repeats. `step` and
+`when` (CEL over the call input) select a response for a specific step or
+input.
 
 ```yaml
 mocks:
@@ -122,120 +126,125 @@ mocks:
       when: input.anchors[0].key == '7700000001'
       output:
         nodes:
-          - {kind: lesson, key: "lesson:purchase:0000000000025000007/1", text: Заказчик снижает цену на переторжке}
+          - {kind: lesson, key: "lesson:purchase:0000000000025000007/1", text: The customer lowers the price at the rebidding round}
         edges: []
-    - {output: {nodes: []}}           # всем остальным recall
+    - {output: {nodes: []}}           # for every other recall
 ```
 
-| Ответ | Что значит |
+| Response | Meaning |
 |---|---|
-| `output` | ответ. Выход заглушки скилла **сверяется со схемой выхода скилла** из каталога: не по схеме — тест падает, а не проходит. Ответ `recall` сверяется с формой ответа памяти |
-| `error: {type, status, detail}` | скилл ответил ошибкой; у `recall` — таймаут шага с этой причиной |
-| `timeout: true` | ответа нет — шаг ждёт своего таймаута |
+| `output` | the response. A skill stub's output **is validated against the skill's output schema** from the catalog: if it does not match, the test fails rather than passes. A `recall` response is validated against the memory response form |
+| `error: {type, status, detail}` | the skill responded with an error; for `recall`, a step timeout with this reason |
+| `timeout: true` | no response: the step waits for its timeout |
 
-Вызов без подходящей заглушки остаётся без ответа, как скилл, который ещё не
-ответил. Ответ заглушки приходит следующим входом, после текущего.
+A call without a matching stub stays unanswered, like a skill that has not
+responded yet. A stub response arrives as the next input, after the current
+one.
 
-### `steps` — сценарий
+### `steps`: the scenario
 
-| Шаг | Что делает |
+| Step | What it does |
 |---|---|
-| `emit: {event или observation, source?, payload}` | подаёт событие так же, как живой цикл: старт или корреляция открытых экземпляров |
-| `advance: P3D` | сдвигает виртуальное время; ожидающие таймеры срабатывают по порядку, каждый в свой момент |
-| `advance: until:<id>` | двигает время до срабатывания таймера с этим id (или таймера этого элемента) |
-| `complete: {step, by, output, cancel?}` | завершает задачу шага от имени исполнителя или держателя роли; `output` сверяется с формой шага и `fieldSchema` типа задачи; `cancel: true` — отмена |
-| `approve: {step, by, decision, expectRefused?}` | голос в согласовании; `expectRefused` — ожидаемый код отказа ядра: `separation_of_duties_violation`, `not_eligible` |
-| `expect: {…}` | ожидания (ниже) |
+| `emit: {event or observation, source?, payload}` | feeds an event the same way as the live loop: a start or correlation of open instances |
+| `advance: P3D` | moves virtual time forward; pending timers fire in order, each at its own moment |
+| `advance: until:<id>` | moves time until the timer with this id (or the timer of this element) fires |
+| `complete: {step, by, output, cancel?}` | completes the step's task on behalf of the executor or a role holder; `output` is validated against the step form and the task type's `fieldSchema`; `cancel: true` cancels it |
+| `approve: {step, by, decision, expectRefused?}` | a vote in an approval; `expectRefused` is the expected core refusal code: `separation_of_duties_violation`, `not_eligible` |
+| `expect: {…}` | expectations (below) |
 
-`expect` проверяет состояние после предыдущих шагов:
+`expect` checks the state after the previous steps:
 
-| Поле | Что сравнивается |
+| Field | What is compared |
 |---|---|
-| `stages` | стадия → `open`, `completed`, `skipped`, `not_started` |
-| `milestones` | достигнутые вехи |
-| `tasks` | задачи: `step`, `status`, `assignee` (исполнитель или `role:<slug>`), `due` |
-| `timers` | таймеры: `id`, `at`, `provisional` |
-| `data` | путь в данных (`a.b` или `/a/b`) → значение |
-| `events` | типы событий `process.*` с прошлого `expect` |
-| `memory` | `recalled` — шаги `recall`, `remembered` — записи `remember` (частичное совпадение) |
-| `status`, `outcome`, `error` | статус экземпляра, исход, тип ошибки |
-| `noSideEffects: true` | прогон не сделал ни одной записи в базу |
+| `stages` | stage → `open`, `completed`, `skipped`, `not_started` |
+| `milestones` | milestones reached |
+| `tasks` | tasks: `step`, `status`, `assignee` (the executor or `role:<slug>`), `due` |
+| `timers` | timers: `id`, `at`, `provisional` |
+| `data` | a data path (`a.b` or `/a/b`) → value |
+| `events` | `process.*` event types since the previous `expect` |
+| `memory` | `recalled` for `recall` steps, `remembered` for `remember` writes (partial match) |
+| `status`, `outcome`, `error` | instance status, outcome, error type |
+| `noSideEffects: true` | the run made no writes to the database |
 
-Невыполнимый шаг (задачи нет, голос неожиданно отвергнут) останавливает тест;
-несбывшееся ожидание — провал шага, но тест идёт дальше и показывает
-`expected` и `actual`.
+A step that cannot be performed (no task, a vote unexpectedly refused)
+stops the test; an unmet expectation fails the step, but the test continues
+and shows `expected` and `actual`.
 
-### Покрытие
+### Coverage
 
-Прогон считает покрытие по всем тестам процесса вместе и перечисляет
-непройденное:
+The run computes coverage across all tests of a process together and lists
+what was not exercised:
 
-| Счётчик | Что считается |
+| Counter | What is counted |
 |---|---|
-| `elements` | стадии, шаги, вехи, таймеры |
-| `transitions` | вход и выход стадий, `when`/`skip` шагов, ветви `listen` и таймауты, ответы и таймауты `recall`, `approved`/`rejected`, ветви `fork`, `correlate`, `onEvent` |
-| `decisionRows` | строки таблиц решений |
-| `handlers` | `catch`, `retry`, `onTimeout`, `onCompensate`, уровни эскалаций, `onDue` |
+| `elements` | stages, steps, milestones, timers |
+| `transitions` | stage entry and exit, step `when`/`skip`, `listen` branches and timeouts, `recall` responses and timeouts, `approved`/`rejected`, `fork` branches, `correlate`, `onEvent` |
+| `decisionRows` | decision table rows |
+| `handlers` | `catch`, `retry`, `onTimeout`, `onCompensate`, escalation levels, `onDue` |
 
-`coverage.minimum` теста — порог доли элементов процесса, которые проходит
-этот тест, в процентах.
+A test's `coverage.minimum` is the threshold, in percent, for the share of
+process elements that this test exercises.
 
-## Как запускать
+## How to run
 
-=== "Ядро (`cp_packages test`)"
+=== "Core (`cp_packages test`)"
 
     ```bash
     CP_TOKEN=<access token audience control-plane> \
-    python3 tools/cp_packages.py test --package packages/<пакет> \
-        --server https://platform.example.com [--test tests/<имя>.test.yaml] [--workspace <workspace-id>]
+    python3 tools/cp_packages.py test --package packages/<package> \
+        --server https://platform.example.com [--test tests/<name>.test.yaml] [--workspace <workspace-id>]
     ```
 
-    Пакет уходит в `POST /api/v1/packages:test` (право `packages.test`).
-    Ядро собирает определения пакета в памяти поверх каталога tenant'а —
-    объекты самого пакета (типы задач, скиллы, агенты, календари) известны
-    его процессам до применения. `--workspace` — чьи роли, календари и
-    экземпляры читает прогон (нужно `processes.read` на него).
+    The package goes to `POST /api/v1/packages:test` (the `packages.test`
+    permission). The core assembles the package's definitions in memory on
+    top of the tenant's catalog, so the package's own objects (task types,
+    skills, agents, calendars) are known to its processes before applying.
+    `--workspace` sets whose roles, calendars, and instances the run reads
+    (it needs `processes.read` on it).
 
-=== "Песочница локально (`package_sandbox.py`)"
+=== "Local sandbox (`package_sandbox.py`)"
 
     ```bash
     PYTHONPATH=control-plane/src:control-plane/client/src \
-    python3 tools/package_sandbox.py <пакет> [--test tests/<имя>.test.yaml] [--json]
+    python3 tools/package_sandbox.py <package> [--test tests/<name>.test.yaml] [--json]
     ```
 
-    Тот же код ядра (движок, проверка, песочница), но в процессе, без стенда и
-    без базы. Каталог — только объекты пакета и его `requires`; `governedBy` с
-    базой знаний не сверяется; переменные `${…}` берутся из `--env` (по
-    умолчанию `.env`) и окружения. Без аргументов — все пакеты с тестами
-    (так тесты пакетов идут в CI). Код выхода `0` — все тесты зелёные и
-    находок-ошибок нет.
+    The same core code (engine, check, sandbox), but in-process, without a
+    deployment and without a database. The catalog contains only the
+    package's objects and its `requires`; `governedBy` is not checked against
+    the knowledge base; `${…}` variables are taken from `--env` (`.env` by
+    default) and the environment. Without arguments, it runs all packages
+    with tests (this is how package tests run in CI). Exit code `0` means all
+    tests are green and there are no error findings.
 
-=== "Из Claude Code"
+=== "From Claude Code"
 
-    Инструмент MCP `cp_pkg_test(path, tests?)` с путём каталога пакета —
-    тот же `POST /packages:test`.
+    The MCP tool `cp_pkg_test(path, tests?)` with the path to the package
+    directory; it is the same `POST /packages:test`.
 
-Вывод:
+Output:
 
 ```text
-== supplier-invoice (песочница ядра в процессе, 136 мс)
-ok   tests/above-threshold.test.yaml: счёт выше порога согласует финансовый директор [supplier-invoice] (13 мс)
-ok   tests/escalation.test.yaml: просроченное согласование эскалируется [supplier-invoice] (7 мс)
-ok   tests/separation-of-duties.test.yaml: загрузивший счёт не согласует его оплату [supplier-invoice] (7 мс)
+== supplier-invoice (in-process core sandbox, 136 ms)
+ok   tests/above-threshold.test.yaml: an invoice above the threshold is approved by the finance director [supplier-invoice] (13 ms)
+ok   tests/escalation.test.yaml: an overdue approval is escalated [supplier-invoice] (7 ms)
+ok   tests/separation-of-duties.test.yaml: the invoice uploader does not approve its payment [supplier-invoice] (7 ms)
 …
-покрытие supplier-invoice v1: elements 13/13, transitions 12/12, decisionRows 2/2, handlers 2/2
-ok (passed): тестов 7, зелёных 7
+coverage supplier-invoice v1: elements 13/13, transitions 12/12, decisionRows 2/2, handlers 2/2
+ok (passed): tests 7, green 7
 ```
 
-Упавший тест печатается как `FAIL <файл>: <имя>` со строками
-`шаг N: <сообщение>` и `ожидалось: …; получено: …`; непройденное покрытие —
-строками `не пройдены (<счётчик>): …`. Ответ ядра — `status` `passed`,
-`failed` или `invalid` (есть находка-ошибка, тесты не запускались).
+A failed test prints as `FAIL <file>: <name>` with the lines
+`step N: <message>` and `expected: …; actual: …`; unexercised coverage
+prints as `not exercised (<counter>): …` lines. The core's response has
+`status` `passed`, `failed`, or `invalid` (there is an error finding, and
+the tests did not run).
 
-## Replay по журналу
+## Replay against the log
 
-Replay прогоняет **кандидата** — новую версию процесса — по журналам
-реальных экземпляров и показывает, где решения разошлись бы с записанными:
+Replay runs a **candidate** (a new version of the process) against the logs
+of real instances and shows where its decisions would diverge from the
+recorded ones:
 
 ```bash
 curl -sS -X POST "https://platform.example.com/api/v1/process-definitions/supplier-invoice:replay" \
@@ -243,92 +252,98 @@ curl -sS -X POST "https://platform.example.com/api/v1/process-definitions/suppli
   -d '{"spec": { … }, "limit": 50}'
 ```
 
-- Экземпляры — `instanceIds` или последние `limit` (по умолчанию 50, не
-  больше 200) экземпляров текущей версии из workspace'ов, где у вызывающего
-  есть `processes.read`. Нужно ещё право `packages.test`.
-- Кандидат идёт под номером версии экземпляра: номер версии — не поведение.
-- Ответы базы знаний на `recall` и версии календарей берутся из журнала —
-  память не зовётся.
-- Расхождение у экземпляра одно, первое: `journalSeq`, `kind` (`decision`,
-  `intent`, `input`, `data`, `timer`, `state`), `element`, `recorded` и
-  `replayed`. Дальше пути разошлись, и сравнивать нечего.
-- Replay текущей версии на её же журнале даёт ноль расхождений; изменённая
-  строка таблицы решений даёт расхождение `decision` ровно у тех экземпляров,
-  чьи входы она решает иначе.
+- Instances are `instanceIds` or the last `limit` (50 by default, at most
+  200) instances of the current version from the workspaces where the caller
+  has `processes.read`. The `packages.test` permission is also required.
+- The candidate runs under the instance's version number: a version number
+  is not behavior.
+- Knowledge base responses to `recall` and calendar versions are taken from
+  the log; memory is not called.
+- An instance has one discrepancy, the first one: `journalSeq`, `kind`
+  (`decision`, `intent`, `input`, `data`, `timer`, `state`), `element`,
+  `recorded`, and `replayed`. After that the paths diverge, and there is
+  nothing to compare.
+- Replaying the current version on its own log gives zero discrepancies; a
+  changed decision table row gives a `decision` discrepancy exactly for the
+  instances whose inputs it decides differently.
 
-## Пробный прогон на живом экземпляре { #dry-run }
+## Dry run on a live instance { #dry-run }
 
-Тест со сценарием `given.fromInstance: <id экземпляра>` продолжает **копию**
-состояния живого экземпляра на версии процесса из пакета:
+A test with the scenario `given.fromInstance: <instance id>` continues a
+**copy** of a live instance's state on the process version from the
+package:
 
 ```yaml
 process: supplier-invoice
-name: пробный прогон — что будет с этим счётом по новой версии
+name: dry run — what happens to this invoice under the new version
 given: {fromInstance: <instance-id>}
 steps:
   - approve: {step: approve-payment, by: <principal-id>, decision: approve}
   - expect: {stages: {payment: open}}
 ```
 
-Открытые задачи и approvals экземпляра становятся объектами песочницы,
-ожидающие вызовы скиллов и `recall` остаются без ответа. Часы — `given.clock`
-или время последнего входа экземпляра. Живой экземпляр не меняется; нужно
-`processes.read` на его workspace. `given.data` рядом с `fromInstance`
-несовместим. Пробный прогон работает только через ядро — у локальной
-песочницы живых экземпляров нет.
+The instance's open tasks and approvals become sandbox objects; pending
+skill calls and `recall` stay unanswered. The clock is `given.clock` or the
+time of the instance's last input. The live instance does not change; you
+need `processes.read` on its workspace. `given.data` is incompatible with
+`fromInstance`. A dry run works only through the core: the local sandbox
+has no live instances.
 
-## План и применение { #plan }
+## Plan and apply { #plan }
 
-План строит ядро: `POST /api/v1/packages:plan` (право `packages.plan`).
-Процессы и календари применяются **только планом ядра**; остальные виды
-пакета ставит обычная установка `cp_packages apply --install`.
+The core builds the plan: `POST /api/v1/packages:plan` (the `packages.plan`
+permission). Processes and calendars are applied **only by a core plan**;
+the other kinds in a package are installed by the regular
+`cp_packages apply --install`.
 
 ```bash
-python3 tools/cp_packages.py plan --install deploy/<окружение>/packages.yaml \
+python3 tools/cp_packages.py plan --install deploy/<environment>/packages.yaml \
     --server https://platform.example.com --out plan.json [--workspace <workspace-id>] [--replay-limit 50]
 python3 tools/cp_packages.py apply --plan plan.json
 ```
 
-Пример вывода (сокращён):
+Sample output (abridged):
 
 ```text
-план supplier-invoice 0.3.0: sha256:3f… (каталог sha256:9a…)
+plan supplier-invoice 0.3.0: sha256:3f… (catalog sha256:9a…)
   ~ Process/supplier-invoice: /spec/stages; /spec/version
-процесс supplier-invoice: v1 → v2
-  поведение (replay): экземпляров 12, расхождений 2: <instance-id>, <instance-id>
-  открытые экземпляры v1: 3 → migrate
-регламент regulation:payments: разделов с элементами 4, без элементов: 5.1
+process supplier-invoice: v1 → v2
+  behavior (replay): instances 12, discrepancies 2: <instance-id>, <instance-id>
+  open instances v1: 3 → migrate
+regulation regulation:payments: sections with elements 4, without elements: 5.1
 ```
 
-| Раздел плана | Что показывает |
+| Plan section | What it shows |
 |---|---|
-| `changes` | структурный diff по объектам: `create` (`+`), `update` (`~`), `rename` (`→`), `unchanged`; у поля — было, стало и владелец: `package` или `console` |
-| `processes[].behaviour` | replay новой версии на `replayLimit` недавних экземплярах: сколько решили бы иначе |
-| `processes[].instances` | судьба открытых экземпляров по версиям: `pin`, `migrate`, `unaffected`; `migrationRequired` |
-| `regulationCoverage` | разделы регламентов и элементы, которые их исполняют; непокрытые разделы |
-| `problems` | находки проверки |
-| `planHash`, `catalogEtag` | хэш плана и отпечаток каталога, на котором он построен |
+| `changes` | a structural diff by object: `create` (`+`), `update` (`~`), `rename` (`→`), `unchanged`; for a field, the old value, the new value, and the owner: `package` or `console` |
+| `processes[].behaviour` | replay of the new version on `replayLimit` recent instances: how many would decide differently |
+| `processes[].instances` | the fate of open instances by version: `pin`, `migrate`, `unaffected`; `migrationRequired` |
+| `regulationCoverage` | regulation sections and the elements that carry them out; uncovered sections |
+| `problems` | check findings |
+| `planHash`, `catalogEtag` | the plan hash and the fingerprint of the catalog it was built on |
 
-- **Поле, которое правил человек в консоли** после последнего применения, —
-  владелец `console`. Пакет его не перетирает: публикуемая версия берёт
-  значение из консоли. Перетереть — план с `overwriteConsole: true` (флаг
-  входит в хэш плана).
-- **Применение — ровно показанный план.** `POST /packages:apply {package,
-  planHash}` строит план заново под блокировкой и сравнивает хэши: стенд,
-  открытые экземпляры или файлы изменились после показа — `409 plan_stale`,
-  нужен новый план. Файл плана, изменённый после построения, `cp_packages`
-  не применяет.
-- **Открытые экземпляры на удалённом элементе** без карты миграции — ошибка
-  плана `migration_required`; такой план не сохраняется, а применение
-  отказывает `422 migration_required`. Прочие ошибки — `422 invalid_package`.
-- Применение — одна транзакция: календари, процессы, перенос экземпляров по
-  `migrate` с событием `process.migrated`, вывод переименованного ключа.
-  Каждое изменение проходит право своего вида (`processes.write`,
+- **A field that a person edited in the console** after the last apply is
+  owned by `console`. The package does not overwrite it: the published
+  version takes the value from the console. To overwrite, use a plan with
+  `overwriteConsole: true` (the flag is part of the plan hash).
+- **Applying means applying exactly the plan shown.**
+  `POST /packages:apply {package, planHash}` rebuilds the plan under a lock
+  and compares the hashes: if the deployment, open instances, or files
+  changed after the plan was shown, you get `409 plan_stale` and need a new
+  plan. `cp_packages` does not apply a plan file that was modified after it
+  was built.
+- **Open instances on a removed element** without a migration map are a
+  `migration_required` plan error; such a plan is not saved, and applying
+  refuses with `422 migration_required`. Other errors give
+  `422 invalid_package`.
+- Applying is one transaction: calendars, processes, moving instances per
+  `migrate` with a `process.migrated` event, retiring a renamed key. Each
+  change passes the permission of its kind (`processes.write`,
   `calendars.write`).
 
-### Переименования и миграции
+### Renames and migrations
 
-- **Объект целиком** — `renames` в `package.yaml`:
+- **A whole object**: `renames` in `package.yaml`:
 
   ```yaml
   spec:
@@ -337,30 +352,31 @@ python3 tools/cp_packages.py apply --plan plan.json
       - {kind: Process, from: invoice-intake, to: supplier-invoice}
   ```
 
-  План показывает `rename`, объект переносится с историей версий, а старый
-  ключ выводится: новых экземпляров не заводит (`409 process_retired`), его
-  открытые экземпляры дорабатывают. Команда
-  `tools/pkg.py rename --package <каталог> --kind Process --from <ключ> --to <ключ>`
-  переименует файл и допишет `renames` сама.
-- **Элемент процесса** — карта `migrations` новой версии
-  (см. [Процессы](index.md#versions)). Команда
-  `tools/pkg.py rename --file <процесс> --from <id> --to <id>` меняет id,
-  ссылки и тесты и дописывает карту.
+  The plan shows `rename`, the object moves with its version history, and
+  the old key is retired: it does not start new instances
+  (`409 process_retired`), and its open instances run to completion. The
+  command
+  `tools/pkg.py rename --package <directory> --kind Process --from <key> --to <key>`
+  renames the file and adds `renames` itself.
+- **A process element**: the `migrations` map of the new version
+  (see [Processes](index.md#versions)). The command
+  `tools/pkg.py rename --file <process> --from <id> --to <id>` changes the
+  id, the references, and the tests and adds the map.
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| тест падает на заглушке скилла | выход заглушки не проходит схему выхода скилла | привести `output` к контракту скилла — так и задумано |
-| задача шага в тесте не появилась, `intent_failed unknown_role` | у роли нет держателей в `given.principals` и она не объявлена в пакете | добавить роль в `given.principals` или пакет |
-| `recall` в тесте уходит в таймаут | нет заглушки `mocks.recall` для шага | добавить ответ (можно общий, без `step`) |
-| `status: invalid`, тесты не запускались | находка-ошибка проверки | исправить по `file`, `line`, `hint` |
-| `plan_stale` при применении | после плана изменились каталог, экземпляры или файлы | построить план заново |
-| «ядро не поддерживает проверку процессов … — проверена только схема» | у ядра нет маршрутов пакетов процессов | обновить Control Plane или запускать `package_sandbox.py` |
+| a test fails on a skill stub | the stub output does not pass the skill's output schema | bring `output` in line with the skill contract; this is by design |
+| the step's task did not appear in the test, `intent_failed unknown_role` | the role has no holders in `given.principals` and is not declared in the package | add the role to `given.principals` or the package |
+| `recall` in a test times out | there is no `mocks.recall` stub for the step | add a response (a generic one without `step` works) |
+| `status: invalid`, the tests did not run | an error finding from the check | fix it using `file`, `line`, `hint` |
+| `plan_stale` when applying | the catalog, instances, or files changed after the plan | build the plan again |
+| "the core does not support process checks … only the schema was checked" | the core has no process package routes | upgrade Control Plane or run `package_sandbox.py` |
 
-## См. также
+## See also
 
-- [Процессы](index.md)
-- [Выражения](expressions.md)
-- [Схема языка процессов](../reference/process-schema.md#schema-test)
-- [Пакеты каталога](../control-plane/catalog-packages.md#processes)
+- [Processes](index.md)
+- [Expressions](expressions.md)
+- [Process language schema](../reference/process-schema.md#schema-test)
+- [Catalog packages](../control-plane/catalog-packages.md#processes)

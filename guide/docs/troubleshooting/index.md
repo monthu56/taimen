@@ -1,78 +1,79 @@
-# Диагностика
 
-Раздел собирает типичные отказы платформы Taimen в формате «симптом →
-причина → решение». Статьи сгруппированы по подсистемам; начинайте с
-общего порядка диагностики ниже, затем переходите к таблице своей подсистемы.
+# Troubleshooting
 
-## Общий порядок
+This section collects common failures of the Taimen platform in a
+"symptom → cause → fix" format. Articles are grouped by subsystem: start with
+the general diagnostic order below, then go to the table for your subsystem.
+
+## General order
 
 ```mermaid
 flowchart TD
-    A[Симптом] --> B{make smoke зелёный?}
-    B -- нет --> C[docker compose ps: какой сервис не healthy]
-    C --> D[docker compose logs сервиса: первая ошибка]
-    D --> S[Установка и запуск]
-    B -- да --> E{Ответ API с кодом ошибки?}
-    E -- 401/403 --> F[Аутентификация и доступ]
-    E -- 503 --> G{Какой сервис?}
+    A[Symptom] --> B{make smoke green?}
+    B -- no --> C[docker compose ps: which service is not healthy]
+    C --> D[docker compose logs for the service: first error]
+    D --> S[Installation and startup]
+    B -- yes --> E{API response with an error code?}
+    E -- 401/403 --> F[Authentication and access]
+    E -- 503 --> G{Which service?}
     G -- IAM/JWKS/PDP --> F
-    G -- память/контекст --> M[Память и контекст]
-    E -- нет, «ничего не происходит» --> R[Исполнение и runner]
-    E -- не пускает через внешний IdP --> P[Федерация IAM]
+    G -- memory/context --> M[Memory and context]
+    E -- no, “nothing happens” --> R[Execution and runner]
+    E -- external IdP login fails --> P[IAM federation]
 ```
 
-Базовые команды — из корня клона суперпроекта:
+Basic commands, run from the root of the superproject clone:
 
 ```bash
-make smoke                                     # health всех запущенных сервисов
-docker compose --profile "*" ps                # статусы, healthcheck, рестарты
-docker compose logs --since 15m <сервис>       # логи
-curl -s http://127.0.0.1:18000/health/ready    # готовность Control Plane
+make smoke                                     # health of all running services
+docker compose --profile "*" ps                # statuses, healthchecks, restarts
+docker compose logs --since 15m <service>      # logs
+curl -s http://127.0.0.1:18000/health/ready    # Control Plane readiness
 curl -s http://127.0.0.1:18000/metrics | grep context_adapter
 ```
 
-## Как читать ошибки
+## How to read errors
 
-Сервисы возвращают ошибки в разных форматах; код ошибки — главный ключ для
-поиска в таблицах раздела.
+Services return errors in different formats; the error code is the main key
+for searching the tables in this section.
 
-| Сервис | Формат тела ошибки | Где код |
+| Service | Error body format | Where the code is |
 |---|---|---|
-| Control Plane | `{"error": {"code", "message", "details", "requestId"}}` | `error.code`; `requestId` — ключ для поиска в логах |
-| IAM | `{"detail": "<code>"}` | `detail` (например, `idempotency_key_required`) |
-| Memory Service | `{"detail": "<текст>"}` | Человекочитаемый текст на русском |
-| Клиент `control-plane` (CLI, MCP, runner) | Сообщение исключения | Код в начале: `iam_credential_ambiguous`, `iam_environment_mode_required` и т. п. |
+| Control Plane | `{"error": {"code", "message", "details", "requestId"}}` | `error.code`; `requestId` is the key for searching the logs |
+| IAM | `{"detail": "<code>"}` | `detail` (for example, `idempotency_key_required`) |
+| Memory Service | `{"detail": "<text>"}` | Human-readable text in Russian |
+| `control-plane` client (CLI, MCP, runner) | Exception message | Code at the start: `iam_credential_ambiguous`, `iam_environment_mode_required`, and so on |
 
-!!! note "Намеренно неинформативные ответы"
-    Некоторые отказы специально не раскрывают причину, чтобы API не служил
-    оракулом для перебора. IAM отвечает одинаковым `401 invalid_token` на
-    отозванный, истёкший, несуществующий PAT и PAT отключённого principal;
-    Control Plane отвечает `401 invalid_credentials` и на битую подпись, и на
-    отсутствующий binding. Точная причина — только в audit IAM и логах
-    сервиса.
+!!! note "Intentionally uninformative responses"
+    Some failures deliberately do not disclose the cause, so that the API
+    cannot serve as an oracle for enumeration. IAM returns the same
+    `401 invalid_token` for a revoked, expired, or nonexistent PAT and for the
+    PAT of a disabled principal; Control Plane returns `401 invalid_credentials`
+    both for a bad signature and for a missing binding. The exact cause is
+    available only in the IAM audit and the service logs.
 
-## Статьи раздела
+## Articles in this section
 
-| Статья | Когда открывать |
+| Article | When to open it |
 |---|---|
-| [Установка и запуск](startup.md) | Не поднимается compose, контейнер `unhealthy`, ошибки сборки, миграций, прав на файлы, Caddy |
-| [Аутентификация и доступ](auth.md) | `401`/`403` от IAM и Control Plane, ошибки выпуска и обмена PAT, bindings, scopes |
-| [Исполнение и runner](runner.md) | Исполнитель не берёт задачи, падает, не публикует ветки, OOM, ошибки credential на runner-хосте |
-| [Память и контекст](memory.md) | Доставка в память встала, контекст деградирован, `401/403/503` от памяти, медленный поиск |
-| [Федерация IAM](../iam/federation.md) | Вход людей через внешний IdP: регистрация провайдера в IAM, ошибки `federation:exchange` |
+| [Installation and startup](startup.md) | Compose does not come up, a container is `unhealthy`, build, migration, file permission, or Caddy errors |
+| [Authentication and access](auth.md) | `401`/`403` from IAM and Control Plane, PAT issuance and exchange errors, bindings, scopes |
+| [Execution and runner](runner.md) | The executor does not claim tasks, crashes, does not publish branches, OOM, credential errors on the runner host |
+| [Memory and context](memory.md) | Delivery to memory has stalled, context is degraded, `401/403/503` from memory, slow search |
+| [IAM federation](../iam/federation.md) | People sign in through an external IdP: provider registration in IAM, `federation:exchange` errors |
 
-## Что собрать перед обращением за помощью
+## What to collect before asking for help
 
-- Коммит суперпроекта (`git rev-parse HEAD`) и `git submodule status`.
-- Вывод `docker compose --profile "*" ps`.
-- Логи затронутого сервиса за период инцидента (без секретов: проверьте, что
-  в выдержке нет токенов и паролей).
-- Точный ответ API: статус, тело ошибки, `requestId` / `request_id`.
-- Для исполнителя — `failure_reason` run и фрагмент лога демона.
+- The superproject commit (`git rev-parse HEAD`) and `git submodule status`.
+- The output of `docker compose --profile "*" ps`.
+- Logs of the affected service for the incident period (without secrets: make
+  sure the excerpt contains no tokens or passwords).
+- The exact API response: status, error body, `requestId` / `request_id`.
+- For an executor: the run's `failure_reason` and a fragment of the daemon log.
 
-## См. также
+## See also
 
-- [Эксплуатация](../operations/index.md)
-- [Мониторинг и здоровье](../operations/monitoring.md)
-- [Аварийные процедуры](../operations/emergency.md)
-- [Коды ошибок](../reference/errors.md)
+- [Operations](../operations/index.md)
+- [Monitoring and health](../operations/monitoring.md)
+- [Emergency procedures](../operations/emergency.md)
+- [Error codes](../reference/errors.md)

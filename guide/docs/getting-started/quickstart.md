@@ -1,60 +1,66 @@
-# Установка и первый запуск
 
-Пошаговая процедура: от клонирования суперпроекта до работающего ядра платформы
-(профили `core edge`), прошедшего bootstrap и smoke-проверку. Рассчитана на
-локальную машину или тестовый сервер; для промышленного стенда шаги те же, но
-`.env` и Caddyfile другие — см. [Промышленное развёртывание](../operations/deployment.md).
+# Installation and first launch
 
-!!! abstract "Что получится в конце"
-    - 9 контейнеров профилей `core` и `edge` в состоянии `running`/`healthy`;
-    - tenant, оператор-человек с правами администратора, проект и workspace;
-    - PAT оператора в `secrets/harness-pat` и service account ядра в
+A step-by-step procedure: from cloning the superproject to a running platform
+core (profiles `core edge`) that has passed bootstrap and the smoke check. It
+is intended for a local machine or a test server; for a production deployment
+the steps are the same, but `.env` and the Caddyfile differ. See
+[Production deployment](../operations/deployment.md).
+
+!!! abstract "What you get at the end"
+    - 9 containers of the `core` and `edge` profiles in the `running`/`healthy` state;
+    - a tenant, a human operator with administrator rights, a project, and a workspace;
+    - the operator's PAT in `secrets/harness-pat` and the core service account in
       `secrets/control-plane-iam.env`;
-    - каталог по файлу установки `deploy/packages.yaml` (ядро без пакетов знает только
-      системный тип задачи `task`).
+    - a catalog from the installation file `deploy/packages.yaml` (without packages,
+      the core knows only the system task type `task`).
 
-## Шаг 0. Проверить требования
+## Step 0. Check the requirements
 
-Убедитесь, что установлены Docker с Compose v2.24+, git, make, Python 3 с
-uv (без него — PyYAML и jsonschema в системном Python), openssl, и свободны порты `80`, `18000`, `18001`,
-`18010`. Подробно — [Требования](requirements.md).
+Make sure you have Docker with Compose v2.24+, git, make, Python 3 with uv
+(without uv, PyYAML and jsonschema in the system Python), and openssl, and that
+ports `80`, `18000`, `18001`, and `18010` are free. Details:
+[Requirements](requirements.md).
 
-## Шаг 1. Получить исходники
+## Step 1. Get the sources
 
-Компоненты подключены git-сабмодулями, поэтому клонировать нужно рекурсивно:
+Components are included as git submodules, so clone recursively:
 
 ```bash
-git clone --recurse-submodules <url-суперпроекта> taimen
+git clone --recurse-submodules <superproject-url> taimen
 cd taimen
 ```
 
-Если репозиторий уже склонирован без сабмодулей:
+If the repository is already cloned without submodules:
 
 ```bash
 make submodules          # git submodule update --init --recursive
-make status              # указатели сабмодулей и незакоммиченные изменения
+make status              # submodule pointers and uncommitted changes
 ```
 
-Сабмодули встают на ревизии, закреплённые в суперпроекте, — это и есть
-согласованная версия платформы. Не переключайте их на ветки вручную, если не
-разрабатываете сам компонент.
+Submodules check out the revisions pinned in the superproject; together they
+form the consistent platform version. Do not switch them to branches by hand
+unless you are developing the component itself.
 
-## Шаг 2. Сгенерировать `.env` и ключи
+## Step 2. Generate `.env` and keys
 
 ```bash
 make secrets
 ```
 
-Что делает цель (`Makefile`, `tools/fill_secrets.py`):
+What the target does (`Makefile`, `tools/fill_secrets.py`):
 
-1. Если `.env` нет — копирует `.env.example` в `.env` и ставит права `600`.
-2. Заполняет **пустые** секреты случайными значениями (`secrets.token_hex`):
-   пароли всех БД, `CP_BOOTSTRAP_TOKEN`, `IAM_BOOTSTRAP_TOKEN`,
-   `MEMORY_API_KEY`, ключи MinIO. Уже заданные значения не трогает —
-   повторный запуск безопасен.
-3. Создаёт каталог `secrets/`.
-4. Генерирует RSA-3072 ключ подписи `secrets/iam-signing.pem` (если его нет) и
-   ставит ему `600`.
+1. If `.env` does not exist, copies `.env.example` to `.env` and sets mode `600`.
+2. Fills **empty** secrets with random values (`secrets.token_hex`): passwords
+   for all databases, `CP_BOOTSTRAP_TOKEN`, `IAM_BOOTSTRAP_TOKEN`,
+   `MEMORY_API_KEY`, MinIO keys. Values that are already set are left
+   untouched, so running it again is safe.
+3. Creates the `secrets/` directory.
+4. Generates the RSA-3072 signing key `secrets/iam-signing.pem` (if missing)
+   and sets its mode to `600`.
+
+The script prints its messages in Russian ("created .env", "filled secrets",
+"secrets in place"):
 
 ```text
 создан .env
@@ -62,36 +68,37 @@ make secrets
 секреты на месте: .env, secrets/*.pem (на Linux: chown 10001 secrets/*.pem)
 ```
 
-На Linux сразу отдайте ключи uid контейнеров:
+On Linux, hand the keys over to the container uid right away:
 
 ```bash
 sudo chown 10001:10001 secrets/*.pem
 ```
 
-## Шаг 3. Проверить `.env` перед первым запуском
+## Step 3. Check `.env` before the first launch
 
-Для ядра (`core edge`) правки `.env` после `make secrets` не нужны.
+For the core (`core edge`), you do not need to edit `.env` after `make secrets`.
 
 
-### Необязательно: LLM-провайдер
+### Optional: LLM provider
 
-Память по умолчанию работает офлайн (`MEMORY_EMBEDDING_PROVIDER=fake`,
-`MEMORY_LLM_PROVIDER=echo`): поиск работает, но эмбеддинги фиктивные. Для
-настоящего поиска укажите OpenAI-совместимый endpoint — см.
-[Конфигурацию .env](configuration.md).
+By default, memory works offline (`MEMORY_EMBEDDING_PROVIDER=fake`,
+`MEMORY_LLM_PROVIDER=echo`): search works, but the embeddings are fake. For
+real search, specify an OpenAI-compatible endpoint; see
+[.env configuration](configuration.md).
 
-## Шаг 4. Поднять ядро
+## Step 4. Start the core
 
 ```bash
-make config       # проверить compose.yml после интерполяции
+make config       # check compose.yml after interpolation
 make up           # docker compose --profile core --profile edge up -d --build
 ```
 
-Первая сборка занимает несколько минут. Порядок старта задан `depends_on` с
-healthcheck: базы → `iam-service` и `memory-service` → `control-plane-api`
-(применяет миграции Alembic) → `control-plane-worker` и `context-adapter`.
+The first build takes several minutes. The startup order is defined by
+`depends_on` with healthchecks: databases → `iam-service` and `memory-service` →
+`control-plane-api` (applies Alembic migrations) → `control-plane-worker` and
+`context-adapter`.
 
-Проверить состояние:
+Check the state:
 
 ```bash
 make ps
@@ -110,24 +117,26 @@ taimen-memory-db-1             memory-db              Up (healthy)
 taimen-memory-service-1        memory-service         Up (healthy)
 ```
 
-Логи отдельного сервиса: `make logs svc=control-plane-api`.
+Logs of a single service: `make logs svc=control-plane-api`.
 
-## Шаг 5. Выполнить bootstrap
+## Step 5. Run bootstrap
 
-Bootstrap создаёт tenant, оператора, его PAT, проект, workspace, каталог типов
-задач и service accounts. Скрипт идемпотентен: повторный запуск пропускает
-сделанное.
+Bootstrap creates the tenant, the operator, the operator's PAT, the project,
+the workspace, the task type catalog, and service accounts. The script is
+idempotent: a repeated run skips what is already done.
 
 ```bash
 make bootstrap ARGS='--operator "Alice Operator"'
 ```
 
-`make bootstrap` запускает `deploy/bootstrap.py` через
-`uv run --no-project --with pyyaml --with jsonschema python3`, если uv
-установлен, иначе — системным `python3` (тогда PyYAML и jsonschema нужны в нём).
+`make bootstrap` runs `deploy/bootstrap.py` through
+`uv run --no-project --with pyyaml --with jsonschema python3` if uv is
+installed; otherwise, with the system `python3` (which then needs PyYAML and
+jsonschema).
 
-`--operator` — отображаемое имя первого человека-администратора; задайте своё.
-Ожидаемый вывод (идентификаторы сокращены):
+`--operator` is the display name of the first human administrator; set your
+own. Expected output (IDs shortened; the script prints its progress in
+Russian):
 
 ```text
 1. ожидание сервисов
@@ -155,29 +164,29 @@ make bootstrap ARGS='--operator "Alice Operator"'
 credential для MCP-плагина/CLI: ~/.config/iam/credentials.json, ключ http://taimen.localhost/iam|<tenant-id>|<iam-principal-id> → содержимое secrets/harness-pat
 ```
 
-Что происходит на каждом шаге — в статье [Bootstrap](bootstrap.md).
+What happens at each step is described in [Bootstrap](bootstrap.md).
 
-## Шаг 6. Применить результаты bootstrap
+## Step 6. Apply the bootstrap results
 
-1. Впишите tenant IAM в `.env` (до bootstrap переменная пуста):
+1. Write the IAM tenant into `.env` (the variable is empty before bootstrap):
 
     ```bash
     TENANT=$(python3 -c 'import json;print(json.load(open("deploy/state/taimen.json"))["iamTenantId"])')
     sed -i.bak -E "s/^IAM_TENANT_ID=.*/IAM_TENANT_ID=$TENANT/" .env
     ```
 
-2. Перезапустите процессы ядра, чтобы они подхватили service account
-   (`secrets/control-plane-iam.env`) — после этого Control Plane ходит в память
-   токеном IAM, а не статическим ключом:
+2. Restart the core processes so they pick up the service account
+   (`secrets/control-plane-iam.env`). After this, Control Plane calls memory
+   with an IAM token instead of a static key:
 
     ```bash
     docker compose up -d control-plane-api control-plane-worker context-adapter
     ```
 
-Имя файла состояния — `deploy/state/<COMPOSE_PROJECT_NAME>.json` (по умолчанию
-`taimen.json`) или значение `--name`.
+The state file is named `deploy/state/<COMPOSE_PROJECT_NAME>.json` (by default
+`taimen.json`) or after the `--name` value.
 
-## Шаг 7. Smoke-проверка
+## Step 7. Smoke check
 
 ```bash
 make smoke
@@ -189,13 +198,13 @@ make smoke
   memory-service       OK  200 http://127.0.0.1:18001/healthz
 ```
 
-`tools/smoke.py` проверяет healthz только запущенных сервисов (не поднятые
-помечаются «не запущен» и ошибкой не считаются) и возвращает ненулевой код,
-если хоть один запущенный ответил ошибкой.
+`tools/smoke.py` checks healthz only for running services (services that are
+not up are reported as not running and do not count as errors) and returns a
+non-zero exit code if any running service responds with an error.
 
-## Шаг 8. Проверить вход оператора
+## Step 8. Verify operator sign-in
 
-Обменяйте PAT оператора на токен Control Plane и спросите, кто вы:
+Exchange the operator's PAT for a Control Plane token and ask who you are:
 
 ```bash
 PAT=$(cat secrets/harness-pat)
@@ -215,24 +224,24 @@ curl -s http://127.0.0.1:18000/api/v1/harness/context \
 }
 ```
 
-Интерактивная документация API Control Plane доступна по
-`http://taimen.localhost/docs` (через Caddy) или `http://127.0.0.1:18000/docs`.
+Interactive Control Plane API documentation is available at
+`http://taimen.localhost/docs` (through Caddy) or `http://127.0.0.1:18000/docs`.
 
-Дальше — [Первая задача](first-task.md).
+Next: [First task](first-task.md).
 
-## Остановка и сброс
+## Stopping and resetting
 
-| Действие | Команда | Данные |
+| Action | Command | Data |
 |---|---|---|
-| Остановить | `make down` | сохраняются в volumes |
-| Поднять снова | `make up` | те же данные; bootstrap повторять не нужно |
-| Пересобрать один сервис | `docker compose build control-plane-api && docker compose up -d control-plane-api control-plane-worker context-adapter` | сохраняются |
-| Полный сброс | см. ниже | **удаляются** |
+| Stop | `make down` | kept in volumes |
+| Start again | `make up` | same data; no need to repeat bootstrap |
+| Rebuild one service | `docker compose build control-plane-api && docker compose up -d control-plane-api control-plane-worker context-adapter` | kept |
+| Full reset | see below | **deleted** |
 
-!!! danger "Полный сброс стенда"
-    Удаление volumes уничтожает все задачи, identity и знания. После него
-    обязательно уберите и **состояние bootstrap** — иначе скрипт остановится
-    на проверке state (IAM tenant из файла не найден):
+!!! danger "Full deployment reset"
+    Deleting volumes destroys all tasks, identities, and knowledge. After that,
+    you must also remove the **bootstrap state**; otherwise the script stops at
+    the state check (the IAM tenant from the file is not found):
 
     ```bash
     docker compose --profile "*" down -v
@@ -240,28 +249,28 @@ curl -s http://127.0.0.1:18000/api/v1/harness/context \
     make up && make bootstrap
     ```
 
-    `make reset-state` переносит `deploy/state/<имя>.json` и выданные
-    bootstrap credentials в `secrets/stale-<время>/`; `.env` и ключи подписи
-    остаются на месте.
+    `make reset-state` moves `deploy/state/<name>.json` and the credentials
+    issued by bootstrap to `secrets/stale-<time>/`; `.env` and the signing keys
+    stay in place.
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что сделать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| `required variable … is missing a value` при `make up` | пусты секреты, которые генерирует `make secrets` | `make secrets` |
-| `set CP_POSTGRES_PASSWORD` и подобные | не выполнен `make secrets` или `.env` не в корне | `make secrets` |
-| `iam-service` рестартует, в логах `PermissionError` на ключ подписи | Linux, файл ключа принадлежит root | `sudo chown 10001:10001 secrets/*.pem` |
-| bootstrap: `нужен PyYAML` / `нужен jsonschema` | uv не установлен, у системного Python нет зависимостей | установить uv (`make bootstrap` возьмёт их сам) или `pip install pyyaml jsonschema` |
-| bootstrap: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` | volumes сброшены, а `deploy/state/<имя>.json` остался | `make reset-state` и повторить bootstrap |
-| bootstrap: `HTTP 409 … already_bootstrapped` на шаге 3 | Control Plane уже инициализирован, а файла состояния нет | восстановить `deploy/state/<имя>.json` или сделать полный сброс |
-| `bind: address already in use` на `80` | порт занят другим веб-сервером | освободить порт или поднимать без `edge` (`make up PROFILES=core`) и работать через `127.0.0.1` |
-| `curl: Could not resolve host: taimen.localhost` | системный резолвер не знает `*.localhost` | строка в `/etc/hosts` или адреса `127.0.0.1:<порт>` |
+| `required variable … is missing a value` on `make up` | the secrets that `make secrets` generates are empty | `make secrets` |
+| `set CP_POSTGRES_PASSWORD` and similar | `make secrets` was not run, or `.env` is not in the root | `make secrets` |
+| `iam-service` restarts, logs show `PermissionError` on the signing key | Linux, the key file is owned by root | `sudo chown 10001:10001 secrets/*.pem` |
+| bootstrap: `нужен PyYAML` / `нужен jsonschema` ("PyYAML required" / "jsonschema required") | uv is not installed, and the system Python lacks the dependencies | install uv (`make bootstrap` then adds them itself) or `pip install pyyaml jsonschema` |
+| bootstrap: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` ("refers to an IAM tenant that does not exist in IAM (volumes reset?)") | volumes were reset, but `deploy/state/<name>.json` remains | `make reset-state` and rerun bootstrap |
+| bootstrap: `HTTP 409 … already_bootstrapped` at step 3 | Control Plane is already initialized, but the state file is missing | restore `deploy/state/<name>.json` or do a full reset |
+| `bind: address already in use` on `80` | another web server holds the port | free the port, or start without `edge` (`make up PROFILES=core`) and work through `127.0.0.1` |
+| `curl: Could not resolve host: taimen.localhost` | the system resolver does not know `*.localhost` | add a line to `/etc/hosts` or use `127.0.0.1:<port>` addresses |
 
-Больше — в [Установке и запуске — диагностике](../troubleshooting/startup.md).
+More in [Installation and startup (troubleshooting)](../troubleshooting/startup.md).
 
-## См. также
+## See also
 
-- [Конфигурация .env](configuration.md)
+- [.env configuration](configuration.md)
 - [Bootstrap](bootstrap.md)
-- [Первая задача](first-task.md)
-- [Цели make](../reference/make.md)
+- [First task](first-task.md)
+- [Make targets](../reference/make.md)

@@ -1,60 +1,63 @@
-# Резервное копирование
 
-Что в установке Taimen нужно бэкапить, как снимать дампы каждой базы, какие
-особенности есть у графовой базы памяти (Apache AGE) и как восстановить
-установку целиком или по частям. Статья для инженера эксплуатации.
+# Backup
 
-## Что бэкапить
+What you need to back up in a Taimen installation, how to take dumps of
+each database, what is special about the memory graph database (Apache AGE),
+and how to restore the installation as a whole or in parts. This article is
+for the operations engineer.
 
-Сервисы платформы stateless: всё состояние лежит в томах Docker и в
-нескольких файлах на хосте.
+## What to back up
 
-| Объект | Где | Содержимое | Критичность |
+Platform services are stateless: all state lives in Docker volumes and in a
+few files on the host.
+
+| Object | Where | Contents | Criticality |
 |---|---|---|---|
-| БД IAM | том `iam_db`, сервис `iam-db`, БД `iam` | Tenants, principals, хэши PAT, service accounts, audiences, audit, outbox | Критично |
-| БД Control Plane | том `control_plane_db`, сервис `control-plane-db`, БД `control_plane` | Задачи, claims, runs, артефакты, approvals, журнал событий и его архив, курсоры потребителей, IAM bindings | Критично |
-| БД памяти | том `memory_db`, сервис `memory-db`, БД `company_brain` | Граф знаний (Apache AGE), чанки и вектора (pgvector), наблюдения, трассы контекста | Критично; содержит данные заказчика, возможно ПДн |
-| Объекты MinIO | том `platform_minio` | Содержимое артефактов Control Plane (бакет `CP_S3_BUCKET`) | Критично: MinIO входит в профиль `core`; бэкапить вместе с `control-plane-db` |
-| Сертификаты | том `caddy_data` | Сертификаты, ключи, ACME-аккаунт | Желательно: без него сертификаты выпускаются заново |
-| Конфигурация | `.env`, `secrets/`, `deploy/state/<env>.json`, Caddyfile установки | Секреты, ключ подписи IAM, PAT, идентификаторы bootstrap | Критично; хранить отдельно и шифровать |
+| IAM database | volume `iam_db`, service `iam-db`, database `iam` | Tenants, principals, PAT hashes, service accounts, audiences, audit, outbox | Critical |
+| Control Plane database | volume `control_plane_db`, service `control-plane-db`, database `control_plane` | Tasks, claims, runs, artifacts, approvals, the event log and its archive, consumer cursors, IAM bindings | Critical |
+| Memory database | volume `memory_db`, service `memory-db`, database `company_brain` | Knowledge graph (Apache AGE), chunks and vectors (pgvector), observations, context traces | Critical; contains customer data, possibly personal data |
+| MinIO objects | volume `platform_minio` | Control Plane artifact content (the `CP_S3_BUCKET` bucket) | Critical: MinIO is part of the `core` profile; back it up together with `control-plane-db` |
+| Certificates | volume `caddy_data` | Certificates, keys, ACME account | Recommended: without it, certificates are issued again |
+| Configuration | `.env`, `secrets/`, `deploy/state/<env>.json`, the installation's Caddyfile | Secrets, the IAM signing key, PATs, bootstrap identifiers | Critical; store separately and encrypt |
 
-Имена томов в Docker — с префиксом проекта:
-`${COMPOSE_PROJECT_NAME}_iam_db` и т. д. (переопределяются переменными
-`VOLUME_*` в `.env`). Точный список:
+Docker volume names carry the project prefix:
+`${COMPOSE_PROJECT_NAME}_iam_db` and so on (overridden by `VOLUME_*`
+variables in `.env`). The exact list:
 
 ```bash
 docker volume ls --filter "name=${COMPOSE_PROJECT_NAME:-taimen}_"
 ```
 
-!!! danger "Ключ подписи IAM и `.env` — часть бэкапа"
-    Без `secrets/iam-signing.pem` восстановленная БД IAM выдаёт токены
-    новым ключом — это переживаемо. Без `.env` не подойдут пароли к
-    восстановленным томам, а без `deploy/state/<env>.json` повторный
-    bootstrap заведёт tenant и principals заново. Храните конфигурацию
-    отдельно от дампов, в зашифрованном виде.
+!!! danger "The IAM signing key and `.env` are part of the backup"
+    Without `secrets/iam-signing.pem`, a restored IAM database issues tokens
+    with a new key; that is survivable. Without `.env`, the passwords will
+    not match the restored volumes, and without `deploy/state/<env>.json` a
+    repeated bootstrap creates the tenant and principals from scratch. Store
+    the configuration separately from the dumps, encrypted.
 
-Runner-хост критичных данных не хранит: рабочие копии воссоздаются из
-bare-зеркал, опубликованные ветки задач лежат в forge. Потеряется только
-неопубликованная работа текущих задач.
+The runner host keeps no critical data: working copies are recreated from
+bare mirrors, and published task branches are in the forge. Only the
+unpublished work of current tasks is lost.
 
-## Логические дампы PostgreSQL
+## Logical PostgreSQL dumps
 
-Все базы снимаются `pg_dump` в формате custom изнутри контейнеров. Базы
-разные и восстанавливаются независимо; внутри Control Plane состояние,
-журнал, архив и курсоры лежат в одной базе и согласованы одним дампом.
+All databases are dumped with `pg_dump` in custom format from inside the
+containers. The databases are separate and are restored independently;
+inside Control Plane, state, log, archive, and cursors live in one database
+and are consistent within one dump.
 
-| Сервис | Пользователь | База |
+| Service | User | Database |
 |---|---|---|
 | `iam-db` | `iam` | `iam` |
 | `control-plane-db` | `control_plane` | `control_plane` |
 | `memory-db` | `memory` | `company_brain` |
 
-### Скрипт ежедневного бэкапа
+### Daily backup script
 
 
 ```bash
 #!/usr/bin/env bash
-# /opt/taimen/backup.sh — дампы всех поднятых БД + конфигурация + тома без СУБД
+# /opt/taimen/backup.sh — dumps of all running databases + configuration + non-DBMS volumes
 set -euo pipefail
 cd /opt/taimen/src
 STAMP=$(date -u +%Y%m%dT%H%MZ)
@@ -62,7 +65,7 @@ OUT=/opt/taimen/backups/$STAMP
 mkdir -p "$OUT" && chmod 700 "$OUT"
 DC=(docker compose --profile "*")
 
-dump() {  # dump <сервис> <пользователь> <база>
+dump() {  # dump <service> <user> <database>
   if "${DC[@]}" ps --status running --services | grep -qx "$1"; then
     "${DC[@]}" exec -T "$1" pg_dump -U "$2" -d "$3" -Fc > "$OUT/$1-$3.dump"
   fi
@@ -71,10 +74,10 @@ dump iam-db           iam            iam
 dump control-plane-db control_plane  control_plane
 dump memory-db        memory         company_brain
 
-# Конфигурация (секреты!) — отдельным архивом
+# Configuration (secrets!) as a separate archive
 tar czf "$OUT/config.tgz" .env secrets deploy/state /opt/taimen/Caddyfile
 
-# Тома без СУБД: сертификаты и объекты MinIO
+# Non-DBMS volumes: certificates and MinIO objects
 vol() { docker run --rm -v "$1":/data:ro -v "$OUT":/backup alpine tar czf "/backup/$1.tgz" -C /data .; }
 P=${COMPOSE_PROJECT_NAME:-taimen}
 vol "${P}_caddy_data"
@@ -84,58 +87,62 @@ chmod 600 "$OUT"/*
 find /opt/taimen/backups -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
 ```
 
-Запуск по расписанию (systemd timer или cron) и перед каждой выкладкой:
+Run it on a schedule (systemd timer or cron) and before every deployment:
 
 ```cron
 15 3 * * * root /opt/taimen/backup.sh >> /var/log/taimen-backup.log 2>&1
 ```
 
-!!! warning "Бэкап на том же диске — не бэкап"
-    Копируйте каталог дампов за пределы хоста и шифруйте: дампы памяти
-    содержат данные заказчика, дамп IAM — хэши credential'ов,
-    `config.tgz` — секреты в открытом виде.
+!!! warning "A backup on the same disk is not a backup"
+    Copy the dump directory off the host and encrypt it: memory dumps
+    contain customer data, the IAM dump contains credential hashes, and
+    `config.tgz` contains secrets in plain text.
 
-### Согласованность между базами
+### Consistency across databases
 
-Дампы разных баз снимаются в разные моменты. Платформа это переносит:
+Dumps of different databases are taken at different moments. The platform
+tolerates this:
 
-- **Control Plane ↔ память.** Доставка в память идёт через outbox и курсор
-  `context-adapter`, лежащие в базе Control Plane. Если память восстановлена
-  из более старого дампа, чем Control Plane, выполните `:rebuild` — адаптер
-  переиграет журнал, память дедуплицирует повторы по `event:<uuid>`. Если
-  наоборот — адаптер доставит часть событий повторно, что тоже безопасно.
-- **IAM ↔ Control Plane.** Bindings лежат в Control Plane, principals и PAT —
-  в IAM. Principal, созданный после дампа IAM, при восстановлении пропадёт;
-  его binding в Control Plane перестанет срабатывать (вход закроется) —
-  перевыпустите principal и binding.
-- **Control Plane ↔ MinIO.** Записи артефактов (размер, media type,
-  SHA-256) в базе Control Plane, байты — в MinIO. Копию тома снимайте
-  **после** дампа базы: объекты неизменяемы, и всё, на что ссылается дамп,
-  уже лежит в томе. Если том окажется старше базы, выдача части артефактов
-  ответит `503 content_store_unavailable`. Подробнее — в
-  [Хранилище объектов](object-storage.md#backup).
+- **Control Plane ↔ memory.** Delivery to memory goes through the outbox and
+  the `context-adapter` cursor, both in the Control Plane database. If memory
+  is restored from an older dump than Control Plane, run `:rebuild`: the
+  adapter replays the log, and memory deduplicates repeats by
+  `event:<uuid>`. In the opposite case the adapter delivers some events
+  again, which is also safe.
+- **IAM ↔ Control Plane.** Bindings live in Control Plane, principals and
+  PATs in IAM. A principal created after the IAM dump disappears on
+  restore; its binding in Control Plane stops matching (access closes), so
+  reissue the principal and the binding.
+- **Control Plane ↔ MinIO.** Artifact records (size, media type, SHA-256)
+  are in the Control Plane database, the bytes in MinIO. Copy the volume
+  **after** the database dump: objects are immutable, and everything the
+  dump references is already in the volume. If the volume turns out older
+  than the database, downloading some artifacts returns
+  `503 content_store_unavailable`. See
+  [Object storage](object-storage.md#backup) for details.
 
-## Особенность памяти: Apache AGE и OID
+## Memory specifics: Apache AGE and OIDs
 
-`memory-db` — PostgreSQL 16 с расширениями Apache AGE (граф) и pgvector.
-Каталог AGE хранит ссылки на граф как **OID PostgreSQL**: `ag_graph.graphid`
-и `ag_label.graph` — обычные `oid`, тогда как `ag_graph.namespace` имеет тип
-`regnamespace` и при восстановлении переразрешается по имени схемы. После
-`pg_restore` в **другой** кластер (новый том, новый хост) OID схемы графа
-меняется, а `graphid` приезжает старым.
+`memory-db` is PostgreSQL 16 with the Apache AGE (graph) and pgvector
+extensions. The AGE catalog stores graph references as **PostgreSQL OIDs**:
+`ag_graph.graphid` and `ag_label.graph` are plain `oid`, while
+`ag_graph.namespace` has type `regnamespace` and is re-resolved by schema
+name on restore. After `pg_restore` into a **different** cluster (a new
+volume, a new host), the OID of the graph schema changes, but `graphid`
+arrives with the old value.
 
-Симптом: `memory-service` падает или отвечает ошибками с
+Symptom: `memory-service` crashes or returns errors with
 `graph with oid NNNNN does not exist`.
 
-Исправление — в одной транзакции (порядок важен: внешний ключ не даст
-обновить таблицы в другом порядке):
+The fix runs in one transaction (the order matters: the foreign key does
+not allow updating the tables in a different order):
 
 ```sql
 BEGIN;
 LOAD 'age';
 SET search_path = ag_catalog, "$user", public;
 
--- имя FK проверьте командой \d ag_catalog.ag_label
+-- check the FK name with \d ag_catalog.ag_label
 ALTER TABLE ag_catalog.ag_label DROP CONSTRAINT fk_graph_oid;
 
 UPDATE ag_catalog.ag_label l
@@ -156,36 +163,37 @@ docker compose restart memory-service
 curl -fsS http://127.0.0.1:18001/healthz     # {"ok": true, "graph": ..., "nodes": N, "chunks": M}
 ```
 
-Возвращённый FK сам проверит, что все метки ссылаются на существующий граф.
+The restored FK itself verifies that all labels reference an existing graph.
 
-!!! tip "Физическая копия тома обходит проблему"
-    Копия тома `memory_db`, снятая при **остановленном** `memory-db`
-    (`docker compose stop memory-db` и `tar` тома), сохраняет OID как есть и
-    восстанавливается без правки каталога. Для переноса памяти на новый хост
-    это самый надёжный путь; логический дамп оставьте для ежедневных копий.
+!!! tip "A physical volume copy avoids the problem"
+    A copy of the `memory_db` volume taken while `memory-db` is **stopped**
+    (`docker compose stop memory-db` and `tar` of the volume) keeps the OIDs
+    as they are and restores without catalog fixes. This is the most
+    reliable way to move memory to a new host; keep logical dumps for daily
+    copies.
 
-После любого восстановления памяти сверяйте счётчики `nodes` и `chunks` из
-`/healthz` со значениями до инцидента.
+After any memory restore, compare the `nodes` and `chunks` counters from
+`/healthz` with the values before the incident.
 
-## Восстановление
+## Restore
 
-### Одна база Control Plane
+### The Control Plane database alone
 
 ```bash
 docker compose stop control-plane-worker context-adapter control-plane-api
 docker compose exec -T control-plane-db pg_restore -U control_plane -d control_plane \
   --clean --if-exists --no-owner < backups/<stamp>/control-plane-db-control_plane.dump
-docker compose up -d control-plane-api           # применит миграции, если дамп старее
-curl -fsS http://127.0.0.1:18000/health/ready    # 503 migrations_pending, пока ревизия отстаёт
+docker compose up -d control-plane-api           # applies migrations if the dump is older
+curl -fsS http://127.0.0.1:18000/health/ready    # 503 migrations_pending while the revision lags
 docker compose up -d control-plane-worker context-adapter
 ```
 
-Частичное восстановление отдельных таблиц Control Plane не поддерживается:
-журнал, состояние и курсоры связаны инвариантами (append-only, внешние
-ключи, позиции курсоров).
+Partial restore of individual Control Plane tables is not supported: the
+log, state, and cursors are bound by invariants (append-only, foreign keys,
+cursor positions).
 
-Если после восстановления память опережает журнал — ничего делать не нужно.
-Если память отстаёт или потеряна — перестройте доставку:
+If after the restore memory is ahead of the log, you do not need to do
+anything. If memory is behind or lost, rebuild the delivery:
 
 ```bash
 curl -s -X POST http://127.0.0.1:18000/api/v1/operations/context-adapter/<tenant-id>:rebuild \
@@ -193,7 +201,7 @@ curl -s -X POST http://127.0.0.1:18000/api/v1/operations/context-adapter/<tenant
   -d '{"reason": "memory restored from backup"}'
 ```
 
-### База IAM
+### The IAM database
 
 ```bash
 docker compose stop iam-service
@@ -202,19 +210,20 @@ docker compose exec -T iam-db pg_restore -U iam -d iam --clean --if-exists --no-
 docker compose up -d iam-service
 ```
 
-!!! danger "Отзывы после даты дампа теряются"
-    Восстановленная база IAM не знает об отзывах PAT и service accounts,
-    сделанных после снятия дампа: такие credentials снова становятся
-    действительными. Сразу после восстановления повторите отзывы по журналу
-    инцидентов или внешнему журналу операций.
+!!! danger "Revocations after the dump date are lost"
+    A restored IAM database does not know about PAT and service account
+    revocations made after the dump was taken: such credentials become valid
+    again. Right after the restore, repeat the revocations from the incident
+    log or an external operations log.
 
-### Полное восстановление на новый хост
+### Full restore to a new host
 
-1. Подготовьте хост по [Промышленному развёртыванию](deployment.md), клонируйте
-   суперпроект **на том же коммите**, что работал до аварии.
-2. Распакуйте `config.tgz`: `.env`, `secrets/`, `deploy/state/`, Caddyfile.
-   Восстановите владельца ключей: `chown 10001:10001 secrets/*.pem`.
-3. Восстановите том `caddy_data` до первого запуска `caddy`:
+1. Prepare the host following [Production deployment](deployment.md), and
+   clone the superproject **at the same commit** that was running before the
+   failure.
+2. Unpack `config.tgz`: `.env`, `secrets/`, `deploy/state/`, the Caddyfile.
+   Restore the key owner: `chown 10001:10001 secrets/*.pem`.
+3. Restore the `caddy_data` volume before the first start of `caddy`:
 
     ```bash
     docker volume create taimen_caddy_data
@@ -222,52 +231,52 @@ docker compose up -d iam-service
       tar xzf /backup/taimen_caddy_data.tgz -C /data
     ```
 
-4. Поднимите только базы и дождитесь `healthy`:
+4. Start only the databases and wait for `healthy`:
 
     ```bash
-    docker compose up -d iam-db control-plane-db memory-db    # + базы других поднятых профилей
+    docker compose up -d iam-db control-plane-db memory-db    # + databases of other running profiles
     ```
 
-5. Восстановите каждую базу `pg_restore --clean --if-exists --no-owner`.
-6. Для памяти выполните исправление OID AGE (если восстанавливали логическим
-   дампом) и проверьте `/healthz`.
-7. Восстановите том MinIO (`platform_minio`) тем же способом, что
-   `caddy_data`: в нём содержимое артефактов ядра.
-   Если ядро работает с внешним S3 (`compose.s3.example.yml`), восстановите
-   бакет средствами провайдера.
-8. Поднимите всё: `docker compose --profile core --profile edge … up -d`.
-9. Проверьте `make smoke`, `/health/ready`, вход оператора, метрику
-   `context_adapter_parked_tenants`.
-10. Переключите DNS на новый хост.
+5. Restore each database with `pg_restore --clean --if-exists --no-owner`.
+6. For memory, apply the AGE OID fix (if you restored from a logical dump)
+   and check `/healthz`.
+7. Restore the MinIO volume (`platform_minio`) the same way as
+   `caddy_data`: it holds the core's artifact content.
+   If the core works with an external S3 (`compose.s3.example.yml`), restore
+   the bucket with the provider's tools.
+8. Start everything: `docker compose --profile core --profile edge … up -d`.
+9. Check `make smoke`, `/health/ready`, operator sign-in, and the
+   `context_adapter_parked_tenants` metric.
+10. Switch DNS to the new host.
 
-## Проверка бэкапов
+## Verifying backups
 
-Бэкап, который ни разу не восстанавливали, — гипотеза. Раз в месяц:
+A backup that has never been restored is a hypothesis. Once a month:
 
-- поднимите копию установки на отдельной машине или в отдельном
-  compose-проекте (`COMPOSE_PROJECT_NAME=taimen-restore`, свои порты);
-- восстановите все дампы, выполните шаги полного восстановления;
-- сравните число задач, событий журнала, principals, узлов и чанков памяти
-  с боевыми значениями на момент дампа.
+- bring up a copy of the installation on a separate machine or in a separate
+  compose project (`COMPOSE_PROJECT_NAME=taimen-restore`, its own ports);
+- restore all dumps and perform the full restore steps;
+- compare the number of tasks, log events, principals, memory nodes, and
+  chunks with the production values at the time of the dump.
 
-## Хранение журнала Control Plane
+## Control Plane log retention
 
-Журнал событий растёт вместе с работой. Retention — операторская команда,
-планировщика нет: `:archive` переносит подтверждённую историю в архивную
-таблицу той же базы, `:prune` удаляет физически. Горизонт ограничен
-минимальным курсором потребителей, поэтому нужное кому-то не удаляется.
-Подробности и команды — в [Мониторинге и здоровье](monitoring.md) и
-[Событиях Control Plane](../control-plane/events.md).
+The event log grows with the work. Retention is an operator command; there
+is no scheduler: `:archive` moves acknowledged history to an archive table
+in the same database, and `:prune` deletes it physically. The horizon is
+bounded by the minimum consumer cursor, so nothing still needed by someone
+is deleted. Details and commands are in [Monitoring and health](monitoring.md)
+and [Control Plane events](../control-plane/events.md).
 
 !!! warning
-    `:prune` — единственная операция, после которой данные теряются. Перед
-    ней должен быть свежий бэкап базы Control Plane.
+    `:prune` is the only operation after which data is lost. Make sure you
+    have a fresh backup of the Control Plane database before it.
 
-## См. также
+## See also
 
-- [Обновление и миграции](upgrades.md)
-- [Хранилище объектов (MinIO)](object-storage.md)
-- [Аварийные процедуры](emergency.md)
-- [Модель знаний памяти](../memory/knowledge-model.md)
-- [Контекст задачи и память](../control-plane/context.md)
-- [Память и контекст — диагностика](../troubleshooting/memory.md)
+- [Upgrades and migrations](upgrades.md)
+- [Object storage (MinIO)](object-storage.md)
+- [Emergency procedures](emergency.md)
+- [Memory knowledge model](../memory/knowledge-model.md)
+- [Task context and memory](../control-plane/context.md)
+- [Memory and context: troubleshooting](../troubleshooting/memory.md)

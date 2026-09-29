@@ -1,60 +1,63 @@
-# Харнесс-протокол
 
-Харнесс-протокол (`control-harness`) — это семантический контракт между Control
-Plane и исполняющей средой. Исполняющей средой (harness) может быть Claude Code,
-Codex, OpenCode, CLI, IDE-расширение, демон автономного агента, CI-воркер или
-сторонний клиент. Статья нужна тем, кто пишет свой харнесс или разбирается,
-как ведут себя готовые адаптеры.
+# Harness protocol
 
-Протокол **не вводит новый wire-формат**. Транспорт — обычный REST API `/api/v1`
-и журнал событий: поллинг `GET /api/v1/events` и/или WebSocket
-`/api/v1/events/ws`. Человеческий и автономный харнессы работают по одному
-протоколу. Различается только политика клиента: задачу выбирает человек или сам
-агент. Серверные пути у них одни и те же.
+The harness protocol (`control-harness`) is the semantic contract between the
+Control Plane and the execution environment. The execution environment (the
+harness) can be Claude Code, Codex, OpenCode, a CLI, an IDE extension, an
+autonomous agent daemon, a CI worker, or a third-party client. This page is for
+those who write their own harness or want to understand how the existing
+adapters behave.
 
-## Роли и доверие
+The protocol **does not introduce a new wire format**. The transport is the
+regular REST API `/api/v1` and the event log: polling `GET /api/v1/events`
+and/or the WebSocket `/api/v1/events/ws`. Human and autonomous harnesses use
+the same protocol. Only the client policy differs: a human picks the task, or
+the agent picks it itself. The server paths are the same.
 
-| Участник | Роль | Чему доверяют |
+## Roles and trust
+
+| Participant | Role | What is trusted |
 |---|---|---|
-| Control Plane | авторитетное ядро координации | каждая команда в своей транзакции перепроверяет права, eligibility, readiness, аренды и fencing |
-| Харнесс | недоверенный распределённый клиент | ничему на слово: ни «я всё ещё владею задачей», ни «пользователь подтвердил» |
-| Credential | единственный источник identity | `Authorization: Bearer <token>`, см. [Авторизация и права](authorization.md) |
+| Control Plane | authoritative coordination core | every command re-checks permissions, eligibility, readiness, leases, and fencing in its own transaction |
+| Harness | untrusted distributed client | nothing on its word: neither "I still own the task" nor "the user confirmed" |
+| Credential | the only source of identity | `Authorization: Bearer <token>`, see [Authorization and permissions](authorization.md) |
 
-!!! warning "`harness.type` — не граница безопасности"
-    Тип харнесса, его версия, заявленные capabilities и `controlLevel` —
-    метаданные для наблюдаемости. Сервер не принимает на их основании ни одного
-    решения об авторизации.
+!!! warning "`harness.type` is not a security boundary"
+    The harness type, its version, the declared capabilities, and
+    `controlLevel` are observability metadata. The server makes no
+    authorization decision based on them.
 
-Bearer-credential бывает двух видов:
+A bearer credential comes in two kinds:
 
-- **access token IAM** (JWT audience `control-plane`). Харнесс получает его
-  обменом Platform Access Token (PAT). Права берутся из привязки identity к
-  локальному principal. Это основной режим поставки;
-- **legacy API-ключ** `cp_<prefix>_<secret>`. Принимается, только пока
-  `CP_LEGACY_API_KEYS_ENABLED=true`. В `compose.yml` поставки по умолчанию
-  стоит `false`.
+- **IAM access token** (JWT with audience `control-plane`). The harness obtains
+  it by exchanging a Platform Access Token (PAT). Permissions come from the
+  binding of the identity to a local principal. This is the primary mode of the
+  delivery;
+- **legacy API key** `cp_<prefix>_<secret>`. Accepted only while
+  `CP_LEGACY_API_KEYS_ENABLED=true`. The delivery's `compose.yml` sets `false`
+  by default.
 
-## Жизненный цикл харнесса
+## Harness lifecycle
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant H as Харнесс
+    participant H as Harness
     participant CP as Control Plane
     H->>CP: GET /harness/context
     CP-->>H: identity, activeClaims, activeRuns, eventCursor
     H->>CP: POST /sessions {harness: {...}}
     CP-->>H: Session (controlLevel, expiresAt)
-    loop каждые ~ttl/3
+    loop every ~ttl/3
         H->>CP: POST /sessions/{id}:heartbeat
     end
     H->>CP: GET /work/available
     H->>CP: POST /tasks/{ref}:claim {sessionId}
     CP-->>H: Claim {fencingToken, expiresAt}
     H->>CP: POST /tasks/{ref}:start-run {claimId, fencingToken}
-    CP-->>H: Run (+ манифест v1)
+    CP-->>H: Run (+ manifest v1)
     H->>CP: POST /context {task, runId}
-    loop работа
+    loop work
         H->>CP: POST /runs/{id}/checkpoints | /actions | POST /artifacts
         H->>CP: POST /claims/{id}:heartbeat
     end
@@ -62,11 +65,11 @@ sequenceDiagram
     CP-->>H: run succeeded, claim released, task → completionStatus
 ```
 
-## Сессия: регистрация харнесса
+## Session: registering the harness
 
-Отдельной сущности «харнесс» нет. Харнесс — это метаданные живой сессии: блок
-`harness` в теле `POST /api/v1/sessions`. Для открытия сессии нужно право
-`sessions.open`.
+There is no separate "harness" entity. A harness is metadata of a live session:
+the `harness` block in the body of `POST /api/v1/sessions`. Opening a session
+requires the `sessions.open` permission.
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/sessions \
@@ -88,107 +91,107 @@ curl -s -X POST https://platform.example.com/api/v1/sessions \
   }'
 ```
 
-Поля запроса:
+Request fields:
 
-| Поле | Тип | Ограничения | Смысл |
+| Field | Type | Constraints | Meaning |
 |---|---|---|---|
-| `clientName` | string | 1–200 символов | имя клиента |
-| `clientVersion` | string | ≤100 | версия клиента |
-| `metadata` | object | — | произвольные несекретные метаданные |
-| `onBehalfOf` | uuid | — | human-principal, от имени которого работает агент; нужна активная delegation, иначе `403 delegation_required` |
-| `ttlSeconds` | int | зажимается в `[CP_SESSION_TTL_MIN_SECONDS, CP_SESSION_TTL_MAX_SECONDS]` | TTL аренды сессии, по умолчанию `CP_SESSION_TTL_SECONDS` (300) |
-| `harness.type` | string | `^[a-z0-9][a-z0-9._-]{0,99}$` | идентификатор клиента, иначе `422 invalid_harness` |
-| `harness.version` | string | ≤100 | версия харнесса |
-| `harness.protocolVersion` | string | `"1"` или `"2"`, по умолчанию `"1"` | версия протокола |
-| `harness.capabilities` | string[] | ≤100 | что умеет клиент (см. ниже) |
-| `harness.hostname` | string | ≤255 | имя хоста, для наблюдаемости |
-| `harness.environment` | object | — | несекретное окружение, например репозиторий |
+| `clientName` | string | 1–200 characters | client name |
+| `clientVersion` | string | ≤100 | client version |
+| `metadata` | object | — | arbitrary non-secret metadata |
+| `onBehalfOf` | uuid | — | the human principal on whose behalf the agent works; requires an active delegation, otherwise `403 delegation_required` |
+| `ttlSeconds` | int | clamped to `[CP_SESSION_TTL_MIN_SECONDS, CP_SESSION_TTL_MAX_SECONDS]` | session lease TTL, `CP_SESSION_TTL_SECONDS` (300) by default |
+| `harness.type` | string | `^[a-z0-9][a-z0-9._-]{0,99}$` | client identifier, otherwise `422 invalid_harness` |
+| `harness.version` | string | ≤100 | harness version |
+| `harness.protocolVersion` | string | `"1"` or `"2"`, `"1"` by default | protocol version |
+| `harness.capabilities` | string[] | ≤100 | what the client can do (see below) |
+| `harness.hostname` | string | ≤255 | host name, for observability |
+| `harness.environment` | object | — | non-secret environment, for example the repository |
 
-Блок `harness` необязателен: сессию можно открыть и без него.
+The `harness` block is optional: you can open a session without it.
 
-### Уровень управления (`controlLevel`)
+### Control level (`controlLevel`)
 
-`controlLevel` проставляет сервер, клиент его не передаёт:
+The server sets `controlLevel`; the client does not pass it:
 
-| Вид principal | `controlLevel` |
+| Principal kind | `controlLevel` |
 |---|---|
 | `human` | `human_operated` |
 | `agent`, `service` | `connected` |
 
-В схеме БД есть и значение `managed`, но при открытии сессии сервер его не
-назначает. `controlLevel` служит только для наблюдаемости: это не право и не
-сигнал доверия.
+The database schema also has the value `managed`, but the server does not
+assign it when a session opens. `controlLevel` is for observability only: it is
+neither a permission nor a trust signal.
 
-### Версии протокола
+### Protocol versions
 
-Сервер поддерживает версии, перечисленные в
-`GET /harness/context → protocol.supportedVersions`. Сейчас это `["1", "2"]`.
-Неподдерживаемая версия даёт `422 unsupported_protocol_version`, список
-допустимых версий приходит в `details.supported`.
+The server supports the versions listed in
+`GET /harness/context → protocol.supportedVersions`. Currently `["1", "2"]`.
+An unsupported version returns `422 unsupported_protocol_version`, and the list
+of allowed versions comes in `details.supported`.
 
-| Версия | Отличие |
+| Version | Difference |
 |---|---|
-| `2` | курсоры (`eventCursor`, курсоры `/events`) — непрозрачные строки `ec1_…`; страница `/events` всегда несёт `nextCursor` и `hasMore`; у каждого события есть своё поле `cursor` |
-| `1` | принимается для совместимости: целочисленный `after` сервер адаптирует сам, возможна повторная выдача уже виденного (at-least-once) |
+| `2` | cursors (`eventCursor`, `/events` cursors) are opaque `ec1_…` strings; an `/events` page always carries `nextCursor` and `hasMore`; each event has its own `cursor` field |
+| `1` | accepted for compatibility: the server adapts an integer `after` itself; already seen events may be delivered again (at-least-once) |
 
-!!! warning "Ответы всегда в формате v2"
-    Даже сессия с `protocolVersion: "1"` получает курсоры-строки. Клиент,
-    который делает арифметику над `eventCursor`, сломается. Новые харнессы
-    обязаны объявлять `"2"`.
+!!! warning "Responses are always in the v2 format"
+    Even a session with `protocolVersion: "1"` receives string cursors. A
+    client that does arithmetic on `eventCursor` will break. New harnesses
+    must declare `"2"`.
 
-### Capabilities харнесса
+### Harness capabilities
 
-Protocol capabilities описывают, **что умеет клиент**. Их не надо путать с
-организационными capabilities principal (см. [Авторизация и
-права](authorization.md#org-model)).
+Protocol capabilities describe **what the client can do**. Do not confuse them
+with the organizational capabilities of a principal (see [Authorization and
+permissions](authorization.md#org-model)).
 
-| capability | значение |
+| capability | meaning |
 |---|---|
-| `events.realtime` | потребляет WebSocket-поток событий |
-| `tasks.interactive` | задачи выбирает человек, автоматического claim нет |
-| `artifacts.publish` | умеет регистрировать артефакты |
-| `approvals.interactive` | показывает approvals человеку |
-| `resume` | хранит курсоры и состояние, умеет продолжить после рестарта |
-| `checkpoints` | пишет checkpoints прогона |
-| `active_turn_control.v1` | читает и подтверждает durable control-сообщения прогона |
-| `child_run_handle.v1` | запускает дочерние прогоны и восстанавливает их после рестарта |
-| `skills.protocol.<p>` | исполняет скиллы протокола `<p>`: `mcp`, `http`, `local`, `opencode`, `custom` |
+| `events.realtime` | consumes the WebSocket event stream |
+| `tasks.interactive` | a human picks tasks; there is no automatic claim |
+| `artifacts.publish` | can register artifacts |
+| `approvals.interactive` | shows approvals to a human |
+| `resume` | stores cursors and state, can continue after a restart |
+| `checkpoints` | writes run checkpoints |
+| `active_turn_control.v1` | reads and acknowledges durable run control messages |
+| `child_run_handle.v1` | launches child runs and recovers them after a restart |
+| `skills.protocol.<p>` | executes skills of protocol `<p>`: `mcp`, `http`, `local`, `opencode`, `custom` |
 
-Неизвестные capabilities сервер молча отбрасывает: так новый клиент может
-работать со старым сервером. Заявленные `skills.protocol.*` влияют на видимость
-инструментов (раздел [Инструменты и скиллы](#tools-and-skills)).
+The server silently drops unknown capabilities: this lets a new client work
+with an old server. The declared `skills.protocol.*` affect tool visibility
+(section [Tools and skills](#tools-and-skills)).
 
-### Heartbeat и аренды
+### Heartbeat and leases
 
-Сессия и claim — это аренды (lease). Heartbeat рекомендуется слать с периодом
-`ttl / 3`. При TTL по умолчанию 300 с это примерно раз в 100 с. SDK-класс
-`HeartbeatRunner` по умолчанию бьёт каждые 60 с.
+A session and a claim are leases. Send heartbeats with a period of `ttl / 3`.
+With the default TTL of 300 s this is about once every 100 s. The SDK class
+`HeartbeatRunner` beats every 60 s by default.
 
-| Endpoint | Кто может вызвать |
+| Endpoint | Who can call it |
 |---|---|
-| `POST /sessions/{id}:heartbeat` | владелец сессии или `sessions.manage` |
-| `POST /claims/{id}:heartbeat` | держатель claim или `claims.manage` |
-| `POST /sessions/{id}:close` | владелец или `sessions.manage`; снимает claims сессии |
+| `POST /sessions/{id}:heartbeat` | session owner or `sessions.manage` |
+| `POST /claims/{id}:heartbeat` | claim holder or `claims.manage` |
+| `POST /sessions/{id}:close` | owner or `sessions.manage`; releases the session's claims |
 
-Правила обработки ошибок:
+Error handling rules:
 
-- heartbeat — не доменное событие, в журнал он не пишется;
-- **доменная** ошибка (`409 session_expired`, `claim_expired`,
-  `session_not_active`) означает, что аренда потеряна. Харнесс немедленно
-  прекращает авторитетные записи, в человеческом харнессе уведомляет
-  пользователя и пересобирает контекст;
-- **транспортный** сбой не доказывает потерю владения. Его повторяют:
-  `HeartbeatRunner` терпит до трёх сбоев подряд (`max_transport_failures=3`),
-  после этого считает аренду потерянной.
+- a heartbeat is not a domain event and is not written to the event log;
+- a **domain** error (`409 session_expired`, `claim_expired`,
+  `session_not_active`) means the lease is lost. The harness immediately stops
+  authoritative writes, notifies the user in an interactive harness, and rebuilds the
+  context;
+- a **transport** failure does not prove loss of ownership. It is retried:
+  `HeartbeatRunner` tolerates up to three consecutive failures
+  (`max_transport_failures=3`), after which it treats the lease as lost.
 
-Корректность системы от heartbeat'ов не зависит. Просроченную аренду пожнёт
-следующий claim или фоновый worker.
+System correctness does not depend on heartbeats. An expired lease is reaped by
+the next claim or by a background worker.
 
 ## Bootstrap: `GET /harness/context`
 
-Один запрос отвечает на вопросы «кто я», «где я», «что я делаю», «что мне
-доступно» и «что произошло». Нужна только аутентификация: данные описывают
-самого вызывающего.
+One request answers "who am I", "where am I", "what am I doing", "what is
+available to me", and "what has happened". Only authentication is required: the
+data describes the caller.
 
 ```bash
 curl -s "https://platform.example.com/api/v1/harness/context?sessionId=<session-id>" \
@@ -200,7 +203,7 @@ curl -s "https://platform.example.com/api/v1/harness/context?sessionId=<session-
   "protocol": {"name": "control-harness", "supportedVersions": ["1", "2"]},
   "tenant": {"id": "<tenant-id>", "slug": "acme", "name": "Acme"},
   "principal": {"id": "<principal-id>", "kind": "agent", "displayName": "Runner", "status": "active"},
-  "session": { /* при ?sessionId=; содержит controlLevel */ },
+  "session": { /* with ?sessionId=; contains controlLevel */ },
   "activeSessions": [ ... ],
   "activeClaims": [{"id": "...", "taskId": "...", "taskPublicId": "TASK-000042",
                     "fencingToken": 3, "expiresAt": "..."}],
@@ -215,140 +218,140 @@ curl -s "https://platform.example.com/api/v1/harness/context?sessionId=<session-
 }
 ```
 
-- `pendingApprovals` содержит не больше 50 записей, и только те approvals,
-  которые вызывающий действительно может решить: адресованные ему лично или
-  через роль в подходящем scope (роль уровня tenant либо роль на workspace
-  approval'а или на его предке).
-- `eventCursor` — непрозрачная строка. Подписка с этой точки гарантированно
-  получит всё, что закоммитится после. Курсор нельзя разбирать, сравнивать или
-  собирать на клиенте. Его только сохраняют и возвращают серверу
+- `pendingApprovals` holds at most 50 entries, and only the approvals the
+  caller can actually decide: addressed to them personally or through a role in
+  a matching scope (a tenant-level role, or a role on the approval's workspace
+  or its ancestor).
+- `eventCursor` is an opaque string. A subscription from this point is
+  guaranteed to receive everything committed after it. Do not parse, compare, or
+  construct the cursor on the client. Only store it and return it to the server
   (`GET /events?cursor=…`, `WS /events/ws?after=…`).
 
-## Поиск работы
+## Finding work
 
 ```bash
 curl -s "https://platform.example.com/api/v1/work/available?workspaceId=<ws-id>&includeDescendants=true&limit=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Endpoint возвращает задачи, которые вызывающий **мог бы** захватить прямо сейчас.
-Статус задачи не терминальный, живого claim нет, зависимости выполнены,
-незакрытого gate-approval нет, организационные требования удовлетворены.
-Сортировка стабильная: приоритет (critical → low), затем `created_at` и `id`.
+The endpoint returns the tasks the caller **could** claim right now. The task
+status is not terminal, there is no live claim, dependencies are satisfied,
+there is no open gate approval, and organizational requirements are met.
+Sorting is stable: priority (critical → low), then `created_at` and `id`.
 
-| Параметр | Смысл |
+| Parameter | Meaning |
 |---|---|
-| `workspaceId`, `includeDescendants` | поддерево workspace |
-| `projectId` | workspace проекта и его обычные потомки, без вложенных проектов |
-| `projectId` + `includeSubprojects=true` | всё поддерево workspace проекта |
-| `assigneeId` | задачи, назначенные этому principal |
-| `assignedToMe=true` | только задачи, адресованные вызывающему; перекрывает `assigneeId` |
-| `limit`, `cursor` | пагинация |
+| `workspaceId`, `includeDescendants` | workspace subtree |
+| `projectId` | the project's workspace and its regular descendants, without nested projects |
+| `projectId` + `includeSubprojects=true` | the whole subtree of the project's workspace |
+| `assigneeId` | tasks assigned to this principal |
+| `assignedToMe=true` | only tasks addressed to the caller; overrides `assigneeId` |
+| `limit`, `cursor` | pagination |
 
-!!! note "Страница бывает короче `limit`"
-    Eligibility проверяется после выборки, поэтому страница может оказаться
-    короче `limit` при непустом `nextCursor`. Листайте до `nextCursor: null`.
+!!! note "A page can be shorter than `limit`"
+    Eligibility is checked after the query, so a page can be shorter than
+    `limit` with a non-empty `nextCursor`. Page through until `nextCursor: null`.
 
-Поиск работы носит **рекомендательный** характер. Единственный авторитетный
-gate — сам claim: между показом задачи и её захватом мир успевает измениться.
-Почему конкретную задачу нельзя взять, показывает
-`GET /tasks/{ref}/claimability`. Ответ имеет вид `{claimable, reasons[]}`, коды
-причин: `task_already_claimed`, `task_not_ready`, `approval_required`,
-`not_eligible`, `task_not_claimable`.
+Finding work is **advisory**. The only authoritative gate is the claim itself:
+the world can change between showing a task and claiming it. Why a specific
+task cannot be claimed is shown by `GET /tasks/{ref}/claimability`. The response
+has the form `{claimable, reasons[]}`, with reason codes: `task_already_claimed`,
+`task_not_ready`, `approval_required`, `not_eligible`, `task_not_claimable`.
 
-## Цикл исполнения
+## Execution cycle
 
 ```text
 claim → start-run → (checkpoints | actions | artifacts)* → succeed | fail | suspend | handoff | cancel
 ```
 
-1. `POST /tasks/{ref}:claim` с телом `{sessionId, ttlSeconds?, intent?}`
-   (право `tasks.claim`) возвращает claim с `fencingToken` (новой эпохой claim
-   задачи) и арендой `expiresAt`.
-2. `POST /tasks/{ref}:start-run` с телом
-   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` создаёт
-   run, привязанный к этой эпохе. В той же транзакции компилируется манифест
-   версии 1.
-3. `GET /runs/{id}/context` отдаёт операционный контекст: задачу, workspace,
-   claim, требования, связи, последние артефакты, pending approvals,
-   **checkpoints всех прошлых run'ов задачи**, исполнимые скиллы,
-   `pendingControlMessages`, `childHandles` и `eventCursor`. Это операционное
-   состояние, а не память и не история чата. Память — `POST /context`, см.
-   [Контекст задачи и память](context.md).
-4. Работа:
-    - `POST /runs/{id}/checkpoints {kind, data}` — долговременное операционное
-      состояние;
+1. `POST /tasks/{ref}:claim` with the body `{sessionId, ttlSeconds?, intent?}`
+   (permission `tasks.claim`) returns a claim with a `fencingToken` (the new
+   claim epoch of the task) and an `expiresAt` lease.
+2. `POST /tasks/{ref}:start-run` with the body
+   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` creates
+   a run bound to this epoch. Manifest version 1 is compiled in the same
+   transaction.
+3. `GET /runs/{id}/context` returns the operational context: the task,
+   workspace, claim, requirements, relations, recent artifacts, pending
+   approvals, **checkpoints of all past runs of the task**, executable skills,
+   `pendingControlMessages`, `childHandles`, and `eventCursor`. This is
+   operational state, not memory and not chat history. Memory is
+   `POST /context`, see [Task context and memory](context.md).
+4. Work:
+    - `POST /runs/{id}/checkpoints {kind, data}` — durable operational
+      state;
     - `POST /runs/{id}/actions {action, status, skill?, externalReference?, metadata}`
-      — журнал внешних действий;
-    - `POST /artifacts` — результаты, см. [Артефакты и комментарии](artifacts.md).
-5. Финал:
-    - `:succeed {output?, completeTask: true}` атомарно переводит run в
-      `succeeded`, освобождает claim и завершает задачу;
-    - `:fail` честно записывает неудачу. Задачу не трогает и работает даже
-      после потери аренды;
-    - `:suspend` и `:handoff` описаны ниже;
-    - `:cancel` — терминальная отмена.
+      — log of external actions;
+    - `POST /artifacts` — results, see [Artifacts and comments](artifacts.md).
+5. Finish:
+    - `:succeed {output?, completeTask: true}` atomically moves the run to
+      `succeeded`, releases the claim, and completes the task;
+    - `:fail` honestly records the failure. It does not touch the task and
+      works even after the lease is lost;
+    - `:suspend` and `:handoff` are described below;
+    - `:cancel` is a terminal cancellation.
 
-### Fencing и `stale_claim`
+### Fencing and `stale_claim`
 
-Перед каждой авторитетной записью сервер проверяет три вещи: claim жив (аренда
-не истекла, сессия жива), `fencingToken` совпадает с текущей эпохой claim
-задачи, вызывающий — владелец. Любое несовпадение даёт `409 stale_claim`.
+Before every authoritative write the server checks three things: the claim is
+alive (the lease has not expired, the session is alive), the `fencingToken`
+matches the task's current claim epoch, and the caller is the owner. Any
+mismatch returns `409 stale_claim`.
 
-!!! danger "Получив `stale_claim`, прекратите писать"
-    Харнесс обязан прекратить авторитетные записи и заново прочитать
-    `/harness/context`. Повторять запись бессмысленно: владение перешло к
-    другому, или аренда истекла.
+!!! danger "After `stale_claim`, stop writing"
+    The harness must stop authoritative writes and re-read `/harness/context`.
+    Retrying the write is pointless: ownership has passed to someone else, or
+    the lease has expired.
 
-### Бюджеты прогона
+### Run budgets
 
-`maxActions` и `maxDurationSeconds` задаются при `start-run`. Харнесс обязан их
-уважать. Сервер со своей стороны отклоняет запись действия или checkpoint сверх
-бюджета с `409 budget_exceeded`. Финализацию (`:succeed`, `:fail`) бюджет не
-блокирует.
+`maxActions` and `maxDurationSeconds` are set at `start-run`. The harness must
+respect them. On its side, the server rejects an action or checkpoint write
+over budget with `409 budget_exceeded`. The budget does not block finalization
+(`:succeed`, `:fail`).
 
-### Журнал действий
+### Action log
 
-`POST /runs/{id}/actions` записывает внешнее действие: вызов инструмента,
-использование скилла, внешний эффект. Для длинных операций есть двухфазный
-вариант: запись со `status: started`, затем `POST /runs/{id}/actions/{aid}:finish`.
+`POST /runs/{id}/actions` records an external action: a tool call, a skill
+use, an external effect. For long operations there is a two-phase variant: a
+record with `status: started`, then `POST /runs/{id}/actions/{aid}:finish`.
 
-- Обе фазы проходят полную проверку claim. Потеряв аренду, процесс не допишет
-  исход в аудит чужой работы: незавершённое `started` так и останется
-  незавершённым.
-- Это журнал исполнения, отдельный от доменного журнала событий. В нём нет
-  секретов, рассуждений модели и полных payload'ов.
-- Поле `skill` (`uuid | name | name@version`) проходит **повторную
-  авторизацию**: сервер заново вычисляет эффективную политику инструментов. На
-  отозванное или запрещённое назначение он отвечает `403 tool_not_authorized`,
-  и ничего не коммитится: `seq` не растёт, бюджет цел.
-- Если протокол скилла не заявлен сессией, действие всё равно записывается, а
-  расхождение отмечается в `metadata.capabilityMismatch`.
+- Both phases go through the full claim check. Having lost the lease, a process
+  cannot append an outcome to the audit of someone else's work: an unfinished
+  `started` stays unfinished.
+- This is the execution log, separate from the domain event log. It contains no
+  secrets, no model reasoning, and no full payloads.
+- The `skill` field (`uuid | name | name@version`) goes through
+  **re-authorization**: the server recomputes the effective tool policy. For a
+  revoked or forbidden assignment it responds `403 tool_not_authorized`, and
+  nothing is committed: `seq` does not grow, the budget is intact.
+- If the skill's protocol is not declared by the session, the action is still
+  recorded, and the mismatch is noted in `metadata.capabilityMismatch`.
 
-Автономные адаптеры пишут одно действие на каждый вызов инструмента, подробнее
-в [Трасса прогонов](../runner/trace.md).
+Autonomous adapters write one action per tool call; see
+[Run trace](../runner/trace.md).
 
-## Ожидание: gate-approval и suspend
+## Waiting: gate approval and suspend
 
-Минимальная схема ожидания без workflow-движка строится из трёх шагов:
+The minimal waiting scheme without a workflow engine consists of three steps:
 `checkpoint → gate-approval → suspend`.
 
-1. `POST /runs/{id}/checkpoints` — сохранить состояние.
-2. `POST /approvals` с `gate: true` и ровно одним из полей `requiredRoleId` или
-   `assignedPrincipalId`. Пока такой approval в статусе `pending`, задачу
-   нельзя ни захватить, ни завершить: `409 approval_required`.
-3. `POST /runs/{id}:suspend {reason, waitingForApprovalId?}`. Атомарно: run
-   переходит в `suspended` (для этого run состояние терминальное), claim
-   освобождается, задача возвращается в `releaseStatus` своего типа.
+1. `POST /runs/{id}/checkpoints` — save the state.
+2. `POST /approvals` with `gate: true` and exactly one of the fields
+   `requiredRoleId` or `assignedPrincipalId`. While such an approval is
+   `pending`, the task can be neither claimed nor completed:
+   `409 approval_required`.
+3. `POST /runs/{id}:suspend {reason, waitingForApprovalId?}`. Atomically: the
+   run moves to `suspended` (a terminal state for this run), the claim is
+   released, and the task returns to its type's `releaseStatus`.
 
-Продолжение — это новый claim с новым fencing token и новый run, который
-прочитает checkpoints прошлых попыток из Run Context. Эксклюзивная аренда на
-время ожидания не удерживается. Подробности про approvals — в
-[Approvals](approvals.md).
+Continuation is a new claim with a new fencing token and a new run, which reads
+the checkpoints of past attempts from the Run Context. No exclusive lease is
+held while waiting. Details about approvals are in [Approvals](approvals.md).
 
-## Передача прогона другому харнессу (handoff)
+## Handing a run off to another harness (handoff)
 
-Когда человек явно решил сменить харнесс, текущий харнесс вызывает:
+When a human explicitly decides to switch harnesses, the current harness calls:
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>:handoff \
@@ -360,109 +363,110 @@ curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>:handoff \
     "checkpoint": {
       "kind": "handoff",
       "data": {
-        "summary": "Миграция написана, осталось прогнать roundtrip",
-        "nextSteps": ["Создать новый Claim и Run", "Прогнать make test"],
+        "summary": "Migration is written; the roundtrip still needs to run",
+        "nextSteps": ["Create a new Claim and Run", "Run make test"],
         "evidenceRefs": ["commit:abc1234"]
       }
     }
   }'
 ```
 
-Одна транзакция проверяет право, tenant, владельца, живой claim и fencing,
-пишет checkpoint, переводит run в `suspended`, освобождает claim и возвращает
-задачу в работу. В журнал уходят события `run.checkpointed`, `run.suspended`,
-`claim.released` и `run.handoff_prepared`. Ответ содержит `run`, `task`,
-`checkpoint`, `eventCursor` и подсказку для продолжения.
+A single transaction checks the permission, tenant, owner, live claim, and
+fencing, writes the checkpoint, moves the run to `suspended`, releases the
+claim, and returns the task to work. The events `run.checkpointed`,
+`run.suspended`, `claim.released`, and `run.handoff_prepared` go to the event
+log. The response contains `run`, `task`, `checkpoint`, `eventCursor`, and a
+hint for continuing.
 
-- Повтор с тем же `Idempotency-Key` после неоднозначного ответа возвращает
-  сохранённый ответ и не создаёт второй checkpoint.
-- Второй харнесс открывает свою сессию, берёт новый claim и новый run и читает
-  Run Context. Старый run не возобновляется. Процессное состояние и transcript
-  не переносятся.
-- Summary и evidence с credential-подобными значениями или полными локальными
-  путями отклоняются.
+- A repeat with the same `Idempotency-Key` after an ambiguous response returns
+  the stored response and does not create a second checkpoint.
+- The second harness opens its own session, takes a new claim and a new run,
+  and reads the Run Context. The old run is not resumed. Process state and the
+  transcript are not transferred.
+- A summary and evidence with credential-like values or full local paths are
+  rejected.
 
 ## Effective Harness Manifest
 
-Вместе с run сервер компилирует его манифест: неизменяемый снимок
-эффективной runtime-конфигурации (CP-ADR-0043). Версия 1 появляется в
-транзакции `start-run`, харнессу для этого ничего делать не нужно.
+Together with the run, the server compiles its manifest: an immutable snapshot
+of the effective runtime configuration (CP-ADR-0043). Version 1 appears in the
+`start-run` transaction; the harness does not need to do anything for this.
 
-| Часть | Что в ней | Хешируется |
+| Part | What it contains | Hashed |
 |---|---|---|
-| `base` | секции `identity`, `run`, `workerProfile`, `projectPolicy`, `toolPolicy`, `executionBackend`, `model`, `budgets`, `redaction` | да (`baseHash`) |
-| `provenance` | откуда каждая секция и почему виден каждый инструмент | да |
-| `captured` | операционный курсор, версия задачи, эпоха claim, **ссылка** на Memory Context Pack (без содержимого) | нет |
-| `ephemeral` | append-only пометки `steering`, `warning`, `budget_warning`, `note` | нет |
+| `base` | sections `identity`, `run`, `workerProfile`, `projectPolicy`, `toolPolicy`, `executionBackend`, `model`, `budgets`, `redaction` | yes (`baseHash`) |
+| `provenance` | where each section comes from and why each tool is visible | yes |
+| `captured` | operational cursor, task version, claim epoch, a **reference** to the Memory Context Pack (without its content) | no |
+| `ephemeral` | append-only notes `steering`, `warning`, `budget_warning`, `note` | no |
 
-Кто за что отвечает:
+Who is responsible for what:
 
-| Секции | Источник |
+| Sections | Source |
 |---|---|
-| `identity`, `run`, `projectPolicy`, `toolPolicy`, `budgets` | вычисляет сервер; попытка передать их даёт `422 server_authoritative_section` |
-| `workerProfile`, `executionBackend`, `model`, `redaction` | харнесс **декларирует**; сервер записывает с пометкой `harness_declared`, но решений на их основе не принимает |
+| `identity`, `run`, `projectPolicy`, `toolPolicy`, `budgets` | computed by the server; an attempt to pass them returns `422 server_authoritative_section` |
+| `workerProfile`, `executionBackend`, `model`, `redaction` | **declared** by the harness; the server records them marked `harness_declared` but makes no decisions based on them |
 
 Endpoints:
 
-| Метод и путь | Право | Назначение |
+| Method and path | Permission | Purpose |
 |---|---|---|
-| `GET /runs/{id}/harness-manifest[?version=N]` | `tasks.read` | манифест (по умолчанию активная версия) |
-| `GET /runs/{id}/harness-manifests` | `tasks.read` | история версий, новые сверху |
-| `POST /runs/{id}/harness-manifest:compile` | `tasks.claim`, владелец живого claim | пересборка; `200` — base не изменился, `201` — новая версия |
-| `POST /runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | пометка `{kind, summary, data}`, base не меняет |
+| `GET /runs/{id}/harness-manifest[?version=N]` | `tasks.read` | manifest (the active version by default) |
+| `GET /runs/{id}/harness-manifests` | `tasks.read` | version history, newest first |
+| `POST /runs/{id}/harness-manifest:compile` | `tasks.claim`, owner of the live claim | recompile; `200` — base unchanged, `201` — new version |
+| `POST /runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | note `{kind, summary, data}`, does not change base |
 
-Причины компиляции: `run_started`, `recompile`, `provider_fallback`. Смена
-провайдера модели обязана идти с `reason=provider_fallback` и увеличенным
-`model.attempt`, иначе `422 invalid_fallback_attempt`. В декларациях нельзя
-передавать секреты, поля, похожие на prompt или transcript, и абсолютные
-локальные пути: сервер отвечает `422 secret_material_rejected` или
-`422 unsafe_manifest_payload`. Строки манифеста защищены от UPDATE и DELETE
-триггером БД.
+Compilation reasons: `run_started`, `recompile`, `provider_fallback`. A change
+of model provider must come with `reason=provider_fallback` and an incremented
+`model.attempt`, otherwise `422 invalid_fallback_attempt`. Declarations must
+not contain secrets, fields that look like a prompt or transcript, or absolute
+local paths: the server responds `422 secret_material_rejected` or
+`422 unsafe_manifest_payload`. Manifest rows are protected from UPDATE and
+DELETE by a database trigger.
 
-## Инструменты и скиллы {#tools-and-skills}
+## Tools and skills {#tools-and-skills}
 
-Скиллы исполняет харнесс. Control Plane координирует их доступность и ведёт
-аудит. Три слоя намеренно разделены:
+The harness executes skills. The Control Plane coordinates their availability
+and keeps the audit. Three layers are deliberately separated:
 
-- **каталог** — что runtime умеет технически;
-- **эффективная политика инструментов** — что разрешено этому principal, run и
-  workspace сейчас;
-- **представление для поиска** — ограниченная проекция пересечения этих двух.
+- **catalog** — what the runtime can do technically;
+- **effective tool policy** — what is allowed for this principal, run, and
+  workspace right now;
+- **search view** — a bounded projection of the intersection of the two.
 
 ```bash
-# поиск: краткие карточки, первая страница — при пустом query
+# search: short cards; the first page for an empty query
 curl -s "https://platform.example.com/api/v1/tools?query=deploy&runId=<run-id>&limit=25" \
   -H "Authorization: Bearer $TOKEN"
 
-# полная санитизированная схема одного инструмента
+# the full sanitized schema of a single tool
 curl -s "https://platform.example.com/api/v1/tools/git.merge@1?runId=<run-id>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Правила, на которые можно опираться:
+Rules you can rely on:
 
-- инструмент вне политики нельзя ни найти, ни описать: describe отвечает
-  `404 tool_not_found` так же, как на несуществующее имя;
-- инструмент назначен, но его протокол сессия не объявила: он виден с
-  `visible: false` и `reason: protocol_not_supported_by_harness`. Это
-  диагностика конфигурации харнесса, а не запрет;
-- поля `view.catalogRevision`, `view.policyRevision` и `view.viewHash`
-  описывают, из чего собрана страница. `viewHash` отдаётся как `ETag`, и
-  `If-None-Match` даёт `304`, пока обе ревизии не менялись;
-- из схемы describe удалены `config`, `default`, `examples` и vendor-расширения.
-  Удалённые пути перечислены в `schemaRedactions`;
-- **поиск инструмента не даёт прав.** Перед записью действия политика
-  пересчитывается заново.
+- a tool outside the policy can be neither found nor described: describe
+  responds `404 tool_not_found`, the same as for a nonexistent name;
+- a tool is assigned, but the session did not declare its protocol: it is
+  visible with `visible: false` and `reason: protocol_not_supported_by_harness`.
+  This is a diagnostic of the harness configuration, not a denial;
+- the fields `view.catalogRevision`, `view.policyRevision`, and `view.viewHash`
+  describe what the page is built from. `viewHash` is returned as the `ETag`,
+  and `If-None-Match` returns `304` while both revisions are unchanged;
+- `config`, `default`, `examples`, and vendor extensions are removed from the
+  describe schema. The removed paths are listed in `schemaRedactions`;
+- **finding a tool grants no permissions.** The policy is recomputed before an
+  action is written.
 
-Причины видимости (`reason`): `assigned_and_protocol_supported`,
+Visibility reasons (`reason`): `assigned_and_protocol_supported`,
 `not_assigned`, `skill_disabled`, `protocol_not_allowed_by_governance`,
 `not_granted_by_child_handle`, `protocol_not_supported_by_harness`.
 
-## Управление активным ходом (Active Turn Control)
+## Active Turn Control
 
-Простой «Stop» не говорит, какое именно исполнение нужно прервать. Харнесс с
-capability `active_turn_control.v1` принимает durable-сообщения, привязанные к
-прогону.
+A plain "Stop" does not say which execution exactly to interrupt. A harness
+with the `active_turn_control.v1` capability accepts durable messages bound to
+the run.
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>/control-messages \
@@ -472,45 +476,44 @@ curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>/control-messag
   -d '{
     "operation": "steer",
     "causalPosition": "turn:17/tool-batch:2",
-    "directive": "Сначала проверь roundtrip миграции",
+    "directive": "Check the migration roundtrip first",
     "expectedRunVersion": 4
   }'
 ```
 
-| Операция | Семантика | Право |
+| Operation | Semantics | Permission |
 |---|---|---|
-| `queue` | новое намерение после завершения текущего хода | `tasks.write` |
-| `steer` | поправка на ближайшей безопасной границе, без отмены действия | `tasks.write` |
-| `redirect` | отменить только инференс модели; во время работы инструмента харнесс применяет его как `steer` | `tasks.write` |
-| `request_cancel` | кооперативная остановка; новые actions запрещаются только после подтверждения `applied` | `tasks.write` |
-| `force_cancel` | сервер сразу переводит run в `cancelled`, освобождает claim и отменяет активных потомков по `spawned_by` | `claims.manage` |
+| `queue` | a new intent after the current turn finishes | `tasks.write` |
+| `steer` | a correction at the nearest safe boundary, without cancelling the action | `tasks.write` |
+| `redirect` | cancel only the model inference; while a tool is running, the harness applies it as `steer` | `tasks.write` |
+| `request_cancel` | cooperative stop; new actions are forbidden only after an `applied` acknowledgement | `tasks.write` |
+| `force_cancel` | the server immediately moves the run to `cancelled`, releases the claim, and cancels active descendants by `spawned_by` | `claims.manage` |
 
-`Idempotency-Key` и `expectedRunVersion` обязательны (без ключа —
+`Idempotency-Key` and `expectedRunVersion` are required (without the key —
 `422 idempotency_key_required`).
 
-Харнесс читает сообщения через `GET /runs/{id}/control-messages` с
-непрозрачным курсором `rc1_…`, привязанным к прогону (по умолчанию 50 записей,
-максимум 200). `GET /runs/{id}/context` дополнительно несёт
-`pendingControlMessages`, поэтому рестарт между состояниями `accepted` и
-`applied` не теряет намерение.
+The harness reads messages through `GET /runs/{id}/control-messages` with an
+opaque cursor `rc1_…` bound to the run (50 entries by default, 200 maximum).
+`GET /runs/{id}/context` additionally carries `pendingControlMessages`, so a
+restart between the `accepted` and `applied` states does not lose the intent.
 
-Применение подтверждается запросом
-`POST /runs/{id}/control-messages/{messageId}:acknowledge` с полями `status`
-(`applied`, `rejected` или `superseded`), `claimId`, `fencingToken`,
-`expectedRunVersion`, `expectedMessageVersion`, `safeBoundary` (обязателен при
-`applied`) и `reason`. Подтверждать может только держатель живого claim,
-сообщения разрешаются строго по порядку `seq`. Статусы сообщения: `accepted`,
-`applied`, `rejected`, `superseded`. Текст `directive` и `reason` в события и
-outbox не копируется.
+Application is acknowledged with
+`POST /runs/{id}/control-messages/{messageId}:acknowledge` with the fields
+`status` (`applied`, `rejected`, or `superseded`), `claimId`, `fencingToken`,
+`expectedRunVersion`, `expectedMessageVersion`, `safeBoundary` (required for
+`applied`), and `reason`. Only the holder of the live claim can acknowledge,
+and messages are resolved strictly in `seq` order. Message statuses:
+`accepted`, `applied`, `rejected`, `superseded`. The `directive` and `reason`
+text is not copied into events or the outbox.
 
-Старый endpoint `POST /runs/{id}:request-cancel` (право `tasks.write` или
-`claims.manage`) остаётся обёрткой: он материализует типизированное сообщение
-`request_cancel` и пишет событие `run.cancel_requested`.
+The old endpoint `POST /runs/{id}:request-cancel` (permission `tasks.write` or
+`claims.manage`) remains a wrapper: it materializes a typed `request_cancel`
+message and writes a `run.cancel_requested` event.
 
-## Дочерние прогоны (Child Run Handle)
+## Child runs (Child Run Handle)
 
-Харнесс с capability `child_run_handle.v1` может делегировать работу дочернему
-прогону и пережить собственный рестарт.
+A harness with the `child_run_handle.v1` capability can delegate work to a
+child run and survive its own restart.
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>/child-handles \
@@ -519,129 +522,133 @@ curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>/child-handles 
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "correlationId": "review:migration-roundtrip",
-    "title": "Проверить roundtrip миграции",
+    "title": "Check the migration roundtrip",
     "grant": {"permissions": ["tasks.read", "tasks.claim"]},
     "cancellationPolicy": "cascade_cooperative"
   }'
 ```
 
-- **Идемпотентность запуска.** Повтор с тем же `correlationId` возвращает `200`
-  и тот же дочерний прогон, даже при другом `Idempotency-Key`. Новый прогон
-  отвечает `201`.
-- **`handleToken` (`ch1_…`) отдаётся один раз.** Это указатель, а не
-  credential: каждое обращение всё равно проверяет ключ, tenant и право.
-  Потерять токен не страшно, всё работает и по `handleId`.
-- **Grant сужает, но не расширяет.** Запрос сверх потолка родителя даёт
-  `422 child_grant_exceeds_parent`. У дочернего прогона в grant обязано быть
-  `tasks.claim`, иначе `:start-run` будет отклонён.
-- **Переподключение.** `GET /runs/{id}/context` несёт `childHandles`. Кроме
-  того, есть `GET /runs/{id}/child-handles?active=true` (курсор `cd1_…`) и
+- **Idempotent launch.** A repeat with the same `correlationId` returns `200`
+  and the same child run, even with a different `Idempotency-Key`. A new run
+  responds `201`.
+- **`handleToken` (`ch1_…`) is returned once.** It is a pointer, not a
+  credential: every access still checks the key, tenant, and permission.
+  Losing the token is harmless; everything also works by `handleId`.
+- **A grant narrows but does not widen.** A request above the parent's ceiling
+  returns `422 child_grant_exceeds_parent`. The child run's grant must include
+  `tasks.claim`, otherwise `:start-run` is rejected.
+- **Reconnection.** `GET /runs/{id}/context` carries `childHandles`. There are
+  also `GET /runs/{id}/child-handles?active=true` (cursor `cd1_…`) and
   `GET /child-handles/{idOrToken}`.
-- **Статус вычисляется** из дочерних задачи и прогона. Отозванный handle с
-  живым ребёнком показывает `running`, а не `revoked`.
-- **Результат ограничен по размеру и неизменяем.** `output` дочернего
-  `:succeed` может нести `summary`, `data` и `artifactRefs`. Превышение границ
-  даёт `422 child_result_too_large`, объёмные данные выносятся в Artifact.
-- **Политика отмены.** `cascade_cooperative` (по умолчанию) передаёт
-  подтверждённый `request_cancel` родителя активным детям, `detach` этого не
-  делает. `force_cancel` каскадируется всегда.
-- Отзыв: `POST /child-handles/{id}:revoke {reason, cancelChild}`. Вызвать может
-  держатель родительского прогона или principal с `claims.manage`.
+- **The status is computed** from the child task and run. A revoked handle
+  with a live child shows `running`, not `revoked`.
+- **The result is size-limited and immutable.** The `output` of the child's
+  `:succeed` can carry `summary`, `data`, and `artifactRefs`. Exceeding the
+  limits returns `422 child_result_too_large`; move bulky data into an Artifact.
+- **Cancellation policy.** `cascade_cooperative` (the default) passes the
+  parent's acknowledged `request_cancel` to active children; `detach` does not.
+  `force_cancel` always cascades.
+- Revocation: `POST /child-handles/{id}:revoke {reason, cancelChild}`. The
+  holder of the parent run or a principal with `claims.manage` can call it.
 
-## Отмена
+## Cancellation
 
-- `POST /runs/{id}:request-cancel` — кооперативный сигнал. Ставит
-  `cancel_requested_at` и пишет событие `run.cancel_requested`. Идемпотентен.
-- «Запрошена отмена» не означает «исполнение остановлено». Харнесс замечает
-  сигнал по событиям или `GET /runs/{id}`, останавливается и финализирует
-  прогон через `:cancel` или `:fail`.
-- Авторитетно остановить чужой прогон можно через `:cancel`: это разрешено
-  держателю или principal с `claims.manage`. После коммита отмены `:succeed`
-  невозможен (`409 run_not_active`). Гонку cancel/succeed сериализуют
-  блокировки задачи и прогона, победитель всегда один.
+- `POST /runs/{id}:request-cancel` is a cooperative signal. It sets
+  `cancel_requested_at` and writes a `run.cancel_requested` event. Idempotent.
+- "Cancellation requested" does not mean "execution stopped". The harness
+  notices the signal through events or `GET /runs/{id}`, stops, and finalizes
+  the run through `:cancel` or `:fail`.
+- You can authoritatively stop someone else's run through `:cancel`: this is
+  allowed to the holder or a principal with `claims.manage`. After the
+  cancellation commits, `:succeed` is impossible (`409 run_not_active`). The
+  cancel/succeed race is serialized by task and run locks; there is always
+  exactly one winner.
 
-## События
+## Events
 
 ```text
-сохранить последний обработанный cursor
-GET /events?cursor=<cursor>   (или WS /events/ws?after=<cursor>)
-догнать → обработать → переподключиться → снова догнать
+store the last processed cursor
+GET /events?cursor=<cursor>   (or WS /events/ws?after=<cursor>)
+catch up → process → reconnect → catch up again
 ```
 
-Журнал в PostgreSQL — источник истины. WebSocket служит только сигналом
-«проснись»: при потере NOTIFY сервер опрашивает журнал с периодом
-`CP_WS_POLL_INTERVAL_SECONDS`. Выдаваемый префикс журнала всегда полон,
-поэтому единственное, что нужно хранить, — последний обработанный курсор. SDK
-`follow_events(cursor=...)` реализует этот паттерн поверх поллинга.
+The event log in PostgreSQL is the source of truth. The WebSocket serves only
+as a "wake up" signal: if NOTIFY is lost, the server polls the log with a
+period of `CP_WS_POLL_INTERVAL_SECONDS`. The issued log prefix is always
+complete, so the only thing to store is the last processed cursor. The SDK's
+`follow_events(cursor=...)` implements this pattern on top of polling.
 
-События, которые человеческий харнесс должен показывать пользователю:
-`approval.requested|approved|rejected`, `task.claimed` (кем-то другим),
-`claim.released|expired` (потеря владения), `run.cancel_requested`,
-`run.suspended`, `artifact.created`, `task.completed`. Полный перечень типов —
-в статье [События](events.md).
+Events an interactive harness should show to the user:
+`approval.requested|approved|rejected`, `task.claimed` (by someone else),
+`claim.released|expired` (loss of ownership), `run.cancel_requested`,
+`run.suspended`, `artifact.created`, `task.completed`. The full list of types is
+in [Events](events.md).
 
-## Восстановление после рестарта
+## Recovery after a restart
 
-Непрерывность работы не зависит от памяти процесса. После рестарта харнесс:
+Continuity of work does not depend on process memory. After a restart the
+harness:
 
-1. Находит credential (см. [CLI и MCP-сервер](cli-and-mcp.md#credentials)).
-2. Вызывает `GET /harness/context`.
-3. Выбирает ветку:
+1. Finds the credential (see [CLI and MCP server](cli-and-mcp.md#credentials)).
+2. Calls `GET /harness/context`.
+3. Chooses a branch:
 
-    | Ситуация | Что делать |
+    | Situation | What to do |
     |---|---|
-    | claim жив (задача есть в `activeClaims`) | продолжать: heartbeat, существующий `activeRuns[*]` можно вести дальше с тем же fencing token |
-    | claim истёк, задача свободна | новый claim (новый token) и новый run |
-    | задачу перехватили | авторитетных записей не делать; `:succeed` честно вернёт `409 stale_claim` |
-    | run в `suspended` | проверить gate, затем новый claim и новый run |
+    | the claim is alive (the task is in `activeClaims`) | continue: heartbeat; an existing `activeRuns[*]` can be carried on with the same fencing token |
+    | the claim expired, the task is free | a new claim (new token) and a new run |
+    | the task was taken over | make no authoritative writes; `:succeed` honestly returns `409 stale_claim` |
+    | the run is `suspended` | check the gate, then a new claim and a new run |
 
-4. Дочитывает события с сохранённого курсора или с `eventCursor` контекста.
-5. Открывает новую сессию, если старая умерла. Сессии дёшевы, но чужие claims
-   новая сессия не наследует: их нужно захватить заново.
+4. Reads the remaining events from the stored cursor or from the context's
+   `eventCursor`.
+5. Opens a new session if the old one died. Sessions are cheap, but a new
+   session does not inherit other sessions' claims: they must be claimed again.
 
-Control Plane восстанавливает состояние работы, но не скрытое состояние LLM.
+The Control Plane restores the state of the work, but not the hidden state of
+the LLM.
 
-## Сводка отказов
+## Failure summary
 
-| Сбой | Авторитетное состояние | Действие клиента | Повтор безопасен? |
+| Failure | Authoritative state | Client action | Safe to retry? |
 |---|---|---|---|
-| сетевой сбой | неизвестно | повторить с тем же `Idempotency-Key` | да, с ключом |
-| падение харнесса | аренды доживают до TTL | рестарт, раздел выше | — |
-| рестарт Control Plane | всё в PostgreSQL | переподключиться, дочитать события | да |
-| истекла сессия | сессия stale, claims освобождены | новая сессия, новый claim | да |
-| истёк claim | claim пожнёт следующий захват | новый claim (новый token) | да |
-| перехват | у задачи claim другого | прекратить записи, сообщить человеку | нет, для старого процесса |
-| approval отклонён | gate открыт, задача снова в работе | решает исполнитель | — |
-| скилл недоступен | `409 skill_unavailable` | выбрать другую версию или скилл | да |
-| обрыв потока событий | журнал полон | переподключиться с последнего курсора | да |
+| network failure | unknown | retry with the same `Idempotency-Key` | yes, with the key |
+| harness crash | leases live until TTL | restart, see the section above | — |
+| Control Plane restart | everything is in PostgreSQL | reconnect, read the remaining events | yes |
+| session expired | the session is stale, claims are released | new session, new claim | yes |
+| claim expired | the next claim reaps it | new claim (new token) | yes |
+| takeover | the task has someone else's claim | stop writing, tell the human | no, for the old process |
+| approval rejected | the gate is open, the task is back in work | the executor decides | — |
+| skill unavailable | `409 skill_unavailable` | choose another version or skill | yes |
+| event stream dropped | the event log is complete | reconnect from the last cursor | yes |
 
-Ключевые коды ошибок для UX харнесса: `not_eligible`, `task_not_ready`,
+Key error codes for harness UX: `not_eligible`, `task_not_ready`,
 `task_already_claimed`, `stale_claim`, `session_expired`, `approval_required`,
 `skill_unavailable`, `version_conflict`, `idempotency_key_reused`,
 `idempotency_in_flight`, `budget_exceeded`, `run_not_active`,
 `unsupported_protocol_version`, `task_cancelled`, `task_not_claimable`.
-Формат ошибки описан в [API](api.md#errors).
+The error format is described in [API](api.md#errors).
 
-## Чек-лист нового харнесса
+## New harness checklist
 
-- [ ] Получить credential principal'а и хранить его вне репозитория и истории shell.
-- [ ] `GET /harness/context`: identity и ветка восстановления.
-- [ ] Открыть сессию с блоком `harness`, `protocolVersion: "2"` и честными capabilities.
-- [ ] Запустить heartbeat сессии и claim с периодом около `ttl/3`.
-- [ ] Искать работу через `/work/available` (с `projectId`, если работа идёт внутри проекта).
+- [ ] Obtain the principal's credential and keep it outside the repository and shell history.
+- [ ] `GET /harness/context`: identity and the recovery branch.
+- [ ] Open a session with the `harness` block, `protocolVersion: "2"`, and honest capabilities.
+- [ ] Start session and claim heartbeats with a period of about `ttl/3`.
+- [ ] Find work through `/work/available` (with `projectId` if the work happens inside a project).
 - [ ] claim → start-run → `POST /context` → checkpoints, actions, artifacts.
-- [ ] Важные выводы и решения записывать через `POST /observations`.
-- [ ] Финализировать прогон; при ожидании использовать gate и suspend.
-- [ ] Подписаться на события с сохранённого курсора.
-- [ ] На любой `stale_claim` прекращать авторитетные записи.
-- [ ] Каждую мутацию слать с `Idempotency-Key`, при транспортном сбое повторять с тем же ключом.
+- [ ] Record important conclusions and decisions through `POST /observations`.
+- [ ] Finalize the run; when waiting, use a gate and suspend.
+- [ ] Subscribe to events from the stored cursor.
+- [ ] On any `stale_claim`, stop authoritative writes.
+- [ ] Send every mutation with an `Idempotency-Key`; on a transport failure, retry with the same key.
 
-## См. также
+## See also
 
-- [Исполнение — claims и runs](execution.md)
-- [Контекст задачи и память](context.md)
-- [Авторизация и права](authorization.md)
-- [CLI и MCP-сервер](cli-and-mcp.md)
+- [Execution — claims and runs](execution.md)
+- [Task context and memory](context.md)
+- [Authorization and permissions](authorization.md)
+- [CLI and MCP server](cli-and-mcp.md)
 - [API](api.md)
-- [Адаптеры исполнителей](../runner/adapters.md)
-- [MCP-плагин для Claude Code](../operator/mcp-plugin.md)
+- [Executor adapters](../runner/adapters.md)
+- [MCP plugin for Claude Code](../operator/mcp-plugin.md)

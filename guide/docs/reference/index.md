@@ -1,39 +1,40 @@
-# Справочник
 
-Сводные таблицы по всей поставке: переменные окружения, сервисы и порты,
-права и scopes, машинные коды ошибок, цели `make` и глоссарий. Раздел
-рассчитан на поиск по ключевому слову (`Ctrl+K`) и на чтение «по строке»:
-каждая строка таблицы сверена с кодом компонента, `compose.yml`,
-`.env.example`, `Makefile` или `deploy/`.
+# Reference
 
-## Что где искать
+Summary tables for the whole delivery: environment variables, services and
+ports, permissions and scopes, machine error codes, `make` targets, and the
+glossary. The section is built for keyword search (`Ctrl+K`) and for reading
+"by row": every table row is checked against the component code,
+`compose.yml`, `.env.example`, `Makefile`, or `deploy/`.
 
-| Вопрос | Статья |
+## Where to find what
+
+| Question | Page |
 |---|---|
-| Что означает переменная `CP_AUTHZ_MODE`, какое у неё значение по умолчанию, обязательна ли она | [Переменные окружения](environment.md) |
-| На каком порту слушает `iam-service`, от чего зависит `control-plane-api`, какой лимит памяти у memory-service, куда Caddy отправляет `/notify/*` | [Сервисы и порты](services-and-ports.md) |
-| Какое право нужно, чтобы взять задачу; что даёт scope `control-plane:write`; какие права получает агент после `make bootstrap` | [Права и scopes](permissions.md) |
-| Что значит `stale_claim`, `scope_not_allowed`, `iam_credential_ambiguous` и что с этим делать | [Коды ошибок](errors.md) |
-| Как поднять стек с другим набором профилей, прогнать тесты одного компонента | [Цели make](make.md) |
-| Чем claim отличается от run, а audience от scope | [Глоссарий](glossary.md) |
+| What the `CP_AUTHZ_MODE` variable means, what its default is, whether it is required | [Environment variables](environment.md) |
+| Which port `iam-service` listens on, what `control-plane-api` depends on, what memory limit memory-service has, where Caddy sends `/notify/*` | [Services and ports](services-and-ports.md) |
+| Which permission you need to claim a task; what the `control-plane:write` scope grants; which permissions an agent gets after `make bootstrap` | [Permissions and scopes](permissions.md) |
+| What `stale_claim`, `scope_not_allowed`, `iam_credential_ambiguous` mean and what to do about them | [Error codes](errors.md) |
+| How to bring up the stack with a different set of profiles, run the tests of a single component | [Make targets](make.md) |
+| How a claim differs from a run, and an audience from a scope | [Glossary](glossary.md) |
 
-## Соглашения раздела
+## Section conventions
 
-- Имена переменных, полей, кодов и сервисов даются **как в коде** — их можно
-  копировать в `.env`, запросы и фильтры логов.
-- «По умолчанию» означает значение, которое действует, если переменная не
-  задана. Если `compose.yml` подставляет своё значение, это указано отдельно:
-  для контейнеров стека действует именно оно.
-- Адреса и идентификаторы в примерах нейтральные: `platform.example.com`,
+- Names of variables, fields, codes, and services are given **exactly as in
+  code**: you can copy them into `.env`, requests, and log filters.
+- "Default" means the value that applies when the variable is not set. If
+  `compose.yml` substitutes its own value, this is stated separately: for the
+  stack containers, that value is the one that applies.
+- Addresses and identifiers in examples are neutral: `platform.example.com`,
   `<tenant-id>`, `<principal-id>`, `/opt/taimen`.
 
-- Экспериментальные возможности описаны наравне с остальными, но помечены —
-  они включаются только явно.
+- Experimental features are described alongside the rest but are marked:
+  they are enabled only explicitly.
 
-## См. также
+## See also
 
-- [Конфигурация .env](../getting-started/configuration.md) — пошаговая
-  настройка окружения для первого запуска.
-- [Установка и первый запуск](../getting-started/quickstart.md).
-- [Диагностика](../troubleshooting/index.md) — сценарии разбора проблем,
-  в которых используются коды из [справочника ошибок](errors.md).
+- [.env configuration](../getting-started/configuration.md): step-by-step
+  environment setup for the first launch.
+- [Installation and first launch](../getting-started/quickstart.md).
+- [Troubleshooting](../troubleshooting/index.md): problem-solving scenarios
+  that use the codes from the [error reference](errors.md).

@@ -1,57 +1,59 @@
-# Артефакты и комментарии
 
-Артефакт — неизменяемая запись о результате работы: отчёт, коммит,
-документ, транскрипт прогона. Комментарий — реплика в треде задачи для
-координации, с сохранением истории правок. Статья описывает обе сущности,
-их правила и API, хранение файлов артефактов в хранилище объектов и реестр
-типов артефактов, и объясняет, что куда класть. Она нужна разработчикам
-харнессов и интеграций и операторам, читающим результаты агентов.
+# Artifacts and comments
 
-## Что куда класть
+An artifact is an immutable record of a work result: a report, a commit, a
+document, a run transcript. A comment is a message in a task thread for
+coordination, with its edit history preserved. This page describes both
+entities, their rules and API, the storage of artifact files in object storage,
+and the artifact type registry, and explains what goes where. It is for
+developers of harnesses and integrations and for operators reading agent
+results.
 
-| Что | Куда | Почему |
+## What goes where
+
+| What | Where | Why |
 |---|---|---|
-| Результат работы (отчёт, коммит, файл, сводка run'а) | **Artifact** | Неизменяем, привязан к run и задаче, доступен как evidence и в контексте следующих runs |
-| Обсуждение, вопрос, пояснение к передаче | **Comment** | Координация между людьми и агентами; автор — из credential |
-| Состояние для продолжения работы | **Checkpoint** run'а | Явное операционное состояние для рестарта (см. [Исполнение](execution.md)) |
-| Запись о вызове инструмента | **Run action** | Лёгкий аудит, вне журнала событий |
-| Файл результата (документ, PDF, архив) | Содержимое артефакта: `PUT /artifact-contents`, затем артефакт с `contentRef` | Байты лежат в хранилище объектов ядра; база хранит ссылку, размер и контрольную сумму, не blob'ы |
-| Файл, который уже живёт в другой системе | Внешнее хранилище + `uri` артефакта | Ядро хранит только ссылку |
+| A work result (report, commit, file, run summary) | **Artifact** | Immutable, bound to a run and a task, available as evidence and in the context of subsequent runs |
+| A discussion, a question, a note for a handoff | **Comment** | Coordination between humans and agents; the author comes from the credential |
+| State for continuing the work | Run **checkpoint** | Explicit operational state for a restart (see [Execution](execution.md)) |
+| A record of a tool call | **Run action** | Lightweight audit, outside the event log |
+| A result file (document, PDF, archive) | Artifact content: `PUT /artifact-contents`, then an artifact with `contentRef` | The bytes live in the core's object storage; the database stores the reference, size, and checksum, not blobs |
+| A file that already lives in another system | External storage + the artifact's `uri` | The core stores only the reference |
 
-!!! warning "Ни в комментарии, ни в артефакты — секреты"
-    Ни prompts, ни сырые транскрипты, ни credentials не место в комментариях.
-    Для транскрипта есть отдельный вид артефакта с ограничением размера и
-    редакцией — `transcript`.
+!!! warning "No secrets in comments or artifacts"
+    Prompts, raw transcripts, and credentials do not belong in comments.
+    Transcripts have a dedicated artifact kind with a size limit and
+    redaction — `transcript`.
 
-## Артефакты
+## Artifacts
 
-### Модель
+### Model
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `id` | Идентификатор |
-| `type` | Вид артефакта, строка 1–200 символов; словарь открытый, зарегистрированные виды проверяются (см. [Типы артефактов](#artifact-types)) |
-| `name` | Имя, 1–500 символов; для файла — имя, под которым он отдаётся |
-| `taskId`, `runId`, `workspaceId` | Привязки (все необязательны) |
-| `uri` | Ссылка на содержимое во внешнем хранилище (до 2000 символов) |
-| `content` | Небольшой JSON-документ с содержимым |
-| `metadata` | JSON-метаданные: то, что читатель хочет знать до открытия |
-| `supersedesArtifactId` | Предыдущая ревизия, которую заменяет эта |
-| `contentState` | Содержимое в хранилище: `none` (его нет — ссылка или JSON), `stored` (лежит), `purged` (удалено администратором) |
-| `sizeBytes`, `mediaType`, `sha256` | Размер, media type и SHA-256 содержимого; `null` у артефакта без содержимого, после удаления сохраняются как след |
-| `typeVersion` | Версия зарегистрированного типа, по которой артефакт проверен; `null` у незарегистрированного вида |
-| `createdByPrincipalId`, `createdAt` | Автор и время |
+| `id` | Identifier |
+| `type` | Artifact kind, a string of 1–200 characters; the vocabulary is open, registered kinds are validated (see [Artifact types](#artifact-types)) |
+| `name` | Name, 1–500 characters; for a file, the name it is served under |
+| `taskId`, `runId`, `workspaceId` | Bindings (all optional) |
+| `uri` | Reference to the content in external storage (up to 2000 characters) |
+| `content` | A small JSON document with the content |
+| `metadata` | JSON metadata: what a reader wants to know before opening |
+| `supersedesArtifactId` | The previous revision this one replaces |
+| `contentState` | Content in storage: `none` (there is none — a reference or JSON), `stored` (present), `purged` (deleted by an administrator) |
+| `sizeBytes`, `mediaType`, `sha256` | Size, media type, and SHA-256 of the content; `null` for an artifact without content; kept as a trace after deletion |
+| `typeVersion` | The version of the registered type the artifact was validated against; `null` for an unregistered kind |
+| `createdByPrincipalId`, `createdAt` | Author and time |
 
-Артефакт сдаётся в одной из трёх форм: ссылка (`uri`), небольшой JSON
-(`content`) или файл в хранилище ядра (`contentRef`). `contentRef`
-исключает `uri` и `content`.
+An artifact is submitted in one of three forms: a reference (`uri`), a small
+JSON (`content`), or a file in the core's storage (`contentRef`). `contentRef`
+excludes `uri` and `content`.
 
-Артефакты **только создаются и читаются**: изменения и удаления записи в API
-нет. Новая версия результата — новый артефакт со ссылкой на предыдущий.
-Удалить можно только байты содержимого, и только администратору (см.
-[Удаление содержимого](#purge-content)).
+Artifacts are **only created and read**: the API has no update or delete of
+the record. A new version of a result is a new artifact referencing the
+previous one. Only the content bytes can be deleted, and only by an
+administrator (see [Deleting content](#purge-content)).
 
-### Создание
+### Creating
 
 ```bash
 curl -s -X POST "$CP/artifacts" \
@@ -59,137 +61,140 @@ curl -s -X POST "$CP/artifacts" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "type": "report",
-    "name": "Отчёт о нагрузке за неделю",
+    "name": "Weekly load report",
     "runId": "<run-id>",
     "uri": "https://files.example.com/reports/load-week-38.pdf",
-    "content": {"summary": "p95 вырос на 12% в пиковые часы"},
+    "content": {"summary": "p95 grew by 12% during peak hours"},
     "metadata": {"format": "pdf", "pages": 14}
   }'
 ```
 
-Правила:
+Rules:
 
-- право `artifacts.write` — решается **на задаче артефакта**; артефакт без
-  задачи — на его workspace, без обоих — на уровне tenant'а;
-- если передан `runId` без `task`, задача берётся из run; если переданы оба и
-  run принадлежит другой задаче — `422 artifact_mismatch`;
-- для дочернего run проверяется, что `artifacts.write` входит в его потолок
-  прав (см. дочерние runs в [Исполнении](execution.md));
-- `supersedesArtifactId` должен существовать в tenant'е (`404`);
-- пустые `type` или `name` — `422 invalid_type` / `422 invalid_name`;
-- `contentRef` вместе с `uri` или `content` — `422 invalid_artifact_content`;
-- если `type` зарегистрирован в tenant'е, артефакт проверяется по последней
-  версии типа (см. [Типы артефактов](#artifact-types));
-- общий лимит тела запроса — `CP_MAX_BODY_BYTES` (1 МиБ по умолчанию):
-  файлы загружайте отдельно (см. [Содержимое в хранилище](#content)).
+- the `artifacts.write` permission is decided **on the artifact's task**; an
+  artifact without a task — on its workspace; without both — at the tenant
+  level;
+- if `runId` is passed without `task`, the task is taken from the run; if both
+  are passed and the run belongs to another task — `422 artifact_mismatch`;
+- for a child run, the server checks that `artifacts.write` is within its
+  permission ceiling (see child runs in [Execution](execution.md));
+- `supersedesArtifactId` must exist in the tenant (`404`);
+- empty `type` or `name` — `422 invalid_type` / `422 invalid_name`;
+- `contentRef` together with `uri` or `content` — `422 invalid_artifact_content`;
+- if `type` is registered in the tenant, the artifact is validated against the
+  latest version of the type (see [Artifact types](#artifact-types));
+- the general request body limit is `CP_MAX_BODY_BYTES` (1 MiB by default):
+  upload files separately (see [Content in storage](#content)).
 
-### Ревизии
+### Revisions
 
 ```mermaid
 flowchart LR
     A1["artifact v1<br/>type: report"] --> A2["artifact v2<br/>supersedesArtifactId = v1"] --> A3["artifact v3<br/>supersedesArtifactId = v2"]
 ```
 
-Ревизия — отдельный артефакт с `supersedesArtifactId`. Исходный артефакт
-остаётся нетронутым: аудит видит, что было опубликовано и когда.
+A revision is a separate artifact with `supersedesArtifactId`. The original
+artifact stays untouched: the audit sees what was published and when.
 
-### Чтение
+### Reading
 
 ```bash
 curl -s "$CP/artifacts?taskId=<task-id>&type=commit" -H "Authorization: Bearer $TOKEN"
 curl -s "$CP/artifacts/<artifact-id>" -H "Authorization: Bearer $TOKEN"
 ```
 
-`GET /artifacts` (`artifacts.read`) принимает фильтры `taskId`, `runId`,
-`workspaceId`, `type` и пагинацию `limit` / `cursor`; новые — первыми.
+`GET /artifacts` (`artifacts.read`) accepts the filters `taskId`, `runId`,
+`workspaceId`, `type` and `limit` / `cursor` pagination; newest first.
 
-`GET /artifacts/{id}` проверяет `artifacts.read` на задаче артефакта.
-Параметр `?forTask=<ref>` читает артефакт как **вход** задачи-получателя:
-достаточно `tasks.read` на задаче-получателе, если артефакт сейчас — один из
-её разрешённых входов (см. [Входы и выходы](task-types.md#artifact-schema)).
-Иначе действует обычная проверка на задаче артефакта; чужой tenant — `404`.
+`GET /artifacts/{id}` checks `artifacts.read` on the artifact's task. The
+`?forTask=<ref>` parameter reads the artifact as an **input** of the receiving
+task: `tasks.read` on the receiving task is enough if the artifact is currently
+one of its allowed inputs (see [Inputs and outputs](task-types.md#artifact-schema)).
+Otherwise the regular check on the artifact's task applies; another tenant —
+`404`.
 
-Артефакты прошлых runs задачи также приходят в Run Context
-(`GET /runs/{id}/context`) — так следующий исполнитель видит, что уже
-сделано (см. [Контекст задачи и память](context.md)).
+Artifacts of past runs of the task also arrive in the Run Context
+(`GET /runs/{id}/context`) — this is how the next executor sees what has
+already been done (see [Task context and memory](context.md)).
 
-### Виды артефактов
+### Artifact kinds
 
-Словарь `type` открытый: ядро не интерпретирует содержимое. Вид, который
-tenant зарегистрировал в реестре [типов артефактов](#artifact-types),
-проверяется при записи; любой другой принимается без проверки. Компоненты
-платформы используют такие виды (все — незарегистрированные):
+The `type` vocabulary is open: the core does not interpret the content. A kind
+that the tenant registered in the [artifact type](#artifact-types) registry is
+validated on write; any other kind is accepted without validation. Platform
+components use the following kinds (all unregistered):
 
-| `type` | Кто публикует | Содержимое |
+| `type` | Who publishes it | Content |
 |---|---|---|
-| `commit` | Runner, работающий в репозитории | `uri` коммита, `metadata`: `branch`, `commit`, `workspaceKey`, `published` (попала ли ветка во внешний git) |
-| `transcript` | Адаптеры кодовых агентов | Ограниченная лента прогона, схема `agent-transcript/1` |
-| `skill_result` | Ядро, при успешном вызове Skill с задачей | `content.output` — выход Skill; автор — инициатор вызова |
-| `report` | Пример-исполнитель runner'а и интеграции | Произвольный отчёт |
-| `verification` | Ядро, когда пройдена стадия проверки задачи | Итог проверок (см. [Цели, приёмка и evidence](goals-and-evidence.md#verification-stage)) |
+| `commit` | A runner working in a repository | The commit `uri`, `metadata`: `branch`, `commit`, `workspaceKey`, `published` (whether the branch reached the external git) |
+| `transcript` | Coding agent adapters | A bounded run feed, schema `agent-transcript/1` |
+| `skill_result` | The core, on a successful Skill invocation with a task | `content.output` — the Skill output; the author is the invocation initiator |
+| `report` | The runner's example executor and integrations | An arbitrary report |
+| `verification` | The core, when the task's verification stage has passed | The outcome of the checks (see [Goals, acceptance, and evidence](goals-and-evidence.md#verification-stage)) |
 
-Собственные интеграции могут вводить свои виды — выберите стабильные имена
-и документируйте их `metadata`, чтобы на них можно было ссылаться, например,
-в выражениях исходов approval (`$.task.artifact[<type>].metadata.<field>`,
-см. [Approvals](approvals.md)).
+Your own integrations can introduce their own kinds — choose stable names and
+document their `metadata` so they can be referenced, for example, in approval
+outcome expressions (`$.task.artifact[<type>].metadata.<field>`, see
+[Approvals](approvals.md)).
 
-### Транскрипт прогона
+### Run transcript
 
-Артефакт `transcript` — один JSON-документ `agent-transcript/1`, который
-адаптер кодового агента публикует в конце run'а:
+The `transcript` artifact is a single `agent-transcript/1` JSON document that a
+coding agent adapter publishes at the end of a run:
 
-- размер ограничен 512 КиБ, тексты отдельных записей и результаты
-  инструментов обрезаются;
-- каждая строка проходит редакцию локальных путей и credential-подобных
-  значений;
-- скрытые рассуждения модели считаются, но не сохраняются;
-- если документ всё равно не проходит проверку переносимости, он
-  публикуется без текста (`"withheld": true`), только со счётчиками.
+- the size is limited to 512 KiB; the texts of individual entries and tool
+  results are truncated;
+- every line goes through redaction of local paths and credential-like
+  values;
+- hidden model reasoning is counted but not stored;
+- if the document still fails the portability check, it is published without
+  text (`"withheld": true`), with counters only.
 
-`metadata` транскрипта содержит `schema`, `harnessType`, число записей,
-вызовов инструментов и ошибок, модель и расход токенов, если известны. Вызовы
-инструментов параллельно пишутся run actions вида `tool.<имя>`. Подробности
-и настройки — в [Трассе прогонов](../runner/trace.md).
+The transcript `metadata` contains `schema`, `harnessType`, the number of
+entries, tool calls, and errors, the model, and token usage if known. Tool
+calls are written in parallel as run actions of the form `tool.<name>`.
+Details and settings are in [Run trace](../runner/trace.md).
 
-### Артефакт как evidence
+### Artifact as evidence
 
-Артефакт можно указать фактом в `evidence` задачи:
-`{"kind": "artifact", "artifactId": "…", "check": "tests"}`. Ядро проверит,
-что артефакт существует в tenant'е. См.
-[Цели, приёмка и evidence](goals-and-evidence.md).
+You can reference an artifact as a fact in the task's `evidence`:
+`{"kind": "artifact", "artifactId": "…", "check": "tests"}`. The core checks
+that the artifact exists in the tenant. See
+[Goals, acceptance, and evidence](goals-and-evidence.md).
 
-## Содержимое в хранилище { #content }
+## Content in storage { #content }
 
-Файл результата — спецификацию, PDF-заключение, архив — ядро хранит само: в
-S3-совместимом хранилище объектов (в поставке — MinIO контура, см.
-[Хранилище объектов](../operations/object-storage.md)). База держит только
-запись артефакта со ссылкой, размером, media type и SHA-256; байты в
-PostgreSQL и в памяти процесса не лежат. Хранилище наружу не публикуется:
-байты входят и выходят только через API ядра.
+The core stores a result file — a specification, a PDF report, an archive —
+itself: in S3-compatible object storage (in the delivery, the deployment's
+MinIO, see [Object storage](../operations/object-storage.md)). The database
+holds only the artifact record with the reference, size, media type, and
+SHA-256; the bytes are kept neither in PostgreSQL nor in process memory. The
+storage is not exposed externally: bytes go in and out only through the core
+API.
 
-Сдача файла — два шага:
+Submitting a file takes two steps:
 
 ```mermaid
 sequenceDiagram
-    participant C as Клиент
+    participant C as Client
     participant CP as Control Plane
-    participant S as Хранилище объектов
-    C->>CP: PUT /artifact-contents (байты, Content-Type)
-    CP->>S: объект tenants/<tenant-id>/sha256/<hex>
+    participant S as Object storage
+    C->>CP: PUT /artifact-contents (bytes, Content-Type)
+    CP->>S: object tenants/<tenant-id>/sha256/<hex>
     CP-->>C: 201 {contentRef, sizeBytes, mediaType, sha256, expiresAt}
     C->>CP: POST /artifacts {type, name, task, contentRef, metadata}
-    CP-->>C: 201 артефакт, contentState = stored
+    CP-->>C: 201 artifact, contentState = stored
 ```
 
-Если хранилище не настроено (`CP_S3_ENDPOINT_URL` пуст) или недоступно,
-маршруты содержимого отвечают `503 content_store_unavailable`. Остальное
-продолжает работать: артефакты-ссылки и JSON-артефакты создаются и
-читаются как обычно.
+If the storage is not configured (`CP_S3_ENDPOINT_URL` is empty) or is
+unavailable, the content routes respond `503 content_store_unavailable`.
+Everything else keeps working: reference artifacts and JSON artifacts are
+created and read as usual.
 
-### Загрузка: `PUT /artifact-contents`
+### Upload: `PUT /artifact-contents`
 
-Тело запроса — **сырые байты файла**, не JSON и не multipart. Заголовок
-`Content-Type` обязателен и задаёт media type содержимого.
+The request body is the **raw file bytes**, not JSON and not multipart. The
+`Content-Type` header is required and sets the media type of the content.
 
 ```bash
 curl -s -X PUT "$CP/artifact-contents" \
@@ -208,34 +213,33 @@ curl -s -X PUT "$CP/artifact-contents" \
 }
 ```
 
-Правила:
+Rules:
 
-- право `artifacts.write` (без привязки к задаче: задача проверяется, когда
-  на загрузку сошлётся артефакт);
-- `Content-Type` отсутствует или не похож на `type/subtype` —
-  `400 invalid_request`; базовый тип приводится к нижнему регистру,
-  параметры (`; charset=utf-8`) сохраняются;
-- предел размера — `CP_ARTIFACT_MAX_BYTES` (100 МиБ по умолчанию); для этого
-  маршрута он заменяет общий `CP_MAX_BODY_BYTES`. Больше — `413
-  request_too_large`. Тело пишется во временный файл на диске с подсчётом
-  SHA-256 и в память целиком не попадает;
-- объекты адресуются содержимым внутри tenant'а: одинаковые байты,
-  загруженные дважды, хранятся одним объектом, но каждая загрузка получает
-  свой `contentRef`.
+- the `artifacts.write` permission (not bound to a task: the task is checked
+  when an artifact references the upload);
+- `Content-Type` missing or not shaped like `type/subtype` —
+  `400 invalid_request`; the base type is lowercased, parameters
+  (`; charset=utf-8`) are preserved;
+- the size limit is `CP_ARTIFACT_MAX_BYTES` (100 MiB by default); for this
+  route it replaces the general `CP_MAX_BODY_BYTES`. Larger — `413
+  request_too_large`. The body is written to a temporary file on disk while
+  SHA-256 is computed and never lands in memory as a whole;
+- objects are content-addressed within a tenant: identical bytes uploaded
+  twice are stored as one object, but each upload gets its own `contentRef`.
 
-**Кому принадлежит `contentRef`.** Ссылка действует только для principal'а,
-который загружал, и только в его tenant'е. Чужая, несуществующая, искажённая
-или истёкшая ссылка даёт одинаковый ответ `422 content_ref_not_found`:
-знание контрольной суммы или чужой ссылки не позволяет сослаться на чужие
-байты.
+**Who owns a `contentRef`.** The reference is valid only for the principal who
+uploaded it, and only in their tenant. A foreign, nonexistent, malformed, or
+expired reference returns the same `422 content_ref_not_found`: knowing the
+checksum or someone else's reference does not let you reference someone
+else's bytes.
 
-**Сколько живёт.** Загрузка ждёт артефакта `CP_ARTIFACT_UPLOAD_TTL_SECONDS`
-(24 часа по умолчанию), срок — в `expiresAt`. Пока срок не вышел, на одну
-загрузку могут сослаться несколько артефактов. Worker удаляет загрузки, на
-которые до истечения срока не сослался ни один артефакт, и объекты, которые
-больше никому не нужны.
+**How long it lives.** An upload waits for an artifact for
+`CP_ARTIFACT_UPLOAD_TTL_SECONDS` (24 hours by default); the deadline is in
+`expiresAt`. Until the deadline passes, several artifacts can reference the
+same upload. The worker deletes uploads that no artifact referenced before
+expiry, and objects that nobody needs anymore.
 
-### Запись артефакта с содержимым
+### Writing an artifact with content
 
 ```bash
 curl -s -X POST "$CP/artifacts" \
@@ -250,123 +254,127 @@ curl -s -X POST "$CP/artifacts" \
   }'
 ```
 
-В ответе — `contentState: "stored"` и `sizeBytes`, `mediaType`, `sha256`
-загрузки. `name` — имя, под которым файл будет отдаваться при скачивании.
+The response contains `contentState: "stored"` and the upload's `sizeBytes`,
+`mediaType`, and `sha256`. `name` is the name the file is served under on
+download.
 
-### Чтение содержимого: `GET /artifacts/{id}/content`
+### Reading content: `GET /artifacts/{id}/content`
 
 ```bash
 curl -s "$CP/artifacts/<artifact-id>/content" \
   -H "Authorization: Bearer $TOKEN" -o review.pdf
 
-# как вход задачи-получателя
+# as an input of the receiving task
 curl -s "$CP/artifacts/<artifact-id>/content?forTask=<task-ref>" \
   -H "Authorization: Bearer $TOKEN" -o review.pdf
 ```
 
-Авторизация та же, что у `GET /artifacts/{id}`: `artifacts.read` на задаче
-артефакта (на workspace, если задачи нет; на tenant'е, если нет и его) или,
-с `?forTask=`, `tasks.read` на задаче-получателе, если артефакт — её
-разрешённый вход. Исполнитель следующего шага получает вход, даже не имея
-права на задачу предыдущего: вход ему выдан потому, что его объявил тип его
-задачи.
+Authorization is the same as for `GET /artifacts/{id}`: `artifacts.read` on
+the artifact's task (on the workspace if there is no task; on the tenant if
+there is no workspace either) or, with `?forTask=`, `tasks.read` on the
+receiving task if the artifact is its allowed input. The executor of the next
+step gets the input even without permission on the previous step's task: the
+input is granted because the type of its own task declared it.
 
-Байты отдаются потоком с заголовками:
+The bytes are streamed with these headers:
 
-| Заголовок | Значение |
+| Header | Value |
 |---|---|
-| `Content-Type` | `mediaType` артефакта |
-| `Content-Length` | размер |
-| `Content-Disposition` | `attachment; filename*=UTF-8''<name>` для активного содержимого (`text/html`, `application/xhtml+xml`, `image/svg+xml`, `text/xml`, `application/xml`, `text/javascript`, `application/javascript` и любой `+xml`), иначе `inline` с тем же `filename*` |
+| `Content-Type` | the artifact's `mediaType` |
+| `Content-Length` | size |
+| `Content-Disposition` | `attachment; filename*=UTF-8''<name>` for active content (`text/html`, `application/xhtml+xml`, `image/svg+xml`, `text/xml`, `application/xml`, `text/javascript`, `application/javascript`, and any `+xml`), otherwise `inline` with the same `filename*` |
 | `ETag` | `"sha256:<hex>"` |
 | `X-Content-Type-Options` | `nosniff` |
 | `Cache-Control` | `private, no-store` |
 
-| Ответ | Когда |
+| Response | When |
 |---|---|
-| `200` | Байты |
-| `403 permission_denied` | Нет права ни на задаче артефакта, ни как на вход |
-| `404` | Артефакта нет в tenant'е или задача `forTask` не найдена |
-| `404 content_not_found` | У артефакта нет содержимого (`contentState = none`) |
-| `410 content_purged` | Содержимое удалено администратором |
-| `503 content_store_unavailable` | Хранилище не настроено, недоступно или объекта в нём нет |
+| `200` | Bytes |
+| `403 permission_denied` | No permission either on the artifact's task or as an input |
+| `404` | The artifact is not in the tenant, or the `forTask` task is not found |
+| `404 content_not_found` | The artifact has no content (`contentState = none`) |
+| `410 content_purged` | The content was deleted by an administrator |
+| `503 content_store_unavailable` | The storage is not configured, unavailable, or does not have the object |
 
-Каждая выдача пишет событие `artifact.content_read`: кто, какой артефакт,
-для какой задачи (`forTaskId`, если выдано как вход) и в каком run
-читающего. Событие фиксируется до отправки первого байта; выдача, которую
-хранилище не смогло обслужить, события не оставляет.
+Every download writes an `artifact.content_read` event: who, which artifact,
+for which task (`forTaskId`, if served as an input), and in which run of the
+reader. The event is recorded before the first byte is sent; a download the
+storage could not serve leaves no event.
 
-### Удаление содержимого { #purge-content }
+### Deleting content { #purge-content }
 
-Содержимое хранится бессрочно: закрытие или отмена задачи его не трогает.
-Удалить байты может только администратор tenant'а (право `admin`); запись
-артефакта остаётся:
+Content is stored indefinitely: closing or cancelling the task does not touch
+it. Only a tenant administrator (the `admin` permission) can delete the bytes;
+the artifact record remains:
 
 ```bash
 curl -s -X POST "$CP/artifacts/<artifact-id>:purge-content" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
-  -d '{"reason": "Персональные данные попали в отчёт по ошибке"}'
+  -d '{"reason": "Personal data got into the report by mistake"}'
 ```
 
-- `reason` обязателен, 1–2000 символов; в событие попадает очищенным от
-  секретов и обрезанным до 1000 символов;
-- артефакт получает `contentState = purged`; `sizeBytes`, `mediaType` и
-  `sha256` сохраняются как след;
-- объект удаляется из хранилища, только если на те же байты не ссылаются
-  другие артефакты с содержимым и неистёкшие загрузки tenant'а;
-- повтор на уже удалённом — `200` с той же записью, без нового события;
-  артефакт без содержимого — `409 content_not_stored`;
-- объект удаляется до фиксации транзакции: если хранилище недоступно,
-  ответ — `503 content_store_unavailable`, запись остаётся `stored`.
+- `reason` is required, 1–2000 characters; it goes into the event with
+  secrets removed and truncated to 1000 characters;
+- the artifact gets `contentState = purged`; `sizeBytes`, `mediaType`, and
+  `sha256` are kept as a trace;
+- the object is deleted from storage only if no other artifacts with content
+  and no unexpired uploads of the tenant reference the same bytes;
+- a repeat on an already purged artifact — `200` with the same record, no new
+  event; an artifact without content — `409 content_not_stored`;
+- the object is deleted before the transaction commits: if the storage is
+  unavailable, the response is `503 content_store_unavailable`, and the record
+  stays `stored`.
 
-Событие — `artifact.content_purged` с полем `objectDeleted`: удалён ли
-объект или он ещё нужен другим артефактам.
+The event is `artifact.content_purged` with the `objectDeleted` field: whether
+the object was deleted or is still needed by other artifacts.
 
-### MCP-инструменты
+### MCP tools
 
-- `cp_create_artifact` принимает `file` — путь к локальному файлу. Инструмент
-  сам загружает его (`PUT /artifact-contents`) и создаёт артефакт текущей
-  задачи и run с полученным `contentRef`. `name` по умолчанию — имя файла,
-  `media_type` по умолчанию угадывается по расширению (иначе
-  `application/octet-stream`). `file` исключает `uri` и `content`.
-- `cp_get_artifact_content` скачивает содержимое артефакта в локальный файл и
-  возвращает путь. `path` — куда писать (по умолчанию временный каталог вне
-  рабочей копии), `for_task` — задача-получатель (по умолчанию текущая).
-  Текстовое содержимое до 64 КиБ дополнительно возвращается строкой `text`.
+- `cp_create_artifact` accepts `file` — a path to a local file. The tool
+  uploads it (`PUT /artifact-contents`) and creates an artifact of the current
+  task and run with the obtained `contentRef`. `name` defaults to the file
+  name, and `media_type` is guessed from the extension by default (otherwise
+  `application/octet-stream`). `file` excludes `uri` and `content`.
+- `cp_get_artifact_content` downloads an artifact's content to a local file and
+  returns the path. `path` is where to write (by default a temporary directory
+  outside the working copy), `for_task` is the receiving task (the current one
+  by default). Text content up to 64 KiB is also returned as the `text` string.
 
-## Типы артефактов { #artifact-types }
+## Artifact types { #artifact-types }
 
-Тип артефакта — объект каталога tenant'а, как тип задачи: ключ, JSON Schema
-для `metadata`, допустимые media types содержимого и потолок размера. Ядро не
-знает, что тип означает, — кода под тип нет. Типы нужны, чтобы артефакты
-одного вида были однородны и чтобы на них могли ссылаться входы и выходы
-типов задач (см. [Входы и выходы](task-types.md#artifact-schema)).
+An artifact type is an object in the tenant's catalog, like a task type: a key,
+a JSON Schema for `metadata`, the allowed content media types, and a size
+ceiling. The core does not know what a type means — there is no type-specific
+code. Types exist so that artifacts of one kind are uniform and so that task
+type inputs and outputs can reference them (see
+[Inputs and outputs](task-types.md#artifact-schema)).
 
-### Модель
+### Model
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `key` | `^[a-z0-9][a-z0-9_-]*$`, 1–63 символа; совпадает с `type` артефакта |
-| `version` | Выдаёт сервер: следующая после максимальной для ключа |
-| `displayName` | 1–200 символов |
-| `description` | До 2000 символов |
-| `metadataSchema` | JSON Schema для `metadata` артефакта, до 16 КиБ; по умолчанию `{}` — любой объект |
-| `mediaTypes` | 1–50 элементов: `type/subtype`, `type/*` или `*/*`; приводятся к нижнему регистру, повторы убираются |
-| `maxBytes` | Потолок размера содержимого, от 1 до `CP_ARTIFACT_MAX_BYTES`; не указан — `CP_ARTIFACT_MAX_BYTES` на момент создания версии |
+| `key` | `^[a-z0-9][a-z0-9_-]*$`, 1–63 characters; matches the artifact's `type` |
+| `version` | Assigned by the server: the next after the maximum for the key |
+| `displayName` | 1–200 characters |
+| `description` | Up to 2000 characters |
+| `metadataSchema` | JSON Schema for the artifact's `metadata`, up to 16 KiB; `{}` by default — any object |
+| `mediaTypes` | 1–50 items: `type/subtype`, `type/*`, or `*/*`; lowercased, duplicates removed |
+| `maxBytes` | Content size ceiling, from 1 to `CP_ARTIFACT_MAX_BYTES`; if not set — `CP_ARTIFACT_MAX_BYTES` at the time the version is created |
 | `status` | `active` |
 
-### Версии
+### Versions
 
-Версия **неизменяема**. `POST /artifact-types` с существующим ключом
-создаёт следующую версию, а не правит текущую. Маршрута депрецирования у
-типов артефактов нет. Артефакт всегда проверяется по **последней** версии
-ключа (наибольшей по номеру) и запоминает её в `typeVersion`.
+A version is **immutable**. `POST /artifact-types` with an existing key
+creates the next version rather than editing the current one. Artifact types
+have no deprecation route. An artifact is always validated against the
+**latest** version of the key (the highest number) and records it in
+`typeVersion`.
 
-Адресация по ключу, как в поле `type` артефакта:
+Addressing is by key, as in the artifact's `type` field:
 
-- `GET /artifact-types/{key}` — последняя версия;
-- `GET /artifact-types/{key}@{version}` — точная версия.
+- `GET /artifact-types/{key}` — the latest version;
+- `GET /artifact-types/{key}@{version}` — an exact version.
 
 ```bash
 curl -s -X POST "$CP/artifact-types" \
@@ -374,7 +382,7 @@ curl -s -X POST "$CP/artifact-types" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "key": "review-report",
-    "displayName": "Заключение проверки",
+    "displayName": "Review report",
     "mediaTypes": ["application/pdf"],
     "maxBytes": 10485760,
     "metadataSchema": {
@@ -387,123 +395,124 @@ curl -s -X POST "$CP/artifact-types" \
 curl -s "$CP/artifact-types/review-report@1" -H "Authorization: Bearer $TOKEN"
 ```
 
-Ошибки публикации — `422 invalid_artifact_type` с `details.field`
-(`metadataSchema`, `mediaTypes`, `mediaTypes[<i>]`, `maxBytes`); причина отказа
-схемы — в `details.reason` и `details.cause`.
+Publication errors — `422 invalid_artifact_type` with `details.field`
+(`metadataSchema`, `mediaTypes`, `mediaTypes[<i>]`, `maxBytes`); the reason a
+schema was rejected is in `details.reason` and `details.cause`.
 
-### Проверка артефакта
+### Artifact validation
 
-Если `type` артефакта зарегистрирован в tenant'е, `POST /artifacts`
-проверяет его по последней версии типа:
+If the artifact's `type` is registered in the tenant, `POST /artifacts`
+validates it against the latest version of the type:
 
-| Что | Ошибка |
+| What | Error |
 |---|---|
-| `metadata` по `metadataSchema` | `422 invalid_artifact_metadata`, нарушения — в `details.errors` |
-| `mediaType` содержимого по `mediaTypes` (без параметров и без учёта регистра: `text/markdown; charset=utf-8` — это `text/markdown`) | `422 media_type_not_allowed`, в `details` — `mediaType` и `allowed` |
-| `sizeBytes` содержимого по `maxBytes` | `422 artifact_too_large`, в `details` — `sizeBytes` и `maxBytes` |
+| `metadata` against `metadataSchema` | `422 invalid_artifact_metadata`, violations in `details.errors` |
+| Content `mediaType` against `mediaTypes` (without parameters and case-insensitive: `text/markdown; charset=utf-8` is `text/markdown`) | `422 media_type_not_allowed`, `details` holds `mediaType` and `allowed` |
+| Content `sizeBytes` against `maxBytes` | `422 artifact_too_large`, `details` holds `sizeBytes` and `maxBytes` |
 
-Media type и размер есть только у содержимого из `contentRef`: ссылка и
-JSON-артефакт зарегистрированного типа проверяются только по `metadata`.
-**Незарегистрированные виды** (`commit`, `report`, `transcript`,
-`skill_result`, `verification` и любые другие) принимаются без проверки,
-`typeVersion = null`. Артефакты, которые пишет само ядро, не проверяются.
+Only content from `contentRef` has a media type and size: a reference or JSON
+artifact of a registered type is validated only against `metadata`.
+**Unregistered kinds** (`commit`, `report`, `transcript`, `skill_result`,
+`verification`, and any others) are accepted without validation,
+`typeVersion = null`. Artifacts written by the core itself are not validated.
 
-### API реестра
+### Registry API
 
-| Метод | Путь | Право |
+| Method | Path | Permission |
 |---|---|---|
 | `POST` | `/artifact-types` | `artifact_types.manage` |
 | `GET` | `/artifact-types?key=&status=` | `artifact_types.read` |
 | `GET` | `/artifact-types/{key}` | `artifact_types.read` |
 | `GET` | `/artifact-types/{key}@{version}` | `artifact_types.read` |
 
-Список — новые первыми, пагинация `limit` / `cursor`. В пакетах каталога тип
-артефакта объявляется видом `ArtifactType` (см.
-[Пакеты каталога](catalog-packages.md)).
+The list is newest first, with `limit` / `cursor` pagination. In catalog
+packages an artifact type is declared with the `ArtifactType` kind (see
+[Catalog packages](catalog-packages.md)).
 
-## API артефактов
+## Artifacts API
 
-| Метод | Путь | Право |
+| Method | Path | Permission |
 |---|---|---|
 | `PUT` | `/artifact-contents` | `artifacts.write` |
-| `POST` | `/artifacts` | `artifacts.write` на задаче артефакта |
-| `GET` | `/artifacts/{id}` | `artifacts.read` на задаче артефакта или `tasks.read` на задаче `forTask` |
-| `GET` | `/artifacts/{id}/content` | как `GET /artifacts/{id}` |
+| `POST` | `/artifacts` | `artifacts.write` on the artifact's task |
+| `GET` | `/artifacts/{id}` | `artifacts.read` on the artifact's task or `tasks.read` on the `forTask` task |
+| `GET` | `/artifacts/{id}/content` | same as `GET /artifacts/{id}` |
 | `POST` | `/artifacts/{id}:purge-content` | `admin` |
 
-### Коды ошибок артефактов
+### Artifact error codes
 
-| Код | HTTP | Когда |
+| Code | HTTP | When |
 |---|---|---|
-| `invalid_request` | 400 | `PUT /artifact-contents` без корректного `Content-Type` |
-| `request_too_large` | 413 | Файл больше `CP_ARTIFACT_MAX_BYTES` |
-| `content_store_unavailable` | 503 | Хранилище не настроено, недоступно или потеряло объект |
-| `invalid_artifact_content` | 422 | `contentRef` вместе с `uri` или `content` |
-| `content_ref_not_found` | 422 | `contentRef` не является живой загрузкой этого principal'а |
-| `invalid_artifact_metadata` | 422 | `metadata` не проходит `metadataSchema` типа |
-| `media_type_not_allowed` | 422 | Media type содержимого не входит в `mediaTypes` типа |
-| `artifact_too_large` | 422 | Содержимое больше `maxBytes` типа |
-| `invalid_artifact_type` | 422 | Ошибка в определении типа артефакта |
-| `content_not_found` | 404 | У артефакта нет содержимого |
-| `content_purged` | 410 | Содержимое удалено администратором |
-| `content_not_stored` | 409 | `:purge-content` у артефакта без содержимого |
+| `invalid_request` | 400 | `PUT /artifact-contents` without a valid `Content-Type` |
+| `request_too_large` | 413 | The file is larger than `CP_ARTIFACT_MAX_BYTES` |
+| `content_store_unavailable` | 503 | The storage is not configured, unavailable, or lost the object |
+| `invalid_artifact_content` | 422 | `contentRef` together with `uri` or `content` |
+| `content_ref_not_found` | 422 | `contentRef` is not a live upload of this principal |
+| `invalid_artifact_metadata` | 422 | `metadata` does not pass the type's `metadataSchema` |
+| `media_type_not_allowed` | 422 | The content media type is not in the type's `mediaTypes` |
+| `artifact_too_large` | 422 | The content is larger than the type's `maxBytes` |
+| `invalid_artifact_type` | 422 | An error in the artifact type definition |
+| `content_not_found` | 404 | The artifact has no content |
+| `content_purged` | 410 | The content was deleted by an administrator |
+| `content_not_stored` | 409 | `:purge-content` on an artifact without content |
 
-## Комментарии к задаче
+## Task comments
 
-Комментарий — координация: он не несёт полномочий и не заменяет артефакт.
-Два правила делают тред надёжным:
+A comment is coordination: it carries no authority and does not replace an
+artifact. Two rules make the thread reliable:
 
-- **автор берётся из credential**, а не из тела запроса — реплику агента
-  отличает от реплики человека сама система, без соглашений в тексте;
-- **правка сохраняет прежний текст**: предыдущая версия записывается в
-  append-only историю до того, как новый текст ляжет в комментарий.
+- **the author comes from the credential**, not from the request body — the
+  system itself tells an agent's message from a human's, with no conventions in
+  the text;
+- **an edit preserves the previous text**: the previous version is written to
+  an append-only history before the new text goes into the comment.
 
-### Модель
+### Model
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `id`, `taskId` | Комментарий и задача |
-| `authorPrincipalId` | Автор — principal вызывающего |
-| `body` | Текст до 10 000 символов |
-| `runId`, `artifactId` | Необязательная привязка к run или артефакту **той же задачи** |
-| `version` | Растёт при каждой правке; `ETag: "comment-<version>"` |
-| `createdAt`, `updatedAt`, `editedAt` | `editedAt` задан, если комментарий правили |
+| `id`, `taskId` | Comment and task |
+| `authorPrincipalId` | Author — the caller's principal |
+| `body` | Text up to 10,000 characters |
+| `runId`, `artifactId` | Optional binding to a run or artifact of **the same task** |
+| `version` | Grows with every edit; `ETag: "comment-<version>"` |
+| `createdAt`, `updatedAt`, `editedAt` | `editedAt` is set if the comment was edited |
 
-### Добавление
+### Adding
 
 ```bash
 curl -s -X POST "$CP/tasks/TASK-000123/comments" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"body": "Миграция проверена на копии базы, можно выкладывать", "runId": "<run-id>"}'
+  -d '{"body": "Migration verified on a database copy, ready to deploy", "runId": "<run-id>"}'
 ```
 
-- право `tasks.write`;
-- текст обрезается по краям; пустой — `422 invalid_comment_body`,
-  длиннее 10 000 символов — `422 payload_too_large`;
-- текст проверяется на секреты — `422 secret_material_rejected`;
-- `runId` / `artifactId` чужой задачи — `422 comment_mismatch`, чужого
-  tenant'а — `404`;
-- терминальная задача комментарии **принимает**: ретроспектива, причина
-  отмены или ссылка на продолжение появляются уже после закрытия работы.
+- the `tasks.write` permission;
+- the text is trimmed; empty — `422 invalid_comment_body`, longer than 10,000
+  characters — `422 payload_too_large`;
+- the text is checked for secrets — `422 secret_material_rejected`;
+- `runId` / `artifactId` of another task — `422 comment_mismatch`, of another
+  tenant — `404`;
+- a terminal task **accepts** comments: a retrospective, a cancellation reason,
+  or a link to the follow-up appear after the work is closed.
 
-### Правка
+### Editing
 
 ```bash
 curl -s -X PATCH "$CP/tasks/TASK-000123/comments/<comment-id>" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -H 'If-Match: "comment-1"' \
-  -d '{"body": "Миграция проверена на копии базы; выкладывать после 18:00"}'
+  -d '{"body": "Migration verified on a database copy; deploy after 18:00"}'
 ```
 
-- Править может **только автор** (`403 not_comment_author`). Исключений для
-  администратора нет: переписать чужие слова от чужого имени — подмена
-  авторства.
-- `If-Match` обязателен; несовпадение версии — `409 version_conflict`.
-- Правка, не меняющая текст, ничего не записывает: ни ревизии, ни новой
-  версии, ни события — повтор запроса не порождает историю.
-- Удаления комментариев нет.
+- **Only the author** can edit (`403 not_comment_author`). There is no
+  exception for an administrator: rewriting someone else's words under their
+  name is a forgery of authorship.
+- `If-Match` is required; a version mismatch — `409 version_conflict`.
+- An edit that does not change the text writes nothing: no revision, no new
+  version, no event — a repeated request produces no history.
+- Comments cannot be deleted.
 
-### История правок
+### Edit history
 
 ```bash
 curl -s "$CP/tasks/TASK-000123/comments/<comment-id>/revisions" \
@@ -516,7 +525,7 @@ curl -s "$CP/tasks/TASK-000123/comments/<comment-id>/revisions" \
     {
       "id": "…", "commentId": "…", "taskId": "…",
       "version": 1,
-      "body": "Миграция проверена на копии базы, можно выкладывать",
+      "body": "Migration verified on a database copy, ready to deploy",
       "authorPrincipalId": "…",
       "createdAt": "…",
       "supersededAt": "…",
@@ -527,53 +536,53 @@ curl -s "$CP/tasks/TASK-000123/comments/<comment-id>/revisions" \
 }
 ```
 
-Ревизии хранятся в append-only таблице: `UPDATE` и `DELETE` запрещены
-триггером базы.
+Revisions are stored in an append-only table: `UPDATE` and `DELETE` are
+forbidden by a database trigger.
 
-### Лента
+### Feed
 
-`GET /tasks/{ref}/comments` — единственная выборка, идущая **от старых к
-новым**: тред читают вперёд, и реплика, написанная во время листания,
-приезжает на следующей странице. Курсор ленты имеет собственный формат:
-курсор другой выборки здесь даёт `422 invalid_cursor`.
+`GET /tasks/{ref}/comments` is the only listing that goes **from oldest to
+newest**: a thread is read forward, and a message written while you page
+arrives on the next page. The feed cursor has its own format: a cursor from
+another listing returns `422 invalid_cursor` here.
 
-### API комментариев
+### Comments API
 
-| Метод | Путь | Право |
+| Method | Path | Permission |
 |---|---|---|
 | `POST` | `/tasks/{ref}/comments` | `tasks.write` |
 | `GET` | `/tasks/{ref}/comments` | `tasks.read` |
 | `GET` | `/tasks/{ref}/comments/{id}` | `tasks.read` (`ETag`) |
-| `PATCH` | `/tasks/{ref}/comments/{id}` | `tasks.write`, только автор, `If-Match` |
+| `PATCH` | `/tasks/{ref}/comments/{id}` | `tasks.write`, author only, `If-Match` |
 | `GET` | `/tasks/{ref}/comments/{id}/revisions` | `tasks.read` |
 
-Комментарий адресуется через свою задачу: обращение к нему через чужую
-задачу — `404`.
+A comment is addressed through its task: accessing it through another task
+returns `404`.
 
-MCP-инструменты: `cp_list_comments` (чтение), `cp_comment`,
-`cp_edit_comment` (изменяющие).
+MCP tools: `cp_list_comments` (read), `cp_comment`, `cp_edit_comment`
+(mutating).
 
-## События
+## Events
 
-| Событие | Поток | Payload |
+| Event | Stream | Payload |
 |---|---|---|
-| `artifact.created` | артефакта | `type`, `name`, `taskId`, `runId`, `uri`, `supersedesArtifactId`, `sizeBytes`, `mediaType`, `sha256`, `contentState`, `typeVersion` — **без** `content` и без байтов |
-| `artifact.content_read` | артефакта | `artifactId`, `taskId`, `forTaskId`, `runId` (run читающего, если есть), `sha256`, `sizeBytes` |
-| `artifact.content_purged` | артефакта | `artifactId`, `taskId`, `sha256`, `sizeBytes`, `reason`, `objectDeleted` |
-| `artifact_type.created` | типа артефакта | `key`, `version`, `mediaTypes`, `maxBytes`, `declaresMetadataSchema` |
-| `task.comment_added` | **задачи** | `commentId`, `authorPrincipalId`, `version`, `bodyLength`, `runId`, `artifactId` |
-| `task.comment_edited` | задачи | То же |
+| `artifact.created` | artifact | `type`, `name`, `taskId`, `runId`, `uri`, `supersedesArtifactId`, `sizeBytes`, `mediaType`, `sha256`, `contentState`, `typeVersion` — **without** `content` and without bytes |
+| `artifact.content_read` | artifact | `artifactId`, `taskId`, `forTaskId`, `runId` (the reader's run, if any), `sha256`, `sizeBytes` |
+| `artifact.content_purged` | artifact | `artifactId`, `taskId`, `sha256`, `sizeBytes`, `reason`, `objectDeleted` |
+| `artifact_type.created` | artifact type | `key`, `version`, `mediaTypes`, `maxBytes`, `declaresMetadataSchema` |
+| `task.comment_added` | **task** | `commentId`, `authorPrincipalId`, `version`, `bodyLength`, `runId`, `artifactId` |
+| `task.comment_edited` | task | The same |
 
-События комментариев пишутся в поток задачи, чтобы подписчик видел
-обсуждение там же, где смены статуса. Текст комментария в журнал не
-попадает никогда — только длина.
+Comment events are written to the task stream so that a subscriber sees the
+discussion in the same place as status changes. The comment text never goes
+into the event log — only its length.
 
-## См. также
+## See also
 
-- [Исполнение — claims и runs](execution.md) — checkpoints и run actions.
-- [Типы задач и статусы](task-types.md#artifact-schema) — входы и выходы типа задачи.
-- [Пакеты каталога](catalog-packages.md) — вид `ArtifactType`.
-- [Хранилище объектов (MinIO)](../operations/object-storage.md)
-- [Трасса прогонов](../runner/trace.md) — транскрипт и actions инструментов.
-- [Цели, приёмка и evidence](goals-and-evidence.md)
-- [События](events.md)
+- [Execution — claims and runs](execution.md) — checkpoints and run actions.
+- [Task types and statuses](task-types.md#artifact-schema) — inputs and outputs of a task type.
+- [Catalog packages](catalog-packages.md) — the `ArtifactType` kind.
+- [Object storage (MinIO)](../operations/object-storage.md)
+- [Run trace](../runner/trace.md) — transcript and tool actions.
+- [Goals, acceptance, and evidence](goals-and-evidence.md)
+- [Events](events.md)

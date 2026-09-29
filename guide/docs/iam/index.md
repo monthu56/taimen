@@ -1,67 +1,70 @@
-# IAM — identity и доступ
 
-`iam-service` — единый сервис identity платформы Taimen. Он отвечает на вопрос
-«кто действует и в каком tenant», выпускает короткоживущие access token для
-конкретного сервиса и публикует события identity. Раздел предназначен для
-администраторов инсталляции и инженеров, подключающих новый сервис к платформе.
+# IAM: identity and access
 
-## Что делает IAM и чего не делает
+`iam-service` is the single identity service of the Taimen platform. It answers
+the question "who is acting and in which tenant", issues short-lived access
+tokens for a specific service, and publishes identity events. This section is
+for installation administrators and for engineers who connect a new service to
+the platform.
 
-IAM владеет identity и credentials, но **не** решает, что конкретному
-пользователю разрешено сделать с ресурсом. Итоговое разрешение действия
-складывается из нескольких независимых проверок:
+## What IAM does and does not do
+
+IAM owns identity and credentials, but it does **not** decide what a specific
+user is allowed to do with a resource. The final permission for an action is
+the combination of several independent checks:
 
 
 ```text
-IAM identity (кто и в каком tenant)
-AND лицензия/feature (внешняя проверка лицензии, если подключена)
-AND организационная и доменная авторизация (resource service / внешний PDP)
-AND транзакционные инварианты ресурса (claims, fencing и т. п.)
-= разрешённое действие
+IAM identity (who, and in which tenant)
+AND license/feature (external license check, if connected)
+AND organizational and domain authorization (resource service / external PDP)
+AND transactional invariants of the resource (claims, fencing, etc.)
+= permitted action
 ```
 
-| IAM владеет | IAM не владеет |
+| IAM owns | IAM does not own |
 |---|---|
-| Tenant и членство principal в tenant | Workspace, Project, Task, Run |
-| Principal видов `human`, `agent`, `service_account`, `workload` | Namespace памяти, документы |
-| External identity (`issuer + subject`) и группы | Продуктовые планы, лицензии, квоты |
-| Platform Access Token (PAT), client credentials service account | Доменные роли и права сервисов |
-| Реестр audiences и допустимых scopes | Решения «может ли P сделать A над R» |
-| Федерация внешних IdP (OIDC), SCIM-провижининг | Пароли пользователей (их проверяет IdP) |
-| Подпись access token и JWKS | |
-| Журнал событий (outbox) и audit | |
+| Tenant and principal membership in a tenant | Workspace, Project, Task, Run |
+| Principals of kinds `human`, `agent`, `service_account`, `workload` | Memory namespaces, documents |
+| External identity (`issuer + subject`) and groups | Product plans, licenses, quotas |
+| Platform Access Token (PAT), service account client credentials | Domain roles and service permissions |
+| Registry of audiences and allowed scopes | Decisions of the form "may P do A on R" |
+| Federation with external IdPs (OIDC), SCIM provisioning | User passwords (the IdP verifies them) |
+| Access token signing and JWKS | |
+| Event log (outbox) and audit | |
 
-!!! note "Валидный токен — не разрешение"
-    Access token IAM подтверждает только identity, tenant и **потолок**
-    полномочий (`scope`). Конкретное право на ресурс сервис выводит сам:
-    Control Plane — через binding IAM principal к своему principal и его права
-    (см. [Авторизация и права](../control-plane/authorization.md)).
+!!! note "A valid token is not a permission"
+    An IAM access token confirms only the identity, the tenant, and the
+    **ceiling** of authority (`scope`). The service derives the specific right
+    on a resource itself: Control Plane does it through the binding of the IAM
+    principal to its own principal and that principal's permissions
+    (see [Authorization and permissions](../control-plane/authorization.md)).
 
-Обоснование границ — `TAI-ADR-0013` (раздельные IAM и Entitlement) и
-`TAI-ADR-0012` (вход через токен для локальных плагинов и SCIM).
+Rationale for these boundaries: `TAI-ADR-0013` (separate IAM and Entitlement)
+and `TAI-ADR-0012` (token-based sign-in for local plugins and SCIM).
 
-## Место в архитектуре
+## Place in the architecture
 
 
 ```mermaid
 flowchart LR
-    subgraph clients["Клиенты"]
-        H["Человек: MCP-плагин,<br/>CLI"]
-        A["Автономный агент<br/>(runner)"]
-        B["Веб-клиент<br/>с входом через IdP"]
-        S["Сервис платформы<br/>(service account)"]
+    subgraph clients["Clients"]
+        H["Human: MCP plugin,<br/>CLI"]
+        A["Autonomous agent<br/>(runner)"]
+        B["Web client<br/>with IdP sign-in"]
+        S["Platform service<br/>(service account)"]
     end
-    KC["Внешний OIDC IdP"]
+    KC["External OIDC IdP"]
     IAM["iam-service<br/>:8010"]
     CP["control-plane"]
     MEM["memory-service"]
-    OTH["другие resource services"]
+    OTH["other resource services"]
 
     H == "PAT → :exchange" ==> IAM
     A == "PAT → :exchange" ==> IAM
     B == "upstream token → federation:exchange" ==> IAM
     S == "client credentials → tokens/exchange" ==> IAM
-    B -. "вход (OIDC)" .-> KC
+    B -. "sign-in (OIDC)" .-> KC
     IAM -. "discovery + JWKS" .-> KC
 
     IAM == "access token aud=control-plane" ==> CP
@@ -72,26 +75,26 @@ flowchart LR
     OTH -. "JWKS" .-> IAM
 ```
 
-Ключевой принцип: **один токен — один сервис**. Долгоживущий credential
-(PAT, секрет service account, upstream-токен IdP) предъявляется только IAM и
-обменивается на короткоживущий (по умолчанию 300 с) access token ровно одного
-audience. Сервис принимает токен только своего audience; токен Control Plane
-не принимается памятью, и наоборот.
+The key principle: **one token, one service**. A long-lived credential (PAT,
+service account secret, IdP upstream token) is presented only to IAM and is
+exchanged for a short-lived (300 s by default) access token for exactly one
+audience. A service accepts only tokens for its own audience; memory does not
+accept a Control Plane token, and vice versa.
 
-## Три пути получить access token
+## Three ways to get an access token
 
-| Кто | Долгоживущий credential | Эндпоинт обмена | `principal_type` в токене |
+| Who | Long-lived credential | Exchange endpoint | `principal_type` in the token |
 |---|---|---|---|
-| Человек в локальном harness (CLI, MCP-плагин) | PAT `iam_pat_…` | `POST /api/v1/platform-access-tokens:exchange` | `human` |
-| Автономный агент (runner) | PAT `iam_pat_…` | `POST /api/v1/platform-access-tokens:exchange` | `agent` |
-| Человек в браузере (вход в рабочее место через launcher) | upstream OIDC token IdP | `POST /api/v1/tenants/{t}/federation:exchange` | `human` |
-| Сервис платформы | `clientId` + `clientSecret` | `POST /api/v1/tokens/exchange` | `service_account` |
+| Human in a local harness (CLI, MCP plugin) | PAT `iam_pat_…` | `POST /api/v1/platform-access-tokens:exchange` | `human` |
+| Autonomous agent (runner) | PAT `iam_pat_…` | `POST /api/v1/platform-access-tokens:exchange` | `agent` |
+| Human in a browser (sign-in to the workspace through the launcher) | IdP upstream OIDC token | `POST /api/v1/tenants/{t}/federation:exchange` | `human` |
+| Platform service | `clientId` + `clientSecret` | `POST /api/v1/tokens/exchange` | `service_account` |
 
-Подробности — в статьях [Credentials и PAT](credentials.md),
-[Токены, audiences, scopes](tokens.md), [Service accounts](service-accounts.md)
-и [Федерация identity](federation.md).
+Details are in [Credentials and PAT](credentials.md),
+[Tokens, audiences, scopes](tokens.md), [Service accounts](service-accounts.md),
+and [Identity federation](federation.md).
 
-## Модель данных в двух словах
+## The data model in brief
 
 ```mermaid
 erDiagram
@@ -108,22 +111,24 @@ erDiagram
     IDENTITY_PROVIDER ||--o{ EXTERNAL_IDENTITY : ""
 ```
 
-- **Tenant** — изолированная организация. Всё, кроме самого principal,
-  адресуется в разрезе tenant.
-- **Principal** — субъект действия. Связан с tenant через membership.
-- **Audience** — зарегистрированный сервис-получатель токенов со списком
-  допустимых scopes (`allowedScopes`).
-- **External identity** — привязка principal к учётной записи внешнего IdP.
-- **Authentication context** — зафиксированный факт свежего входа человека;
-  без него человеку нельзя выпустить PAT.
+- **Tenant** is an isolated organization. Everything except the principal
+  itself is addressed within a tenant.
+- **Principal** is the subject of an action. It is linked to a tenant through
+  a membership.
+- **Audience** is a registered service that receives tokens, with a list of
+  allowed scopes (`allowedScopes`).
+- **External identity** links a principal to an account in an external IdP.
+- **Authentication context** is a recorded fact of a recent human sign-in;
+  without it, a PAT cannot be issued to a human.
 
-См. [Tenants и principals](principals.md).
+See [Tenants and principals](principals.md).
 
-## Администрирование: bootstrap-токен
+## Administration: the bootstrap token
 
-Управляющие операции (создание tenant, principals, audiences, выпуск PAT и
-т. д.) защищены общим секретом `IAM_BOOTSTRAP_TOKEN`, который передаётся
-заголовком `X-IAM-Bootstrap-Token`. Отдельной административной роли в IAM нет.
+Management operations (creating tenants, principals, audiences, issuing PATs,
+and so on) are protected by the shared secret `IAM_BOOTSTRAP_TOKEN`, which is
+passed in the `X-IAM-Bootstrap-Token` header. IAM has no separate
+administrative role.
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants" \
@@ -132,40 +137,41 @@ curl -s -X POST "$IAM_URL/api/v1/tenants" \
   -d '{"slug":"acme","name":"Acme"}'
 ```
 
-!!! danger "Bootstrap-токен — ключ ко всей identity"
-    Владелец `IAM_BOOTSTRAP_TOKEN` может завести principal, выпустить ему PAT
-    и отключить любого пользователя. Храните его только в `.env` (0600),
-    не передавайте клиентам и не выставляйте административные эндпоинты
-    наружу без необходимости — см. [Конфигурация](configuration.md#bootstrap-token).
-    Неверный или пустой заголовок даёт `401 unauthorized` без пояснений.
+!!! danger "The bootstrap token is the key to all identity"
+    Whoever holds `IAM_BOOTSTRAP_TOKEN` can create a principal, issue a PAT
+    to it, and disable any user. Store it only in `.env` (0600), do not hand
+    it to clients, and do not expose administrative endpoints unless you have
+    to; see [Configuration](configuration.md#bootstrap-token).
+    A wrong or empty header returns `401 unauthorized` with no explanation.
 
-В типовой инсталляции первичное наполнение IAM делает `make bootstrap`
-(скрипт `deploy/bootstrap.py`): tenant, audiences, principal оператора,
-service accounts ядра и PAT. См. [Bootstrap](../getting-started/bootstrap.md).
+In a typical installation, `make bootstrap` (the `deploy/bootstrap.py` script)
+performs the initial IAM setup: tenant, audiences, operator principal, core
+service accounts, and PATs. See [Bootstrap](../getting-started/bootstrap.md).
 
-## Развёртывание
+## Deployment
 
-В корневом `compose.yml` IAM входит в профиль `core`:
+In the root `compose.yml`, IAM belongs to the `core` profile:
 
-| Контейнер | Назначение |
+| Container | Purpose |
 |---|---|
-| `iam-db` | PostgreSQL 16, база `iam` |
-| `iam-service` | API на порту `8010`; при старте выполняет `alembic upgrade head` |
+| `iam-db` | PostgreSQL 16, database `iam` |
+| `iam-service` | API on port `8010`; runs `alembic upgrade head` on startup |
 
-- Наружу хоста сервис публикуется только на `127.0.0.1:${IAM_HOST_PORT:-18010}`.
-- Периметр (Caddy) отдаёт IAM по пути `/iam/*` с отрезанием префикса, поэтому
-  публичный адрес IAM — `${TAIMEN_PUBLIC_URL}/iam`, и он же **issuer** токенов.
-- Административные пути (`/api/v1/tenants/*`, кроме `federation:*`, и
-  `/api/v1/events`) на периметре отвечают `404`, а заголовок
-  `X-IAM-Bootstrap-Token` срезается. Bootstrap и скрипты стенда работают через
-  `127.0.0.1:${IAM_HOST_PORT:-18010}` — см.
-  [Периметр и TLS](../operations/edge-and-tls.md), раздел «Административная поверхность IAM».
-- Сервисы внутри сети compose берут ключи по внутреннему адресу
+- On the host, the service is published only on `127.0.0.1:${IAM_HOST_PORT:-18010}`.
+- The edge (Caddy) serves IAM under `/iam/*` and strips the prefix, so the
+  public IAM address is `${TAIMEN_PUBLIC_URL}/iam`, which is also the token
+  **issuer**.
+- Administrative paths (`/api/v1/tenants/*` except `federation:*`, and
+  `/api/v1/events`) return `404` at the edge, and the `X-IAM-Bootstrap-Token`
+  header is stripped. Bootstrap and deployment scripts work through
+  `127.0.0.1:${IAM_HOST_PORT:-18010}`; see
+  [Edge and TLS](../operations/edge-and-tls.md), section "IAM administrative surface".
+- Services inside the compose network fetch keys from the internal address
   `http://iam-service:8010/.well-known/jwks.json`.
-- Ключ подписи монтируется docker-секретом `iam_signing_key`
-  (файл `IAM_SIGNING_KEY_FILE`).
+- The signing key is mounted as the docker secret `iam_signing_key`
+  (file `IAM_SIGNING_KEY_FILE`).
 
-Проверка живости:
+Liveness check:
 
 ```bash
 curl -s http://127.0.0.1:18010/healthz
@@ -173,22 +179,22 @@ curl -s http://127.0.0.1:18010/healthz
 curl -s https://platform.example.com/iam/.well-known/jwks.json
 ```
 
-## Что читать дальше
+## What to read next
 
-| Задача | Статья |
+| Task | Article |
 |---|---|
-| Завести tenant, людей, агентов; отключить пользователя | [Tenants и principals](principals.md) |
-| Выпустить, ротировать, отозвать PAT; настроить `iam auth` | [Credentials и PAT](credentials.md) |
-| Понять формат токена, audiences и scopes; ротировать ключ подписи | [Токены, audiences, scopes](tokens.md) |
-| Дать сервису собственную identity | [Service accounts](service-accounts.md) |
-| Подключить внешний OIDC IdP, SCIM | [Федерация identity](federation.md) |
-| Полный список эндпоинтов | [API](api.md) |
-| Переменные окружения и типичные ошибки конфигурации | [Конфигурация](configuration.md) |
+| Create tenants, people, agents; disable a user | [Tenants and principals](principals.md) |
+| Issue, rotate, and revoke PATs; set up `iam auth` | [Credentials and PAT](credentials.md) |
+| Understand the token format, audiences, and scopes; rotate the signing key | [Tokens, audiences, scopes](tokens.md) |
+| Give a service its own identity | [Service accounts](service-accounts.md) |
+| Connect an external OIDC IdP, SCIM | [Identity federation](federation.md) |
+| Full list of endpoints | [API](api.md) |
+| Environment variables and common configuration errors | [Configuration](configuration.md) |
 
-## См. также
+## See also
 
-- [Модель безопасности](../overview/security-model.md)
-- [Авторизация и права Control Plane](../control-plane/authorization.md)
-- [Identity агента](../runner/agent-identity.md)
-- [platform-auth-sdk](../sdk/platform-auth-sdk.md) — как сервисы проверяют токены IAM
-- [Диагностика: аутентификация и доступ](../troubleshooting/auth.md)
+- [Security model](../overview/security-model.md)
+- [Control Plane authorization and permissions](../control-plane/authorization.md)
+- [Agent identity](../runner/agent-identity.md)
+- [platform-auth-sdk](../sdk/platform-auth-sdk.md): how services verify IAM tokens
+- [Troubleshooting: authentication and access](../troubleshooting/auth.md)

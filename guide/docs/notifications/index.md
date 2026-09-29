@@ -1,139 +1,136 @@
-# Уведомления
 
-Сервис уведомлений `notification-service` доставляет людям сообщения платформы:
-просьбу принять решение, результат проверки задачи, уведомление, которое
-отправил пакет или внешний сервис. Статья описывает, как сервис устроен, как
-отправить уведомление через API и скилл `notify.send@1`, как выбираются каналы,
-как устроены веб-инбокс, журнал доставки и автоматические уведомления о
-решениях. Она для разработчика пакетов и интеграций и для оператора установки.
-Канал Telegram описан отдельно — в статье [Telegram](telegram.md).
+# Notifications
 
-## Что делает сервис
+The notification service `notification-service` delivers platform messages to people: a
+request to make a decision, the result of a task verification, a notification sent by a
+package or an external service. The article describes how the service works, how to send a
+notification through the API and the `notify.send@1` skill, how channels are chosen, and how
+the web inbox, the delivery log, and automatic decision notifications work. It is for package
+and integration developers and for installation operators. The Telegram channel is described
+separately, in the [Telegram](telegram.md) article.
 
-- **Принимает уведомления от любого отправителя** — сервиса, скилла, ядра — с
-  ключом дедупликации. Отправитель называет адресата и содержание, но не
-  каналы.
-- **Адресует людей через Control Plane.** Адресат — principal ядра, роль в
-  workspace (все её держатели) или привязанная группа мессенджера. Кто держит
-  роль и какая IAM-identity у principal'а, сервис читает у ядра своим service
-  account'ом.
-- **Выбирает каналы** по настройкам получателя и обязательным правилам
-  организации: веб-инбокс (`web`), `email`, `telegram`.
-- **Ведёт журнал доставки** — запись на каждую пару «получатель × канал» с
-  повторами и причинами отказа.
-- **Превращает события ядра в уведомления по правилам.** Какие события кому и
-  с каким текстом приходят, описывают правила уведомлений `NotificationRule` —
-  данные пакета, а не код сервиса (см. [Правила уведомлений](notification-rules.md)).
-  Пакет `notify` даёт запрос решения с кнопками и уведомления о провале проверки
-  приёмки.
+## What the service does
 
-Сервис нейтрален к домену: тип, заголовок, текст и ссылки задаёт отправитель.
-Обоснование — TAI-ADR-0048 (сервис и каналы), TAI-ADR-0049 (событийная модель),
-TAI-ADR-0050 (канал как способ входа).
+- **Accepts notifications from any sender** — a service, a skill, the core — with a
+  deduplication key. The sender names the recipient and the content, but not the channels.
+- **Addresses people through Control Plane.** The recipient is a core principal, a role in a
+  workspace (all its holders), or a linked messenger group. The service reads who holds the
+  role and which IAM identity a principal has from the core with its service account.
+- **Chooses channels** based on the recipient's preferences and the organization's mandatory
+  rules: the web inbox (`web`), `email`, `telegram`.
+- **Keeps a delivery log** — a record for every "recipient × channel" pair with retries and
+  failure reasons.
+- **Turns core events into notifications according to rules.** Which events reach whom and
+  with what text is described by `NotificationRule` notification rules — package data, not
+  service code (see [Notification rules](notification-rules.md)). The `notify` package
+  provides a decision request with buttons and notifications about failed acceptance
+  verification.
+
+The service is domain-neutral: the sender sets the type, title, text, and links. Rationale:
+TAI-ADR-0048 (service and channels), TAI-ADR-0049 (event model), TAI-ADR-0050 (channel as a
+login method).
 
 ```mermaid
 flowchart LR
-    subgraph senders["Отправители"]
-        svc["Сервис или интеграция<br/>POST /api/v1/notifications"]
-        skill["Исполнитель скиллов<br/>notify.send@1"]
+    subgraph senders["Senders"]
+        svc["Service or integration<br/>POST /api/v1/notifications"]
+        skill["Skill executor<br/>notify.send@1"]
     end
-    cp["Control Plane<br/>журнал событий, каталог principal'ов и ролей"]
+    cp["Control Plane<br/>event log, catalog of principals and roles"]
     subgraph ns["notification-service"]
         api["API /api/v1"]
-        cons["Потребитель событий ядра"]
-        worker["Воркер доставки"]
+        cons["Core event consumer"]
+        worker["Delivery worker"]
         db[("PostgreSQL<br/>notify")]
     end
     svc --> api
     skill --> api
-    cp -- "события по правилам уведомлений" --> cons
+    cp -- "events per notification rules" --> cons
     cons --> api
-    api -- "держатели роли, IAM bindings" --> cp
+    api -- "role holders, IAM bindings" --> cp
     api --> db
     worker --> db
-    worker --> web["web: инбокс + SSE"]
+    worker --> web["web: inbox + SSE"]
     worker --> mail["email: SMTP"]
     worker --> tg["telegram: Bot API"]
 ```
 
-Процесс один: HTTP API, фоновый воркер доставки и потребитель событий ядра
-работают внутри одного контейнера и одной базы.
+There is one process: the HTTP API, the background delivery worker, and the core event
+consumer run inside one container with one database.
 
-## Развёртывание
+## Deployment
 
-Сервис входит в профиль compose `notify`: контейнеры `notification-db`
-(PostgreSQL 16, база `notify`) и `notification-service`. При старте контейнер
-выполняет `alembic upgrade head`, затем запускает сервис на порту 8000.
+The service belongs to the `notify` compose profile: the containers `notification-db`
+(PostgreSQL 16, database `notify`) and `notification-service`. At startup the container runs
+`alembic upgrade head` and then starts the service on port 8000.
 
 ```bash
 docker compose --profile core --profile edge --profile notify up -d
 ```
 
-| Что | Значение |
+| What | Value |
 |---|---|
-| Порт в сети compose | `notification-service:8000` |
-| Порт на хосте | `127.0.0.1:${NOTIFY_HOST_PORT:-18045}` |
-| Маршрут периметра | `/notify/*` (префикс срезается), см. [Периметр и TLS](../operations/edge-and-tls.md) |
+| Port in the compose network | `notification-service:8000` |
+| Port on the host | `127.0.0.1:${NOTIFY_HOST_PORT:-18045}` |
+| Edge route | `/notify/*` (the prefix is stripped), see [Edge and TLS](../operations/edge-and-tls.md) |
 | Health | `GET /healthz` → `{"status": "ok"}` |
-| Схема API | `GET /openapi.json`, `GET /docs` |
-| Пароль БД | `NOTIFY_POSTGRES_PASSWORD` в `.env` (генерирует `make secrets`) |
-| Service account | `secrets/notification-iam.env` (пишет bootstrap) |
-| Бот Telegram | `secrets/notification-telegram.env` (заполняет оператор) |
+| API schema | `GET /openapi.json`, `GET /docs` |
+| DB password | `NOTIFY_POSTGRES_PASSWORD` in `.env` (generated by `make secrets`) |
+| Service account | `secrets/notification-iam.env` (written by bootstrap) |
+| Telegram bot | `secrets/notification-telegram.env` (filled in by the operator) |
 
 ### Bootstrap
 
-Шаг `5c` скрипта `deploy/bootstrap.py` готовит сервису identity (подробно —
+Step `5c` of the `deploy/bootstrap.py` script prepares the service's identity (details:
 [Bootstrap](../getting-started/bootstrap.md)):
 
-1. заводит в Control Plane principal вида `service` «Taimen Notification
-   Service»;
-2. выпускает в IAM service account с audiences `control-plane` и `iam` и
-   потолком `control-plane:read`, `iam:channel-links`, пишет
-   `NS_SERVICE_CLIENT_ID` и `NS_SERVICE_CLIENT_SECRET` в
-   `secrets/notification-iam.env`;
-3. создаёт binding с правами `events.read`, `approvals.read`, `tasks.read`,
+1. creates a principal of kind `service`, "Taimen Notification Service", in Control Plane;
+2. issues an IAM service account with the audiences `control-plane` and `iam` and the
+   ceiling `control-plane:read`, `iam:channel-links`, and writes `NS_SERVICE_CLIENT_ID` and
+   `NS_SERVICE_CLIENT_SECRET` to `secrets/notification-iam.env`;
+3. creates a binding with the permissions `events.read`, `approvals.read`, `tasks.read`,
    `principals.read`, `workspaces.read`.
 
-Bootstrap также регистрирует audience `notification-service` со scopes
-`notifications:send`, `notifications:read`, `notifications:admin`, audience
-`iam` со scope `iam:channel-links` и добавляет `control-plane:decide` к scopes
-audience `control-plane`.
+Bootstrap also registers the `notification-service` audience with the scopes
+`notifications:send`, `notifications:read`, `notifications:admin`, the `iam` audience with
+the scope `iam:channel-links`, and adds `control-plane:decide` to the scopes of the
+`control-plane` audience.
 
-`env_file` читается при создании контейнера, поэтому после первого bootstrap
-сервис нужно пересоздать:
+`env_file` is read when the container is created, so after the first bootstrap you need to
+recreate the service:
 
 ```bash
 docker compose --profile notify up -d notification-service
 ```
 
-### Что работает без настройки
+### What works without configuration
 
-| Не настроено | Поведение |
+| Not configured | Behavior |
 |---|---|
-| IAM (`NS_IAM_ISSUER` и JWKS) | Все маршруты `/api/v1` отвечают `503` |
-| Control Plane или service account | Отправка principal'у и роли — `503 dependency_unavailable`; потребитель событий не запускается |
-| Правила уведомлений не применены | Потребитель событий не запускается: из событий ядра уведомлений нет |
-| `NS_TELEGRAM_BOT_TOKEN` | Канала `telegram` нет; вебхук отвечает `404` |
-| `NS_EMAIL_MODE=disabled` | Канала `email` нет |
+| IAM (`NS_IAM_ISSUER` and JWKS) | All `/api/v1` routes return `503` |
+| Control Plane or service account | Sending to a principal or a role — `503 dependency_unavailable`; the event consumer does not start |
+| Notification rules not applied | The event consumer does not start: there are no notifications from core events |
+| `NS_TELEGRAM_BOT_TOKEN` | There is no `telegram` channel; the webhook returns `404` |
+| `NS_EMAIL_MODE=disabled` | There is no `email` channel |
 
-## Аутентификация и scopes
+## Authentication and scopes
 
-Сервис — resource server ровно одного audience, `notification-service`
-(`NS_AUDIENCE`). Токены проверяет `platform-auth-sdk` по JWKS IAM. Scope
-определяет роль вызывающего:
+The service is a resource server for exactly one audience, `notification-service`
+(`NS_AUDIENCE`). Tokens are verified by `platform-auth-sdk` against the IAM JWKS. The scope
+determines the caller's role:
 
-| Scope | Кто | Что открывает |
+| Scope | Who | What it opens |
 |---|---|---|
-| `notifications:send` | Сервисы, исполнитель скиллов | `POST /api/v1/notifications`, `POST /api/v1/skills/notify.send`, чтение своих отправленных уведомлений |
-| `notifications:read` | Человек | Свой инбокс, поток SSE, свои настройки |
-| `notifications:admin` | Администратор организации, установщик пакетов | Обязательные правила, группы каналов, правила уведомлений (`/notification-rules`), чтение любого уведомления tenant'а |
+| `notifications:send` | Services, the skill executor | `POST /api/v1/notifications`, `POST /api/v1/skills/notify.send`, reading your own sent notifications |
+| `notifications:read` | A human | Your own inbox, the SSE stream, your own preferences |
+| `notifications:admin` | Organization administrator, package installer | Mandatory rules, channel groups, notification rules (`/notification-rules`), reading any notification of the tenant |
 
-Токен получают обычным обменом PAT или client credentials в IAM с
-`audience: notification-service` и явным списком scopes — см.
-[Токены, audiences, scopes](../iam/tokens.md). Ошибки — в конверте
-`{"error": {"code", "message", "details"}}`, как у Control Plane.
+You obtain the token with a regular PAT or client credentials exchange in IAM with
+`audience: notification-service` and an explicit list of scopes — see
+[Tokens, audiences, scopes](../iam/tokens.md). Errors come in the envelope
+`{"error": {"code", "message", "details"}}`, as in Control Plane.
 
-## Отправка уведомления
+## Sending a notification
 
 ```bash
 curl -s -X POST "$NS/api/v1/notifications" \
@@ -143,55 +140,55 @@ curl -s -X POST "$NS/api/v1/notifications" \
   -d '{
     "recipient": {"kind": "role", "id": "<role-id>", "workspaceId": "<workspace-id>"},
     "type": "invoice.payment_approved",
-    "title": "Оплата согласована: счёт 42",
-    "body": "Финансовый директор согласовал оплату.",
-    "links": [{"label": "Открыть задачу", "url": "https://platform.example.com/tasks/42"}]
+    "title": "Payment approved: invoice 42",
+    "body": "The finance director approved the payment.",
+    "links": [{"label": "Open task", "url": "https://platform.example.com/tasks/42"}]
   }'
 ```
 
-Здесь `$NS` — адрес сервиса: `http://notification-service:8000` внутри сети
-compose или `https://platform.example.com/notify` через периметр.
+Here `$NS` is the service address: `http://notification-service:8000` inside the compose
+network or `https://platform.example.com/notify` through the edge.
 
-### Поля запроса
+### Request fields
 
-| Поле | Обязательно | Ограничения | Смысл |
+| Field | Required | Constraints | Meaning |
 |---|---|---|---|
-| `recipient.kind` | да | `principal`, `role`, `group` | Кого адресуем |
-| `recipient.id` | да | UUID | Principal ядра, роль ядра или группа канала |
-| `recipient.workspaceId` | для `role` | UUID | Workspace, в котором ищутся держатели роли |
-| `type` | да | 1–200 символов, имя через точки (`invoice.payment_approved`) | Тип уведомления: по нему работают настройки и обязательные правила |
-| `title` | да | 1–200 символов, одна строка | Заголовок |
-| `body` | нет | до 4000 символов | Текст, без управляющих символов |
-| `links` | нет | до 10; `label` 1–100, `url` — http(s) | Ссылки |
-| `actions` | нет | до 5; `id` `^[A-Za-z0-9_.:-]+$` до 64, `label` до 64, `data` — объект | Действия, которые канал может показать кнопками |
-| `Idempotency-Key` (заголовок) | да | 1–200 символов | Ключ дедупликации |
+| `recipient.kind` | yes | `principal`, `role`, `group` | Whom we address |
+| `recipient.id` | yes | UUID | A core principal, a core role, or a channel group |
+| `recipient.workspaceId` | for `role` | UUID | The workspace in which role holders are looked up |
+| `type` | yes | 1–200 characters, a dot-separated name (`invoice.payment_approved`) | Notification type: preferences and mandatory rules work by it |
+| `title` | yes | 1–200 characters, one line | Title |
+| `body` | no | up to 4000 characters | Text, without control characters |
+| `links` | no | up to 10; `label` 1–100, `url` — http(s) | Links |
+| `actions` | no | up to 5; `id` `^[A-Za-z0-9_.:-]+$` up to 64, `label` up to 64, `data` — an object | Actions a channel can show as buttons |
+| `Idempotency-Key` (header) | yes | 1–200 characters | Deduplication key |
 
-Неизвестные поля отклоняются (`422 validation_error`).
+Unknown fields are rejected (`422 validation_error`).
 
-### Адресаты
+### Recipients
 
-| `kind` | Кто получит |
+| `kind` | Who receives it |
 |---|---|
-| `principal` | Человек. Сервис находит IAM-identity principal'а — активный binding в IAM-tenant'е отправителя — и доставляет по каналам этой identity |
-| `role` | Все активные держатели роли, которым роль назначена на уровне tenant или на этом workspace либо его предке (`GET /roles/{id}/principals?workspaceId=` ядра), и все группы мессенджера, привязанные к этому workspace и роли |
-| `group` | Одна привязанная группа мессенджера (id из списка групп workspace, см. [Telegram](telegram.md)) |
+| `principal` | A human. The service finds the principal's IAM identity — an active binding in the sender's IAM tenant — and delivers over that identity's channels |
+| `role` | All active holders of the role to whom it is assigned at the tenant level or on this workspace or its ancestor (the core's `GET /roles/{id}/principals?workspaceId=`), and all messenger groups linked to this workspace and role |
+| `group` | One linked messenger group (an id from the workspace's group list, see [Telegram](telegram.md)) |
 
-Principal без binding в IAM-tenant'е отправителя известен, но недостижим: в
-журнале появится доставка `web` со статусом `failed` и причиной
-`recipient_has_no_identity`. Binding из другого tenant'а не используется —
-уведомление не пересекает границу tenant'ов.
+A principal without a binding in the sender's IAM tenant is known but unreachable: the log
+shows a `web` delivery with status `failed` and the reason `recipient_has_no_identity`. A
+binding from another tenant is not used — a notification does not cross the tenant
+boundary.
 
-### Ответ
+### Response
 
-`201 Created` — уведомление принято, журнал доставки уже спланирован:
+`201 Created` — the notification is accepted, and the delivery log is already planned:
 
 ```json
 {
   "id": "<notification-id>",
   "type": "invoice.payment_approved",
-  "title": "Оплата согласована: счёт 42",
-  "body": "Финансовый директор согласовал оплату.",
-  "links": [{"label": "Открыть задачу", "url": "https://platform.example.com/tasks/42"}],
+  "title": "Payment approved: invoice 42",
+  "body": "The finance director approved the payment.",
+  "links": [{"label": "Open task", "url": "https://platform.example.com/tasks/42"}],
   "actions": [],
   "actionsClosedAt": null,
   "actionsOutcome": null,
@@ -209,67 +206,66 @@ Principal без binding в IAM-tenant'е отправителя известе�
 }
 ```
 
-Доставка идёт асинхронно; текущее состояние журнала отдаёт
-`GET /api/v1/notifications/{id}` — отправителю (`notifications:send`) или
-администратору (`notifications:admin`). Чужое уведомление неотличимо от
-несуществующего (`404`).
+Delivery is asynchronous; `GET /api/v1/notifications/{id}` returns the current state of the
+log — to the sender (`notifications:send`) or an administrator (`notifications:admin`).
+Someone else's notification is indistinguishable from a nonexistent one (`404`).
 
-### Дедупликация
+### Deduplication
 
-Ключ `Idempotency-Key` уникален в паре «tenant × отправитель». Сервис хранит
-вместе с уведомлением хэш канонического тела запроса:
+The `Idempotency-Key` is unique within the "tenant × sender" pair. The service stores a hash
+of the canonical request body together with the notification:
 
-| Повтор | Ответ |
+| Repeat | Response |
 |---|---|
-| Тот же ключ, то же тело | `200` и первое уведомление с его журналом; второй доставки нет |
-| Тот же ключ, другое тело | `409 idempotency_conflict` |
-| Два одновременных запроса с одним ключом | Один создаёт, второй получает повтор первого |
+| Same key, same body | `200` and the first notification with its log; no second delivery |
+| Same key, different body | `409 idempotency_conflict` |
+| Two concurrent requests with one key | One creates, the other receives a repeat of the first |
 
-Выбирайте ключ из предметного события (`invoice-42-approved`,
-`<event-id>`), а не случайный: тогда повтор после сбоя сети безопасен.
+Derive the key from the domain event (`invoice-42-approved`, `<event-id>`) rather than
+choosing a random one: then a retry after a network failure is safe.
 
-### Ошибки отправки
+### Sending errors
 
-| Код | HTTP | Причина |
+| Code | HTTP | Reason |
 |---|---|---|
-| `validation_error` | 422 | Тело не проходит схему (роль без `workspaceId`, многострочный `title`, управляющие символы) |
-| `unknown_recipient` | 422 | Ядро не знает principal'а или роль; группа не найдена или отвязана |
-| `idempotency_conflict` | 409 | Ключ уже использован с другим телом |
-| `dependency_unavailable` | 503 | Control Plane не ответил или не настроен |
-| `insufficient_scope` и другие коды `platform-auth-sdk` | 401/403 | Токен не того audience или без `notifications:send` |
+| `validation_error` | 422 | The body fails the schema (a role without `workspaceId`, a multi-line `title`, control characters) |
+| `unknown_recipient` | 422 | The core does not know the principal or role; the group is not found or unlinked |
+| `idempotency_conflict` | 409 | The key was already used with a different body |
+| `dependency_unavailable` | 503 | Control Plane did not answer or is not configured |
+| `insufficient_scope` and other `platform-auth-sdk` codes | 401/403 | A token of the wrong audience or without `notifications:send` |
 
-## Выбор каналов
+## Channel selection
 
-Каналы, доступные на установке, — это `web` всегда, `email`, если
-`NS_EMAIL_MODE` не `disabled`, и `telegram`, если задан токен бота. Для каждого
-получателя-человека сервис проходит их по фиксированному правилу:
+The channels available on an installation are `web` always, `email` if `NS_EMAIL_MODE` is not
+`disabled`, and `telegram` if a bot token is set. For each human recipient, the service goes
+through them by a fixed rule:
 
-1. **Обязательное правило организации** выбирает канал, что бы ни выбрал
-   получатель, и игнорирует тихие часы.
-2. Иначе решает **самая точная подходящая настройка получателя**: точный тип
-   точнее префикса `invoice.*`, длинный префикс точнее короткого, `*` — самая
-   общая. Если настроек нет, канал **включён**: отписка — ход получателя.
-3. Канал выбирается, только если получатель на нём **достижим**: для `email` и
-   `telegram` нужен сохранённый и не отключённый адрес. Обязательный канал без
-   адреса всё равно попадает в журнал — со статусом `failed` и причиной
-   `recipient_unreachable`, чтобы было видно, что требуемая доставка не
-   случилась.
-4. **Тихие часы** откладывают push-каналы (`email`, `telegram`) до конца окна.
-   Инбокс никого не прерывает и тихими часами не задерживается.
+1. **An organization's mandatory rule** selects the channel regardless of what the recipient
+   chose and ignores quiet hours.
+2. Otherwise **the most specific matching recipient preference** decides: an exact type is
+   more specific than the prefix `invoice.*`, a long prefix is more specific than a short one,
+   `*` is the most general. If there are no preferences, the channel is **on**: opting out is
+   the recipient's move.
+3. A channel is selected only if the recipient is **reachable** on it: `email` and `telegram`
+   need a saved and not disabled address. A mandatory channel without an address still goes
+   into the log — with status `failed` and the reason `recipient_unreachable`, so that it is
+   visible that the required delivery did not happen.
+4. **Quiet hours** postpone push channels (`email`, `telegram`) until the end of the window.
+   The inbox does not interrupt anyone and is not delayed by quiet hours.
 
-| Канал | Push | Адрес | Откуда адрес |
+| Channel | Push | Address | Where the address comes from |
 |---|---|---|---|
-| `web` | нет | не нужен — IAM-identity | Инбокс человека |
-| `email` | да | e-mail | Поле `email` в настройках получателя |
-| `telegram` | да | id личного чата | Привязка аккаунта кодом, см. [Telegram](telegram.md) |
+| `web` | no | not needed — the IAM identity | The person's inbox |
+| `email` | yes | e-mail | The `email` field in the recipient's preferences |
+| `telegram` | yes | private chat id | Account linking with a code, see [Telegram](telegram.md) |
 
-Группы мессенджера получают уведомление без выбора каналов: у группы один
-канал, и настройки людей к ней не применяются.
+Messenger groups receive a notification without channel selection: a group has one channel,
+and people's preferences do not apply to it.
 
-### Настройки получателя
+### Recipient preferences
 
-Человек читает и меняет свои настройки токеном со scope
-`notifications:read`:
+A person reads and changes their preferences with a token that has the `notifications:read`
+scope:
 
 ```bash
 curl -s "$NS/api/v1/me/notification-preferences" -H "Authorization: Bearer $TOKEN"
@@ -291,7 +287,7 @@ curl -s "$NS/api/v1/me/notification-preferences" -H "Authorization: Bearer $TOKE
 }
 ```
 
-`PATCH` меняет только переданные поля:
+`PATCH` changes only the fields passed:
 
 ```bash
 curl -s -X PATCH "$NS/api/v1/me/notification-preferences" \
@@ -306,19 +302,18 @@ curl -s -X PATCH "$NS/api/v1/me/notification-preferences" \
   }'
 ```
 
-| Поле | Смысл |
+| Field | Meaning |
 |---|---|
-| `preferences[].type` | Тип, префикс `prefix.*` или `*` |
-| `preferences[].channel` | Канал, настроенный на установке; иначе `422 unknown_channel` |
-| `preferences[].enabled` | `true`/`false`; `null` удаляет настройку (возврат к «включено») |
-| `quietHours` | `start`, `end` (время), `timezone` (имя зоны IANA); `null` — снять тихие часы. Окно может переходить через полночь (`22:00`–`08:00`); `start` = `end` — окна нет |
-| `email` | Адрес канала `email`; `null` — удалить. Повторная установка того же адреса снова включает адрес, отключённый после отказа почтового сервера |
+| `preferences[].type` | A type, a prefix `prefix.*`, or `*` |
+| `preferences[].channel` | A channel configured on the installation; otherwise `422 unknown_channel` |
+| `preferences[].enabled` | `true`/`false`; `null` deletes the preference (back to "on") |
+| `quietHours` | `start`, `end` (time), `timezone` (IANA zone name); `null` removes quiet hours. The window can cross midnight (`22:00`–`08:00`); `start` = `end` means no window |
+| `email` | Address of the `email` channel; `null` deletes it. Setting the same address again re-enables an address disabled after a mail server rejection |
 
-### Обязательные правила организации
+### Organization mandatory rules
 
-Администратор (`notifications:admin`) делает доставку по каналу обязательной
-для типа или префикса — например, чтобы запросы решений всегда уходили в
-Telegram:
+An administrator (`notifications:admin`) makes delivery over a channel mandatory for a type
+or a prefix — for example, so that decision requests always go to Telegram:
 
 ```bash
 curl -s -X POST "$NS/api/v1/mandatory-rules" \
@@ -329,20 +324,19 @@ curl -s "$NS/api/v1/mandatory-rules" -H "Authorization: Bearer $ADMIN_TOKEN"
 curl -s -X DELETE "$NS/api/v1/mandatory-rules/<rule-id>" -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-Повтор того же правила возвращает существующее (`200` вместо `201`). Правила
-действуют на весь tenant и видны каждому человеку в поле `mandatory` его
-настроек.
+Repeating the same rule returns the existing one (`200` instead of `201`). Rules apply to the
+whole tenant and are visible to every person in the `mandatory` field of their preferences.
 
-## Веб-инбокс
+## Web inbox
 
-Канал `web` складывает уведомление во входящие получателя. У каждой записи —
-порядковый номер `seq`, растущий в пределах инбокса одного человека.
+The `web` channel puts a notification into the recipient's inbox. Every entry has a sequence
+number `seq` that grows within one person's inbox.
 
 ```bash
-# Последние 50, новые сверху
+# The last 50, newest first
 curl -s "$NS/api/v1/me/notifications?limit=50" -H "Authorization: Bearer $TOKEN"
 
-# Только непрочитанные, следующая страница
+# Unread only, next page
 curl -s "$NS/api/v1/me/notifications?unreadOnly=true&cursor=<nextCursor>" \
   -H "Authorization: Bearer $TOKEN"
 ```
@@ -351,8 +345,8 @@ curl -s "$NS/api/v1/me/notifications?unreadOnly=true&cursor=<nextCursor>" \
 {
   "items": [
     {"id": "<item-id>", "seq": 17, "notificationId": "…", "type": "approval.requested",
-     "title": "Нужно решение: …", "body": "…", "links": [],
-     "actions": [{"id": "approve", "label": "Одобрить", "data": {"kind": "approval.decide", "…": "…"}}],
+     "title": "Decision needed: …", "body": "…", "links": [],
+     "actions": [{"id": "approve", "label": "Approve", "data": {"kind": "approval.decide", "…": "…"}}],
      "actionsClosedAt": null, "actionsOutcome": null,
      "senderId": "…", "createdAt": "…", "readAt": null}
   ],
@@ -361,18 +355,18 @@ curl -s "$NS/api/v1/me/notifications?unreadOnly=true&cursor=<nextCursor>" \
 }
 ```
 
-| Запрос | Смысл |
+| Request | Meaning |
 |---|---|
-| `GET /api/v1/me/notifications` | Страница инбокса: `unreadOnly`, `limit` (1–200, по умолчанию 50), `cursor` |
-| `POST /api/v1/me/notifications/{itemId}:read` | Отметить прочитанным |
-| `POST /api/v1/me/notifications:read-all` | Отметить всё → `{"marked": N}` |
-| `GET /api/v1/me/notifications/stream` | Поток SSE |
+| `GET /api/v1/me/notifications` | An inbox page: `unreadOnly`, `limit` (1–200, default 50), `cursor` |
+| `POST /api/v1/me/notifications/{itemId}:read` | Mark as read |
+| `POST /api/v1/me/notifications:read-all` | Mark everything → `{"marked": N}` |
+| `GET /api/v1/me/notifications/stream` | SSE stream |
 
-Когда действия уведомления перестают действовать (решение уже принято),
-`actionsClosedAt` и `actionsOutcome` (например, `{"status": "approved", "by":
-"…", "channel": "telegram"}`) приходят в той же записи.
+When a notification's actions stop being valid (the decision has already been made),
+`actionsClosedAt` and `actionsOutcome` (for example, `{"status": "approved", "by": "…",
+"channel": "telegram"}`) arrive in the same entry.
 
-### Поток SSE
+### SSE stream
 
 ```bash
 curl -N "$NS/api/v1/me/notifications/stream" \
@@ -389,88 +383,87 @@ data: {"id":"…","seq":18,"notificationId":"…","type":"…","title":"…",…
 : keep-alive
 ```
 
-- `id` события — `seq` записи. Браузерный `EventSource` сам присылает
-  последний `id` в заголовке `Last-Event-ID` при переподключении и получает
-  всё, что пришло за время обрыва. Клиент, который открывает поток заново,
-  может передать то же значение параметром `?lastEventId=`.
-- Без `Last-Event-ID` поток начинается с текущего конца инбокса: историю
-  читают через `GET /me/notifications`.
-- Раз в `NS_INBOX_KEEPALIVE_SECONDS` (15 с) простаивающий поток шлёт
-  комментарий `: keep-alive`, раз в `NS_INBOX_POLL_SECONDS` (5 с) сверяется с
-  базой — так доставки, сделанные другим процессом, тоже доходят.
-- Поток **закрывается, когда истекает токен**, которым он открыт. Клиент
-  переподключается со свежим токеном и `Last-Event-ID` и ничего не теряет.
-- Нечисловой `Last-Event-ID` — `422 invalid_last_event_id`.
+- The event `id` is the entry's `seq`. A browser `EventSource` sends the last `id` in the
+  `Last-Event-ID` header on reconnect and receives everything that arrived during the break.
+  A client that opens the stream anew can pass the same value in the `?lastEventId=`
+  parameter.
+- Without `Last-Event-ID` the stream starts at the current end of the inbox: read the history
+  through `GET /me/notifications`.
+- Every `NS_INBOX_KEEPALIVE_SECONDS` (15 s) an idle stream sends the comment `: keep-alive`,
+  and every `NS_INBOX_POLL_SECONDS` (5 s) it checks the database — so deliveries made by
+  another process also get through.
+- The stream **closes when the token it was opened with expires**. The client reconnects with
+  a fresh token and `Last-Event-ID` and loses nothing.
+- A non-numeric `Last-Event-ID` gives `422 invalid_last_event_id`.
 
-!!! note "Прокси перед потоком"
-    Ответ идёт с `Cache-Control: no-cache` и `X-Accel-Buffering: no`. Если
-    перед сервисом стоит свой прокси, отключите в нём буферизацию для
+!!! note "A proxy in front of the stream"
+    The response is sent with `Cache-Control: no-cache` and `X-Accel-Buffering: no`. If you
+    have your own proxy in front of the service, turn off buffering in it for
     `…/me/notifications/stream`.
 
-## Журнал доставки и повторы
+## Delivery log and retries
 
-Каждая пара «получатель × канал» — отдельная доставка со своим статусом:
+Every "recipient × channel" pair is a separate delivery with its own status:
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending
-    pending --> sending: воркер взял (аренда)
-    sending --> delivered: канал принял
-    sending --> pending: временная ошибка, попыток меньше лимита
-    sending --> failed: постоянная ошибка или лимит попыток
-    [*] --> failed: недостижим сразу
+    pending --> sending: worker picked it up (lease)
+    sending --> delivered: channel accepted
+    sending --> pending: temporary error, attempts below the limit
+    sending --> failed: permanent error or attempt limit
+    [*] --> failed: unreachable immediately
 ```
 
-- Воркер берёт доставки, чьё время пришло, пачкой (`FOR UPDATE SKIP LOCKED`)
-  и под арендой `NS_WORKER_LEASE_SECONDS` (120 с). Итог записывается с
-  проверкой номера попытки: если аренда истекла и доставку взял другой воркер,
-  поздний результат первого отбрасывается.
-- **Временные ошибки** (таймаут, 429 и 5xx Bot API, временные коды SMTP)
-  повторяются с экспоненциальной паузой: `NS_DELIVERY_BACKOFF_SECONDS` × 2ⁿ⁻¹,
-  не больше `NS_DELIVERY_BACKOFF_MAX_SECONDS` (по умолчанию 5 с, 10 с, 20 с …
-  до часа), всего до `NS_DELIVERY_MAX_ATTEMPTS` (8) попыток. После
-  исчерпания — `failed` с причиной `retries_exhausted: …`.
-- **Постоянные ошибки** завершают доставку сразу. Если отказал сам адрес
-  (бот заблокирован, почтовый ящик отвергнут кодом 5xx), адрес **отключается**:
-  канал больше не выбирается для этого человека, пока адрес не будет задан
-  заново.
-- Доставки одного получателя по одному каналу уходят по очереди в порядке
-  создания — чат и инбокс показывают их в порядке отправки. Разные получатели
-  обслуживаются параллельно, сбой одного канала не задерживает другие.
-- Если действия уведомления закрылись до отложенной доставки (тихие часы,
-  повтор), сообщение уходит без кнопок.
+- The worker takes deliveries whose time has come in a batch (`FOR UPDATE SKIP LOCKED`) and
+  under a lease of `NS_WORKER_LEASE_SECONDS` (120 s). The result is written with an attempt
+  number check: if the lease expired and another worker took the delivery, the first worker's
+  late result is discarded.
+- **Temporary errors** (timeout, Bot API 429 and 5xx, temporary SMTP codes) are retried with
+  an exponential pause: `NS_DELIVERY_BACKOFF_SECONDS` × 2ⁿ⁻¹, no more than
+  `NS_DELIVERY_BACKOFF_MAX_SECONDS` (by default 5 s, 10 s, 20 s … up to an hour), up to
+  `NS_DELIVERY_MAX_ATTEMPTS` (8) attempts in total. After they are exhausted — `failed` with
+  the reason `retries_exhausted: …`.
+- **Permanent errors** end the delivery immediately. If the address itself was refused (the
+  bot is blocked, the mailbox is rejected with a 5xx code), the address is **disabled**: the
+  channel is no longer selected for this person until the address is set again.
+- Deliveries for one recipient over one channel go out one at a time in creation order — the
+  chat and the inbox show them in the order they were sent. Different recipients are served
+  in parallel, and a failure of one channel does not delay the others.
+- If the notification's actions were closed before a postponed delivery (quiet hours, a
+  retry), the message goes out without buttons.
 
-| `lastError` | Смысл |
+| `lastError` | Meaning |
 |---|---|
-| `recipient_has_no_identity` | У principal'а нет IAM-binding в tenant'е отправителя |
-| `recipient_unreachable` | Нет адреса канала или адрес отключён |
-| `channel_not_configured` | Канал группы не настроен на установке |
-| `send_timeout` | Канал не ответил за половину аренды |
-| `telegram_…`, `smtp_…` | Ответ канала; см. [Telegram](telegram.md#troubleshooting) |
-| `retries_exhausted: <причина>` | Временная ошибка повторялась до лимита |
+| `recipient_has_no_identity` | The principal has no IAM binding in the sender's tenant |
+| `recipient_unreachable` | There is no channel address, or the address is disabled |
+| `channel_not_configured` | The group's channel is not configured on the installation |
+| `send_timeout` | The channel did not answer within half of the lease |
+| `telegram_…`, `smtp_…` | The channel's response; see [Telegram](telegram.md#troubleshooting) |
+| `retries_exhausted: <reason>` | A temporary error was retried up to the limit |
 
-## Скилл `notify.send@1` {#notify-send}
+## The `notify.send@1` skill {#notify-send}
 
 
-Пакеты шлют уведомления не прямым HTTP, а скиллом: его можно вызвать из
-исхода approval, правила вывода работы или шага процесса — в любом домене.
-Контракт скилла публикуется в каталоге ядра пакетом каталога, исполняет его
-демон-исполнитель скиллов протоколом `http`.
+Packages send notifications not over direct HTTP but with a skill: it can be called from an
+approval outcome, a work rule, or a process step — in any domain. The skill contract is
+published in the core catalog by a catalog package, and the skill executor daemon executes
+it over the `http` protocol.
 
-| Параметр контракта | Значение |
+| Contract parameter | Value |
 |---|---|
-| Имя и версия | `notify.send`, `1` |
+| Name and version | `notify.send`, `1` |
 | `sideEffects` / `riskLevel` | `external_write` / `low` |
 | Endpoint | `${NOTIFICATION_SERVICE_URL}/api/v1/skills/notify.send` |
-| Токен | audience `notification-service`, scope `notifications:send` |
+| Token | audience `notification-service`, scope `notifications:send` |
 | `idempotency` | `required` |
-| `timeoutSeconds` / `retryPolicy` | 30 / 3 попытки с паузой 10 с |
+| `timeoutSeconds` / `retryPolicy` | 30 / 3 attempts with a 10 s pause |
 
-**Входы** — те же поля, что у `POST /api/v1/notifications`, **без `actions`**:
-`recipient`, `type`, `title`, `body`, `links`. Кнопки решений ставит только
-само ядро через события, пакет их подделать не может.
+**Inputs** are the same fields as in `POST /api/v1/notifications`, **without `actions`**:
+`recipient`, `type`, `title`, `body`, `links`. Only the core itself places decision buttons,
+through events; a package cannot forge them.
 
-**Выходы**:
+**Outputs**:
 
 ```json
 {
@@ -479,25 +472,24 @@ stateDiagram-v2
 }
 ```
 
-Ключ идемпотентности вызова — один и тот же на всех попытках — становится
-ключом дедупликации уведомления (`skill:<idempotencyKey>`, слишком длинный
-ключ хэшируется). Повтор вызова не создаёт второго уведомления. Ошибки идут в
-формате skill-sdk `{"error": {"code", "message", "retryable", "details"}}`:
-5xx помечены `retryable: true`, 4xx — `false` (например, `invalid_inputs`,
-`unknown_recipient`).
+The call's idempotency key — the same on all attempts — becomes the notification's
+deduplication key (`skill:<idempotencyKey>`; a key that is too long is hashed). Repeating the
+call does not create a second notification. Errors come in the skill-sdk format
+`{"error": {"code", "message", "retryable", "details"}}`: 5xx are marked `retryable: true`,
+4xx — `false` (for example, `invalid_inputs`, `unknown_recipient`).
 
-### Пример: уведомить роль после согласования
+### Example: notify a role after an approval
 
-Тип задачи объявляет исход gate-решения: после одобрения уведомить держателей
-роли в workspace задачи и оставить комментарий о результате.
+The task type declares the outcome of a gate decision: after approval, notify the holders of
+a role in the task's workspace and leave a comment about the result.
 
 ```yaml
 apiVersion: taimen.ai/v1
 kind: TaskType
 key: payment-approval
 spec:
-  displayName: Оплатить счёт
-  # lifecycleSchema опущена
+  displayName: Pay invoice
+  # lifecycleSchema omitted
   approvalSchema:
     gates:
       default:
@@ -511,134 +503,128 @@ spec:
                     id: ${ACCOUNTING_ROLE_ID}
                     workspaceId: "$.task.workspaceId!"
                   type: invoice.payment_approved
-                  title: "Оплата согласована: $.task.title|truncate:150"
-                  body: "Оплата согласована ($.task.publicId). $.approval.comment"
+                  title: "Payment approved: $.task.title|truncate:150"
+                  body: "Payment approved ($.task.publicId). $.approval.comment"
                 onSuccess:
-                  - comment: {body: "Бухгалтерия уведомлена о согласовании оплаты."}
+                  - comment: {body: "Accounting has been notified of the payment approval."}
                 onFailure:
-                  - comment: {body: "Уведомить бухгалтерию не удалось: $.invocation.error.code $.invocation.error.message"}
+                  - comment: {body: "Failed to notify accounting: $.invocation.error.code $.invocation.error.message"}
           rejected:
-            - comment: {body: "Оплата не согласована: $.approval.comment"}
+            - comment: {body: "Payment not approved: $.approval.comment"}
             - transition: {status: withdrawn}
 ```
 
-- `${ACCOUNTING_ROLE_ID}` подставляется из окружения при применении пакета,
-  `$.task.…` и `$.approval.…` — из контекста решения, `$.invocation.…` — из
-  итога вызова скилла (см. [Approvals](../control-plane/approvals.md) и
-  [Пакеты каталога](../control-plane/catalog-packages.md)).
-- `onSuccess`/`onFailure` исполняются после завершения вызова. Закрывать
-  задачу или менять её статус по итогу уведомления нужно именно в них.
+- `${ACCOUNTING_ROLE_ID}` is substituted from the environment when the package is applied,
+  `$.task.…` and `$.approval.…` come from the decision context, `$.invocation.…` from the
+  result of the skill call (see [Approvals](../control-plane/approvals.md) and
+  [Catalog packages](../control-plane/catalog-packages.md)).
+- `onSuccess`/`onFailure` run after the call completes. If you need to close the task or
+  change its status based on the notification result, do it there.
 
-- Пример показывает исход решения у типа задачи. Там, где путь работы длиннее
-  одного решения, уведомление — шаг процесса (`call: {skill: notify.send@1}`),
-  например: проверка, согласование по порогу суммы, уведомление бухгалтерии
-  и оплата.
+- The example shows a decision outcome on a task type. Where the work path is longer than one
+  decision, the notification is a process step (`call: {skill: notify.send@1}`), for example:
+  verification, approval by an amount threshold, notifying accounting, and payment.
 
-### Что нужно исполнителю скиллов
+### What the skill executor needs
 
-Скилл исполняет демон с правом `skills.execute` (см.
-[Конфигурация runner](../runner/configuration.md)). Для `notify.send@1` ему
-нужны:
+The skill is executed by a daemon with the `skills.execute` permission (see
+[Runner configuration](../runner/configuration.md)). For `notify.send@1` it needs:
 
-| Настройка | Значение |
+| Setting | Value |
 |---|---|
-| `NOTIFICATION_SERVICE_URL` | При применении пакета `notify`: адрес сервиса, доступный исполнителю (например, `https://platform.example.com/notify`) |
-| `CONTROL_PLANE_SKILLS_PROTOCOLS` | включает `http` |
-| `CONTROL_PLANE_SKILLS_HTTP_ALLOWED_ORIGINS` | origin сервиса уведомлений |
-| `CONTROL_PLANE_SKILLS_PRIVATE_HOSTS` | хост сервиса, если он резолвится во внутренний адрес |
+| `NOTIFICATION_SERVICE_URL` | When applying the `notify` package: a service address reachable by the executor (for example, `https://platform.example.com/notify`) |
+| `CONTROL_PLANE_SKILLS_PROTOCOLS` | includes `http` |
+| `CONTROL_PLANE_SKILLS_HTTP_ALLOWED_ORIGINS` | the notification service origin |
+| `CONTROL_PLANE_SKILLS_PRIVATE_HOSTS` | the service host, if it resolves to an internal address |
 | `CONTROL_PLANE_SKILLS_ALLOWED_AUDIENCES` | `notification-service` |
-| Потолок PAT исполнителя | включает audience `notification-service` и scope `notifications:send` |
+| Executor PAT ceiling | includes the `notification-service` audience and the `notifications:send` scope |
 
-## Уведомления из событий ядра {#core-events}
+## Notifications from core events {#core-events}
 
-Потребитель событий ядра работает внутри сервиса, если настроены и IAM, и
-Control Plane, `NS_EVENTS_ENABLED=true` и в tenant'е есть хотя бы одно
-включённое правило уведомлений. Он читает журнал через SDK
-`control_plane_client.events` (см. [Подписки на события](../control-plane/event-subscriptions.md))
-с фильтром — объединением типов из правил (`on.type` и `close.on`), хранит
-курсор и отметки обработанных событий в своей базе и отправляет обычные
-уведомления от имени своего service account'а.
+The core event consumer runs inside the service if both IAM and Control Plane are configured,
+`NS_EVENTS_ENABLED=true`, and the tenant has at least one enabled notification rule. It reads
+the log through the `control_plane_client.events` SDK (see
+[Event subscriptions](../control-plane/event-subscriptions.md)) with a filter — the union of
+the types from the rules (`on.type` and `close.on`), stores the cursor and processed-event
+marks in its own database, and sends ordinary notifications on behalf of its service
+account.
 
-Что именно происходит на событие — кому, с каким текстом, ссылками и кнопками,
-какие события закрывают кнопки, — задают правила, а не код сервиса. Их
-спецификация, API и применение пакетом — в статье [Правила
-уведомлений](notification-rules.md). Пакет `notify` даёт поведение по
-умолчанию:
+What exactly happens on an event — to whom, with what text, links, and buttons, which events
+close the buttons — is set by the rules, not by the service code. Their specification, API,
+and application by a package are in the [Notification rules](notification-rules.md) article.
+The `notify` package provides the default behavior:
 
-| Событие | Что происходит |
+| Event | What happens |
 |---|---|
-| `approval.requested` | Уведомление назначенному principal'у (`assignedPrincipalId`) или держателям роли `requiredRoleId` в workspace approval'а: «Нужно решение: <задача>», кто запрашивает, комментарий, кнопки «Одобрить» / «Отклонить» (`data.kind = approval.decide`) |
-| `approval.approved`, `approval.rejected`, `approval.cancelled` | Кнопки того уведомления закрываются с исходом: кто решил, через какой канал, когда. Сообщения Telegram редактируются и теряют кнопки |
-| `task.verification_failed` | Уведомление владельцу задачи (иначе исполнителю): какая проверка не прошла и почему, вернулась ли задача в работу или ждёт человека |
+| `approval.requested` | A notification to the assigned principal (`assignedPrincipalId`) or to holders of the `requiredRoleId` role in the approval's workspace: "Decision needed: <task>", who is requesting, the comment, "Approve" / "Reject" buttons (`data.kind = approval.decide`) |
+| `approval.approved`, `approval.rejected`, `approval.cancelled` | The buttons of that notification are closed with the outcome: who decided, through which channel, when. Telegram messages are edited and lose their buttons |
+| `task.verification_failed` | A notification to the task owner (otherwise the executor): which verification failed and why, whether the task went back to work or is waiting for a human |
 
-- **Ровно одно уведомление на событие и правило.** Ключ дедупликации выводится
-  из события шаблоном правила (у правил `notify` —
-  `control-plane:approval:<approval-id>` и `control-plane:event:<event-id>`),
-  поэтому событие, обработанное повторно после сбоя, воспроизводит уведомление,
-  а не создаёт второе.
-- **Первый запуск** начинается с конца журнала (`NS_EVENTS_START=latest`):
-  новая установка не рассылает уведомления об истории. `earliest` — обработать
-  весь доступный журнал. Курсор сохраняется, когда потребитель перезапускается
-  на новом наборе правил.
-- **Поддерево.** `NS_EVENTS_WORKSPACE_ID` сужает чтение до workspace и его
-  потомков; пусто — весь tenant (нужно `events.read` на tenant).
-- **Ссылка на задачу** — часть правила: у правил `notify` это
-  `${TASK_URL_BASE}/<publicId>`, база — переменная установки пакета.
-- Если ядро отказало в самой подписке (нет `events.read`, credential не
-  принят), потребитель останавливается с ошибкой в журнале, а API и доставка
-  продолжают работать. После исправления прав перезапустите сервис.
+- **Exactly one notification per event and rule.** The deduplication key is derived from the
+  event by the rule's template (for the `notify` rules —
+  `control-plane:approval:<approval-id>` and `control-plane:event:<event-id>`), so an event
+  processed again after a failure reproduces the notification instead of creating a second
+  one.
+- **The first run** starts at the end of the log (`NS_EVENTS_START=latest`): a new
+  installation does not send notifications about history. `earliest` processes the whole
+  available log. The cursor is kept when the consumer restarts on a new set of rules.
+- **Subtree.** `NS_EVENTS_WORKSPACE_ID` narrows reading to a workspace and its descendants;
+  empty means the whole tenant (requires `events.read` on the tenant).
+- **The task link** is part of the rule: for the `notify` rules it is
+  `${TASK_URL_BASE}/<publicId>`, and the base is a package installation variable.
+- If the core refused the subscription itself (no `events.read`, the credential was not
+  accepted), the consumer stops with an error in the log, while the API and delivery keep
+  working. After fixing the permissions, restart the service.
 
-Кнопки решения исполняет канал Telegram — как нажатие становится решением
-человека в ядре, описано в статье [Telegram](telegram.md#decisions). В веб-инбоксе
-действия приходят данными (`actions`), а само решение человек принимает в
-рабочем месте, через MCP-плагин или API approvals.
+Decision buttons are executed by the Telegram channel — how a button press becomes a human
+decision in the core is described in the [Telegram](telegram.md#decisions) article. In the web
+inbox the actions arrive as data (`actions`), and the person makes the decision itself in the
+workplace, through the MCP plugin, or through the approvals API.
 
-## Конфигурация
+## Configuration
 
-Все переменные — с префиксом `NS_`, полный перечень — в
-[Переменных окружения](../reference/environment.md#notification-service). Основное:
+All variables have the `NS_` prefix; the full list is in
+[Environment variables](../reference/environment.md#notification-service). The main ones:
 
-| Переменная | По умолчанию | Назначение |
+| Variable | Default | Purpose |
 |---|---|---|
-| `NS_DATABASE_URL` | локальный PostgreSQL | База сервиса; в стеке — `notification-db` |
-| `NS_IAM_URL`, `NS_IAM_ISSUER`, `NS_IAM_JWKS_URL` | пусто | IAM: обмен client credentials и проверка токенов |
-| `NS_CONTROL_PLANE_URL` | пусто | Ядро: каталог адресатов, события, решения |
-| `NS_SERVICE_CLIENT_ID`, `NS_SERVICE_CLIENT_SECRET` | пусто | Service account (`secrets/notification-iam.env`) |
-| `NS_EMAIL_MODE` | `log` | `smtp` — отправлять, `log` — только писать письмо в лог, `disabled` — канала нет |
-| `NS_EVENTS_ENABLED`, `NS_EVENTS_START`, `NS_EVENTS_WORKSPACE_ID` | `true`, `latest`, пусто | Потребитель событий ядра |
-| `NS_EVENTS_POLL_SECONDS` | `30` | Период опроса журнала; за один цикл потребитель видит изменение набора правил |
-| `NS_TELEGRAM_*` | пусто | Бот Telegram, см. [Telegram](telegram.md) |
+| `NS_DATABASE_URL` | local PostgreSQL | The service database; in the stack — `notification-db` |
+| `NS_IAM_URL`, `NS_IAM_ISSUER`, `NS_IAM_JWKS_URL` | empty | IAM: client credentials exchange and token verification |
+| `NS_CONTROL_PLANE_URL` | empty | Core: recipient catalog, events, decisions |
+| `NS_SERVICE_CLIENT_ID`, `NS_SERVICE_CLIENT_SECRET` | empty | Service account (`secrets/notification-iam.env`) |
+| `NS_EMAIL_MODE` | `log` | `smtp` — send, `log` — only write the message to the log, `disabled` — no channel |
+| `NS_EVENTS_ENABLED`, `NS_EVENTS_START`, `NS_EVENTS_WORKSPACE_ID` | `true`, `latest`, empty | Core event consumer |
+| `NS_EVENTS_POLL_SECONDS` | `30` | Log polling period; within one cycle the consumer sees a change in the rule set |
+| `NS_TELEGRAM_*` | empty | Telegram bot, see [Telegram](telegram.md) |
 
-!!! note "Email в стандартном стеке только пишется в лог"
-    `compose.yml` передаёт сервису `NS_EMAIL_FROM`, `NS_SMTP_HOST` и
-    `NS_SMTP_PORT` (из `NOTIFY_EMAIL_FROM`, `NOTIFY_SMTP_HOST`,
-    `NOTIFY_SMTP_PORT`), но не `NS_EMAIL_MODE`, поэтому канал `email` работает
-    в режиме `log`. Для реальной отправки задайте сервису `NS_EMAIL_MODE=smtp`
-    и учётные данные `NS_SMTP_USERNAME`/`NS_SMTP_PASSWORD` (например,
-    compose override-файлом).
+!!! note "In the standard stack, email is only written to the log"
+    `compose.yml` passes `NS_EMAIL_FROM`, `NS_SMTP_HOST`, and `NS_SMTP_PORT` to the service
+    (from `NOTIFY_EMAIL_FROM`, `NOTIFY_SMTP_HOST`, `NOTIFY_SMTP_PORT`), but not
+    `NS_EMAIL_MODE`, so the `email` channel works in `log` mode. For real sending, set
+    `NS_EMAIL_MODE=smtp` and the credentials `NS_SMTP_USERNAME`/`NS_SMTP_PASSWORD` for the
+    service (for example, with a compose override file).
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| Любой запрос к `/api/v1` — `503` | Не заданы `NS_IAM_ISSUER` или JWKS | Проверить окружение контейнера |
-| Отправка роли — `503 dependency_unavailable` | Нет `secrets/notification-iam.env` или контейнер создан до bootstrap | Выполнить bootstrap и `docker compose --profile notify up -d notification-service` |
-| `422 unknown_recipient` | Principal или роль не существуют в ядре; группа отвязана | Проверить id; для группы — `GET …/channel-groups` |
-| Уведомление принято, но у человека пусто, в журнале `recipient_has_no_identity` | У principal'а нет IAM-binding в tenant'е отправителя | Завести binding principal'у (см. [Права и scopes](../reference/permissions.md)) |
-| Роль адресована, а `deliveries` пуст | У роли нет держателей в этом workspace и нет привязанных групп | Назначить роль или привязать группу |
-| Нет уведомлений о запросах решений | Не применены правила уведомлений, или потребитель не запущен: нет Control Plane/IAM, `NS_EVENTS_ENABLED=false`, ядро отказало в подписке | Применить пакет `notify` (см. [Правила уведомлений](notification-rules.md)); логи сервиса; права binding сервиса (`events.read`) |
-| Старые запросы решений не пришли после установки | `NS_EVENTS_START=latest`: история не рассылается | Ожидаемо |
-| `409 idempotency_conflict` | Ключ использован с другим телом | Ключ должен однозначно определять содержание |
-| Поток SSE обрывается через несколько минут | Истёк токен | Переподключаться со свежим токеном и `Last-Event-ID` |
+| Any request to `/api/v1` returns `503` | `NS_IAM_ISSUER` or JWKS is not set | Check the container environment |
+| Sending to a role returns `503 dependency_unavailable` | No `secrets/notification-iam.env`, or the container was created before bootstrap | Run bootstrap and `docker compose --profile notify up -d notification-service` |
+| `422 unknown_recipient` | The principal or role does not exist in the core; the group is unlinked | Check the id; for a group — `GET …/channel-groups` |
+| The notification is accepted, but the person sees nothing, and the log shows `recipient_has_no_identity` | The principal has no IAM binding in the sender's tenant | Create a binding for the principal (see [Permissions and scopes](../reference/permissions.md)) |
+| A role is addressed, but `deliveries` is empty | The role has no holders in this workspace and no linked groups | Assign the role or link a group |
+| No notifications about decision requests | Notification rules are not applied, or the consumer is not running: no Control Plane/IAM, `NS_EVENTS_ENABLED=false`, the core refused the subscription | Apply the `notify` package (see [Notification rules](notification-rules.md)); service logs; the service's binding permissions (`events.read`) |
+| Old decision requests did not arrive after installation | `NS_EVENTS_START=latest`: history is not sent | Expected |
+| `409 idempotency_conflict` | The key was used with a different body | The key must uniquely determine the content |
+| The SSE stream breaks after a few minutes | The token expired | Reconnect with a fresh token and `Last-Event-ID` |
 
-## См. также
+## See also
 
-- [Правила уведомлений](notification-rules.md) — какие события становятся уведомлениями.
-- [Telegram](telegram.md) — привязка людей и групп, решения кнопками.
-- [Подписки на события](../control-plane/event-subscriptions.md) — фильтры
-  журнала и SDK потребителя, на которых построен потребитель сервиса.
-- [Approvals](../control-plane/approvals.md) — запрос и решение, исходы
-  типа задачи.
-- [Пакеты каталога](../control-plane/catalog-packages.md) — пакет `notify`.
-- [Токены, audiences, scopes](../iam/tokens.md)
-- [Периметр и TLS](../operations/edge-and-tls.md) — маршрут `/notify/*`.
+- [Notification rules](notification-rules.md) — which events become notifications.
+- [Telegram](telegram.md) — linking people and groups, decisions with buttons.
+- [Event subscriptions](../control-plane/event-subscriptions.md) — log filters and the
+  consumer SDK on which the service's consumer is built.
+- [Approvals](../control-plane/approvals.md) — request and decision, task type outcomes.
+- [Catalog packages](../control-plane/catalog-packages.md) — the `notify` package.
+- [Tokens, audiences, scopes](../iam/tokens.md)
+- [Edge and TLS](../operations/edge-and-tls.md) — the `/notify/*` route.

@@ -1,36 +1,36 @@
-# Правила уведомлений
 
-Какие события Control Plane становятся уведомлениями людям — кому, с каким
-текстом, ссылками и кнопками решения — описывают **правила уведомлений**: вид
-каталога `NotificationRule`. Их хранит, проверяет и исполняет
-`notification-service`, а в git они живут в пакете, как типы задач и правила
-вывода работы. Статья для авторов пакетов и администраторов установки.
-Обоснование — TAI-ADR-0053 (п.4) и ADR-0005 сервиса уведомлений.
+# Notification rules
 
-## Зачем правила
+Which Control Plane events become notifications to people — to whom, with what text, links,
+and decision buttons — is described by **notification rules**: the `NotificationRule`
+catalog kind. `notification-service` stores, validates, and executes them, while in git they
+live in a package, like task types and work rules. The article is for package authors and
+installation administrators. Rationale: TAI-ADR-0053 (item 4) and ADR-0005 of the
+notification service.
 
-Новый вид уведомления о событии ядра — правка пакета, а не выпуск сервиса.
-Каналы, настройки получателя, обязательные правила организации и группы уже
-данные сервиса (см. [Уведомления](index.md)); правило добавляет недостающее —
-**что** превращается в уведомление.
+## Why rules
+
+A new kind of notification about a core event is a package edit, not a service release.
+Channels, recipient preferences, organization mandatory rules, and groups are already service
+data (see [Notifications](index.md)); a rule adds what is missing — **what** turns into a
+notification.
 
 ```mermaid
 flowchart LR
-    P["Пакет<br/>notification-rules/*.yaml"] -->|cp_packages apply| NS["notification-service<br/>notification_rules"]
-    CP["Control Plane<br/>журнал событий"] -->|"фильтр = on.type ∪ close.on"| C["Потребитель событий"]
+    P["Package<br/>notification-rules/*.yaml"] -->|cp_packages apply| NS["notification-service<br/>notification_rules"]
+    CP["Control Plane<br/>event log"] -->|"filter = on.type ∪ close.on"| C["Event consumer"]
     NS --> C
-    C -->|"правило: on.when → recipient → шаблон"| N["Уведомление"]
+    C -->|"rule: on.when → recipient → template"| N["Notification"]
     N --> W["web / email / telegram"]
-    C -->|"close.on"| X["Закрыть кнопки<br/>уведомления с тем же ключом"]
+    C -->|"close.on"| X["Close the buttons<br/>of notifications with the same key"]
 ```
 
-!!! warning "Без правил сервис событий не читает"
-    Встроенной таблицы «событие → уведомление» в сервисе нет. Пока в tenant'е нет
-    ни одного включённого правила, потребитель событий не запускается. Прежнее
-    поведение — три правила пакета `notify` (ниже): применяйте пакет сразу после
-    установки сервиса.
+!!! warning "Without rules the service does not read events"
+    The service has no built-in "event → notification" table. As long as the tenant has no
+    enabled rule, the event consumer does not start. The previous behavior is the three rules
+    of the `notify` package (below): apply the package right after installing the service.
 
-## Пример
+## Example
 
 ```yaml
 # yaml-language-server: $schema=../../schema/v1/object.schema.json
@@ -39,163 +39,160 @@ kind: NotificationRule
 key: approval-requested
 spec:
   description: >-
-    Назначенному решающему — запрос решения с кнопками; исход решения
-    закрывает кнопки.
+    A decision request with buttons to the assigned decider; the decision outcome
+    closes the buttons.
   "on": {type: approval.requested}
   recipient: {kind: assigned}
   notification:
     type: approval.requested
-    title: "Нужно решение: {{task.publicId}} {{task.title}}"
+    title: "Decision needed: {{task.publicId}} {{task.title}}"
     body: |-
-      Работа: {{task.publicId}} {{task.title}}
-      Запрашивает: {{payload.requestedBy.displayName}}
-      Комментарий: {{payload.comment}}
+      Work: {{task.publicId}} {{task.title}}
+      Requested by: {{payload.requestedBy.displayName}}
+      Comment: {{payload.comment}}
     links:
-      - {label: Открыть задачу, url: "${TASK_URL_BASE}/{{task.publicId}}"}
+      - {label: Open task, url: "${TASK_URL_BASE}/{{task.publicId}}"}
     actions: [approvalDecide]
   dedupKeyTemplate: "control-plane:approval:{{event.entityId}}"
   close:
     "on": [approval.approved, approval.rejected, approval.cancelled]
 ```
 
-!!! warning "Ключ `on` — в кавычках"
-    Загрузчики YAML 1.1 (в том числе тот, которым установщик читает пакеты) читают
-    голый `on` как `true`, и спецификация теряет обязательное поле. Пишите `"on":`.
+!!! warning "The `on` key must be quoted"
+    YAML 1.1 loaders (including the one the installer uses to read packages) read a bare `on`
+    as `true`, and the specification loses a required field. Write `"on":`.
 
-## Спецификация
+## Specification
 
-| Поле | Обязательно | Смысл |
+| Field | Required | Meaning |
 |---|---|---|
-| `on.type` | да | Тип события каталога ядра (`approval.requested`) или префикс (`approval.*`) |
-| `on.when` | нет | Условие грамматики правил ядра над корнями `payload`, `event`, `task`; по умолчанию `true` |
-| `recipient` | да | Кому (см. [Адресат](#recipient)) |
-| `notification.type` | да | Тип уведомления (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`): по нему работают настройки получателя и обязательные правила организации |
-| `notification.title` | да | Шаблон заголовка, до 300 символов |
-| `notification.body` | нет | Шаблон текста, до 4000 символов |
-| `notification.links` | нет | До 5 ссылок `{label, url}`, оба — шаблоны |
-| `notification.actions` | нет | `[approvalDecide]` — кнопки «Одобрить» / «Отклонить» решения |
-| `dedupKeyTemplate` | нет | Шаблон ключа дедупликации; по умолчанию `rule:<key>:event:{{event.id}}` |
-| `close.on` | нет | Типы событий, которые закрывают кнопки уведомления с тем же ключом |
-| `close.outcome` | нет | Шаблон исхода вместо кнопок; по умолчанию — последний сегмент типа закрывающего события (`approved`, `rejected`, `cancelled`) |
-| `status` | нет | `enabled` (по умолчанию) или `disabled` — правило хранится, но не исполняется |
-| `description` | нет | Текст для людей, до 2000 символов |
+| `on.type` | yes | A core catalog event type (`approval.requested`) or a prefix (`approval.*`) |
+| `on.when` | no | A condition in the core rule grammar over the roots `payload`, `event`, `task`; default `true` |
+| `recipient` | yes | To whom (see [Recipient](#recipient)) |
+| `notification.type` | yes | Notification type (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`): recipient preferences and organization mandatory rules work by it |
+| `notification.title` | yes | Title template, up to 300 characters |
+| `notification.body` | no | Text template, up to 4000 characters |
+| `notification.links` | no | Up to 5 links `{label, url}`, both are templates |
+| `notification.actions` | no | `[approvalDecide]` — the decision's "Approve" / "Reject" buttons |
+| `dedupKeyTemplate` | no | Deduplication key template; default `rule:<key>:event:{{event.id}}` |
+| `close.on` | no | Event types that close the buttons of the notification with the same key |
+| `close.outcome` | no | Outcome template shown instead of the buttons; defaults to the last segment of the closing event type (`approved`, `rejected`, `cancelled`) |
+| `status` | no | `enabled` (default) or `disabled` — the rule is stored but not executed |
+| `description` | no | Text for people, up to 2000 characters |
 
-Неизвестное поле на любом уровне — отказ проверки. Ключ правила —
-`^[a-z0-9][a-z0-9._-]*$`, до 128 символов.
+An unknown field at any level fails validation. The rule key is `^[a-z0-9][a-z0-9._-]*$`, up
+to 128 characters.
 
-### Адресат { #recipient }
+### Recipient { #recipient }
 
-| `recipient.kind` | Кто получает |
+| `recipient.kind` | Who receives it |
 |---|---|
-| `assigned` | Назначенный решающий: principal по пути `ref` (по умолчанию `payload.assignedPrincipalId`); путь пуст — держатели роли `payload.requiredRoleId` в workspace (`workspace`, по умолчанию `payload.workspaceId`, иначе `event.workspaceId`) |
-| `role` | Держатели роли, id которой по пути `ref`, в workspace по пути `workspace` (по умолчанию `event.workspaceId`) |
-| `taskOwner` | Владелец задачи события (`task.ownerId`) |
-| `taskAssignee` | Исполнитель задачи события (`task.assigneeId`) |
-| `principal` | Конкретный principal: `ref` — UUID. `${ПЕРЕМЕННАЯ}` установки подставляет установщик пакетов; сервис хранит и принимает только UUID |
+| `assigned` | The assigned decider: the principal at the `ref` path (default `payload.assignedPrincipalId`); if the path is empty — holders of the `payload.requiredRoleId` role in the workspace (`workspace`, default `payload.workspaceId`, otherwise `event.workspaceId`) |
+| `role` | Holders of the role whose id is at the `ref` path, in the workspace at the `workspace` path (default `event.workspaceId`) |
+| `taskOwner` | The owner of the event's task (`task.ownerId`) |
+| `taskAssignee` | The assignee of the event's task (`task.assigneeId`) |
+| `principal` | A specific principal: `ref` is a UUID. The package installer substitutes an installation `${VARIABLE}`; the service stores and accepts only a UUID |
 
-`fallback` — `taskOwner`, `taskAssignee` или `none` (по умолчанию): второй
-адресат, если первый пуст. Адресата нет и после `fallback` — уведомление не
-создаётся, в журнал сервиса пишутся ключ правила и id события. Роль без
-держателей — запись в журнале доставки без адресатов. Principal или роль,
-неизвестные ядру, — событие для этого правила пропускается.
+`fallback` — `taskOwner`, `taskAssignee`, or `none` (default): a second recipient if the
+first is empty. If there is still no recipient after `fallback`, no notification is created,
+and the rule key and event id are written to the service log. A role without holders gives a
+delivery log entry without recipients. If the principal or role is unknown to the core, the
+event is skipped for this rule.
 
-### Шаблоны и корни
+### Templates and roots
 
-Шаблон — строка с плейсхолдерами `{{ путь }}`, путь — `корень(.сегмент)*`.
-Условий, циклов, вызовов и фильтров в шаблонах нет: разные тексты — разные
-правила с разными `on.when`.
+A template is a string with `{{ path }}` placeholders, where the path is
+`root(.segment)*`. Templates have no conditions, loops, calls, or filters: different texts
+are different rules with different `on.when`.
 
-| Корень | Что это |
+| Root | What it is |
 |---|---|
-| `payload` | Тело события по схеме каталога событий ядра |
-| `event` | Конверт события: `id`, `type`, `entityType`, `entityId`, `workspaceId`, `actorId`, `occurredAt`, … |
-| `task` | Проекция задачи ядра (`id`, `publicId`, `title`, `status`, `ownerId`, `assigneeId`, `typeKey`, `customFields`, …): задача сущности события или `payload.taskId`. Читается, только если правило обращается к корню `task` |
+| `payload` | The event body per the core event catalog schema |
+| `event` | The event envelope: `id`, `type`, `entityType`, `entityId`, `workspaceId`, `actorId`, `occurredAt`, … |
+| `task` | The core task projection (`id`, `publicId`, `title`, `status`, `ownerId`, `assigneeId`, `typeKey`, `customFields`, …): the task of the event's entity or `payload.taskId`. It is read only if the rule refers to the `task` root |
 
-Путь, который заканчивается `displayName` после идентификатора principal'а
+A path that ends with `displayName` after a principal identifier
 (`{{payload.requestedBy.displayName}}`, `{{event.actorId.displayName}}`,
-`{{task.ownerId.displayName}}`), подставляет имя principal'а из каталога ядра.
+`{{task.ownerId.displayName}}`) substitutes the principal's name from the core catalog.
 
-Правила подстановки:
+Substitution rules:
 
-- отсутствующее значение — пустая строка; скаляр — его текст; объект и список
-  не подставляются;
-- в `title` переводы строк сворачиваются в пробел; пустой после подстановки
-  заголовок заменяется `notification.type`;
-- строка `body`, в которой все плейсхолдеры дали пусто, опускается целиком — так
-  необязательные строки («Комментарий: …») исчезают сами;
-- ссылка опускается, если хоть один плейсхолдер её `url` дал пусто или результат
-  не абсолютный `http(s)` URL. Базу адреса интерфейса пишите переменной установки
-  (`${TASK_URL_BASE}`), её подставляет установщик пакетов;
-- ключ дедупликации, в котором плейсхолдер дал пусто, или длиннее 200 символов —
-  правило для этого события пропускается с записью в журнал: ключ без части
-  склеил бы уведомления разных событий;
-- секретов шаблон не видит: корни — только поля события и проекции задачи.
+- a missing value is an empty string; a scalar is its text; objects and lists are not
+  substituted;
+- in `title`, line breaks collapse into a space; a title that is empty after substitution is
+  replaced with `notification.type`;
+- a `body` line in which all placeholders produced nothing is dropped entirely — so optional
+  lines ("Comment: …") disappear on their own;
+- a link is dropped if any placeholder of its `url` produced nothing or the result is not an
+  absolute `http(s)` URL. Write the interface address base as an installation variable
+  (`${TASK_URL_BASE}`); the package installer substitutes it;
+- if a placeholder in the deduplication key produced nothing, or the key is longer than 200
+  characters, the rule is skipped for this event with a log entry: a key missing a part would
+  merge notifications of different events;
+- a template sees no secrets: the roots are only event fields and the task projection.
 
-`approvalDecide` строит действия `approve` и `reject` с `data = {kind:
-approval.decide, approvalId, decision}`, где `approvalId` — `event.entityId`
-события `approval.*`. Их исполняет канал с кнопками (см.
+`approvalDecide` builds the `approve` and `reject` actions with `data = {kind:
+approval.decide, approvalId, decision}`, where `approvalId` is the `event.entityId` of the
+`approval.*` event. They are executed by a channel with buttons (see
 [Telegram](telegram.md#decisions)).
 
-## Исполнение
+## Execution
 
-- **Фильтр потребителя** — объединение `on.type` и `close.on` включённых правил;
-  префикс `x.*` передаётся ядру как `x.`. Набор правил изменился — потребитель
-  перезапускается с тем же курсором на новом фильтре в течение одного цикла
-  опроса (`NS_EVENTS_POLL_SECONDS`, по умолчанию 30 с); применение правила через
-  API будит потребитель своего процесса сразу.
-- **На событие** — все подходящие правила по порядку ключей (`on.type` совпадает,
-  `on.when` истинно); каждое даёт не больше одного уведомления. Ошибка одного
-  правила пишется в журнал с ключом правила и не мешает остальным.
-  Недоступность ядра — отказ обработки события целиком, потребитель повторит его.
-- **Закрытие** — событие из `close.on`: сервис рендерит `dedupKeyTemplate` над
-  закрывающим событием и закрывает действия уведомления с этим ключом:
-  `actionsOutcome = {status, by, channel, at}`. Побеждает первое закрытие. Ключ
-  поэтому должен выводиться из того, что общее у открывающего и закрывающего
-  событий (для решений — `event.entityId`, id approval).
-- **Версия** — событие обрабатывается версиями, действующими на момент обработки.
-  Уже созданные уведомления не меняются ни при новой версии, ни при выводе правила
-  из оборота.
+- **The consumer filter** is the union of `on.type` and `close.on` of enabled rules; a prefix
+  `x.*` is passed to the core as `x.`. When the rule set changes, the consumer restarts with
+  the same cursor on the new filter within one polling cycle (`NS_EVENTS_POLL_SECONDS`, 30 s
+  by default); applying a rule through the API wakes up the consumer of its own process
+  immediately.
+- **On an event** — all matching rules in key order (`on.type` matches, `on.when` is true);
+  each produces at most one notification. An error in one rule is logged with the rule key
+  and does not affect the others. Core unavailability fails processing of the whole event,
+  and the consumer retries it.
+- **Closing** — an event from `close.on`: the service renders `dedupKeyTemplate` over the
+  closing event and closes the actions of the notification with that key:
+  `actionsOutcome = {status, by, channel, at}`. The first closing wins. That is why the key
+  must be derived from what the opening and closing events have in common (for decisions —
+  `event.entityId`, the approval id).
+- **Version** — an event is processed by the versions in effect at processing time. Already
+  created notifications do not change either with a new version or when the rule is retired.
 
-Уведомление создаёт сам сервис своим service account'ом, как любое другое, —
-с каналами, настройками получателя и журналом доставки (см.
-[Уведомления](index.md)).
+The service creates the notification itself with its service account, like any other — with
+channels, recipient preferences, and a delivery log (see [Notifications](index.md)).
 
-## Версии
+## Versions
 
-Правила хранятся в таблице `notification_rules` по tenant'у: ключ, версия (1, 2,
-…), нормализованная спецификация, `specHash` (sha256 канонического JSON), состояние
-`active` | `superseded` | `retired`, автор и время.
+Rules are stored in the `notification_rules` table per tenant: key, version (1, 2, …),
+normalized specification, `specHash` (sha256 of the canonical JSON), state `active` |
+`superseded` | `retired`, author, and time.
 
-- Версии неизменяемы. `POST` спецификации с тем же хэшем, что у действующей
-  версии, ничего не создаёт (`200`) — повторное применение пакета идемпотентно.
-  Другой хэш — новая версия `active`, прежняя `superseded` (`201`).
-- `:retire` переводит действующую версию в `retired`; `POST` в выведенный ключ
-  заводит следующую версию и снова делает её действующей.
-- `status: disabled` — часть спецификации и хэша: версия действует, но не
-  исполняется.
+- Versions are immutable. A `POST` of a specification with the same hash as the current
+  version creates nothing (`200`) — reapplying a package is idempotent. A different hash
+  creates a new `active` version, and the previous one becomes `superseded` (`201`).
+- `:retire` moves the current version to `retired`; a `POST` to a retired key creates the next
+  version and makes it current again.
+- `status: disabled` is part of the specification and the hash: the version is current but
+  not executed.
 
-## Проверка спецификации
+## Specification validation
 
-Одна проверка для `POST` и `:validate`, по порядку:
+One validation for `POST` and `:validate`, in order:
 
-1. **Форма** — JSON Schema спецификации (копия `$defs.notificationRuleSpec` схемы
-   пакетов); ошибка — код `invalid_spec`. При ошибках формы остальные шаги не
-   выполняются.
-2. **Типы событий** — по снимку каталога событий ядра в сервисе: `on.type`
-   существует (префикс совпадает хотя бы с одним типом), каждый тип `close.on`
-   существует; иначе `unknown_event_type`.
-3. **Пути** условий и шаблонов: корень допустим, `payload.<поле>` есть в схеме
-   каждого типа, на который правило срабатывает, `event.<поле>` — в конверте,
-   `task.<поле>` — в проекции задачи, и корень `task` допустим, только если у
-   события есть задача; иначе `unknown_field`.
-4. **Условие** — грамматика правил ядра (глубина ≤ 16, узлов ≤ 256, документ ≤ 16
-   КиБ); иначе `invalid_condition`.
-5. **Согласованность** — `approvalDecide` только для событий сущности `approval`;
-   `principal` — `ref` задан и это UUID; `role` — `ref` задан; иначе
-   `invalid_rule`.
+1. **Shape** — the specification's JSON Schema (a copy of `$defs.notificationRuleSpec` of the
+   package schema); error code `invalid_spec`. If there are shape errors, the remaining steps
+   are not run.
+2. **Event types** — against the service's snapshot of the core event catalog: `on.type`
+   exists (a prefix matches at least one type), every `close.on` type exists; otherwise
+   `unknown_event_type`.
+3. **Paths** of conditions and templates: the root is allowed, `payload.<field>` is in the
+   schema of every type the rule fires on, `event.<field>` is in the envelope, `task.<field>`
+   is in the task projection, and the `task` root is allowed only if the event has a task;
+   otherwise `unknown_field`.
+4. **Condition** — the core rule grammar (depth ≤ 16, nodes ≤ 256, document ≤ 16 KiB);
+   otherwise `invalid_condition`.
+5. **Consistency** — `approvalDecide` only for events of the `approval` entity; `principal` —
+   `ref` is set and is a UUID; `role` — `ref` is set; otherwise `invalid_rule`.
 
-Отказ — `422 invalid_notification_rule`, в `details.errors` — все найденные
-ошибки `{path, code, message}`, `path` — JSON Pointer в спецификации.
+A refusal is `422 invalid_notification_rule`; `details.errors` contains all found errors
+`{path, code, message}`, where `path` is a JSON Pointer into the specification.
 
 ```json
 {
@@ -209,18 +206,18 @@ approval.decide, approvalId, decision}`, где `approvalId` — `event.entityId
 }
 ```
 
-## API сервиса
+## Service API
 
-Все маршруты — `https://platform.example.com/notify/api/v1/…` за периметром (см.
-[Периметр и TLS](../operations/edge-and-tls.md)), только scope
-**`notifications:admin`**; отправители с `notifications:send` их не видят.
+All routes are `https://platform.example.com/notify/api/v1/…` behind the edge (see
+[Edge and TLS](../operations/edge-and-tls.md)), scope **`notifications:admin`** only; senders
+with `notifications:send` do not see them.
 
-| Метод и путь | Что делает |
+| Method and path | What it does |
 |---|---|
-| `GET /notification-rules?key=&includeRetired=&limit=&cursor=` | Действующие версии правил tenant'а: `{items: [{key, version, spec, specHash, state, createdBy, createdAt}], nextCursor}`; по умолчанию 100, не больше 500 |
-| `POST /notification-rules` — `{key, spec}` | Применить: `201` — новая версия, `200` — спецификация не изменилась; `422 invalid_notification_rule` |
-| `POST /notification-rules:validate` — `{key, spec}` | Та же проверка без записи: `200 {valid: true, specHash, changed}` или `422` |
-| `POST /notification-rules/{key}:retire` | Вывести из оборота: `200` (повтор — тот же ответ), `404` — ключа нет |
+| `GET /notification-rules?key=&includeRetired=&limit=&cursor=` | Current rule versions of the tenant: `{items: [{key, version, spec, specHash, state, createdBy, createdAt}], nextCursor}`; 100 by default, no more than 500 |
+| `POST /notification-rules` — `{key, spec}` | Apply: `201` — a new version, `200` — the specification has not changed; `422 invalid_notification_rule` |
+| `POST /notification-rules:validate` — `{key, spec}` | The same validation without writing: `200 {valid: true, specHash, changed}` or `422` |
+| `POST /notification-rules/{key}:retire` | Retire: `200` (a repeat gives the same response), `404` — no such key |
 
 ```bash
 curl -sS -X POST https://platform.example.com/notify/api/v1/notification-rules:validate \
@@ -229,41 +226,41 @@ curl -sS -X POST https://platform.example.com/notify/api/v1/notification-rules:v
         "on": {"type": "task.verified"},
         "recipient": {"kind": "taskOwner", "fallback": "taskAssignee"},
         "notification": {"type": "task.verified",
-                         "title": "Принято: {{task.publicId}} {{task.title}}"}}}'
+                         "title": "Accepted: {{task.publicId}} {{task.title}}"}}}'
 ```
 
 ```json
 {"valid": true, "specHash": "9c1f…", "changed": true}
 ```
 
-Токен — обмен PAT или client credentials в IAM с `audience:
-notification-service` и scope `notifications:admin` (см. [Токены, audiences,
-scopes](../iam/tokens.md)).
+The token is a PAT or client credentials exchange in IAM with `audience:
+notification-service` and the `notifications:admin` scope (see
+[Tokens, audiences, scopes](../iam/tokens.md)).
 
-## Применение пакетом
+## Application by a package
 
-Правила — объекты пакета в папке `notification-rules/`. Установщик
-`tools/cp_packages.py` применяет их **к сервису уведомлений, а не к ядру** и
-последними — после всех видов ядра:
+Rules are package objects in the `notification-rules/` folder. The `tools/cp_packages.py`
+installer applies them **to the notification service, not to the core**, and last — after
+all core kinds:
 
-1. до первой записи — `:validate` всех правил установки; отказ сервиса
-   останавливает установку целиком;
-2. `POST` только тех правил, где `:validate` ответил `changed: true`; остальные —
-   «без изменений»;
-3. `retire.NotificationRule` файла установки — `:retire`; отправленные
-   уведомления остаются.
+1. before the first write — `:validate` of all rules of the installation; a service refusal
+   stops the whole installation;
+2. `POST` only for the rules where `:validate` answered `changed: true`; the rest are
+   "unchanged";
+3. `retire.NotificationRule` of the installation file — `:retire`; notifications already sent
+   remain.
 
-Адрес сервиса — переменная установки **`NOTIFICATION_SERVICE_URL`** (в `.env` или
-окружении), например `https://platform.example.com/notify`. Токен — переменная
-`NOTIFY_TOKEN` (access token audience `notification-service`, scope
-`notifications:admin`) или обмен того же IAM credential, которым установщик ходит
-в ядро, на этот audience (PAT должен допускать audience в потолке). Без адреса
-сервиса `apply` пропускает правила уведомлений с предупреждением.
+The service address is the installation variable **`NOTIFICATION_SERVICE_URL`** (in `.env` or
+the environment), for example `https://platform.example.com/notify`. The token is the
+`NOTIFY_TOKEN` variable (an access token for the `notification-service` audience, scope
+`notifications:admin`) or an exchange, for this audience, of the same IAM credential the
+installer uses for the core (the PAT must allow the audience in its ceiling). Without a
+service address, `apply` skips notification rules with a warning.
 
 ```bash
 export CP_TOKEN=<access-token audience control-plane>
 export NOTIFY_TOKEN=<access-token audience notification-service>
-python3 tools/cp_packages.py apply --install deploy/<окружение>/packages.yaml \
+python3 tools/cp_packages.py apply --install deploy/<environment>/packages.yaml \
   --server https://platform.example.com
 ```
 
@@ -272,51 +269,51 @@ python3 tools/cp_packages.py apply --install deploy/<окружение>/package
    NotificationRule/task-verified: опубликована v1 (нет в сервисе)
 ```
 
-Выгрузка действующей версии в пакет (ядро не нужно):
+Exporting the current version into a package (the core is not needed):
 
 ```bash
 python3 tools/cp_packages.py export --kind NotificationRule --key task-verified \
-  --package packages/<пакет>
+  --package packages/<package>
 ```
 
-## Правила пакета `notify`
+## Rules of the `notify` package
 
-Пакет `notify` несёт три правила — поведение сервиса по умолчанию. Им нужна
-переменная установки `TASK_URL_BASE` — база ссылки «Открыть задачу», к которой
-приклеивается `/<publicId>`.
+The `notify` package carries three rules — the service's default behavior. They need the
+installation variable `TASK_URL_BASE` — the base of the "Open task" link, to which
+`/<publicId>` is appended.
 
-| Ключ | Событие и условие | Адресат | Что делает |
+| Key | Event and condition | Recipient | What it does |
 |---|---|---|---|
-| `approval-requested` | `approval.requested` | `assigned` | Запрос решения с кнопками «Одобрить» / «Отклонить»; `approval.approved`, `approval.rejected`, `approval.cancelled` закрывают кнопки (ключ `control-plane:approval:<approval-id>`) |
-| `verification-failed` | `task.verification_failed`, `payload.blocked` ≠ `true` | `taskOwner`, иначе `taskAssignee` | Проверка приёмки не пройдена, задача вернулась в работу |
-| `verification-blocked` | `task.verification_failed`, `payload.blocked` = `true` | `taskOwner`, иначе `taskAssignee` | Проверка не пройдена несколько раз подряд, задача ждёт человека |
+| `approval-requested` | `approval.requested` | `assigned` | A decision request with "Approve" / "Reject" buttons; `approval.approved`, `approval.rejected`, `approval.cancelled` close the buttons (key `control-plane:approval:<approval-id>`) |
+| `verification-failed` | `task.verification_failed`, `payload.blocked` ≠ `true` | `taskOwner`, otherwise `taskAssignee` | The acceptance verification failed, and the task went back to work |
+| `verification-blocked` | `task.verification_failed`, `payload.blocked` = `true` | `taskOwner`, otherwise `taskAssignee` | The verification failed several times in a row, and the task is waiting for a human |
 
-Два правила на `task.verification_failed` — потому что в шаблонах нет условий:
-разные тексты задаются разными правилами с противоположными `on.when`. Ключи
-дедупликации совпадают с прежними ключами сервиса, поэтому переход на правила не
-дублирует уже созданные уведомления.
+There are two rules on `task.verification_failed` because templates have no conditions:
+different texts are set by different rules with opposite `on.when`. The deduplication keys
+match the service's previous keys, so switching to rules does not duplicate notifications
+already created.
 
-Своё уведомление добавляется новым файлом в своём пакете (например, «задача
-принята» на `task.verified` владельцу) и `apply` — без выпуска сервиса.
+You add your own notification with a new file in your own package (for example, "task
+accepted" on `task.verified` to the owner) and `apply` — without a service release.
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| Уведомлений о событиях нет совсем | В tenant'е нет включённых правил — потребитель не запущен | Применить пакет `notify` (`NOTIFICATION_SERVICE_URL` и токен заданы) |
-| `apply` пишет «NotificationRule не применены: не задан сервис уведомлений» | Нет `NOTIFICATION_SERVICE_URL` или токена | Задать переменную и `NOTIFY_TOKEN` (или PAT с audience `notification-service`) |
-| `422 invalid_notification_rule`, `unknown_event_type` | Тип события не из каталога ядра, известного сервису | Проверить тип; новый тип события появляется у сервиса с его обновлением |
-| `invalid_spec` на `/on` | `on` без кавычек превратился в `true` | Писать `"on":` |
-| `unknown_field` на пути `task.…` | У события нет задачи или поле не из проекции задачи | Убрать корень `task` или сменить событие |
-| Ссылки «Открыть задачу» нет | `TASK_URL_BASE` пуст или результат не абсолютный URL | Задать переменную установки и применить пакет |
-| Кнопки не закрылись после решения | `dedupKeyTemplate` открывающего и закрывающего событий дают разные ключи | Строить ключ из `event.entityId` |
-| `403` на `/notification-rules` | Токен без scope `notifications:admin` | Выпустить токен с этим scope |
+| No event notifications at all | The tenant has no enabled rules — the consumer is not running | Apply the `notify` package (with `NOTIFICATION_SERVICE_URL` and the token set) |
+| `apply` prints `NotificationRule не применены: не задан сервис уведомлений` (notification rules not applied: notification service not set) | No `NOTIFICATION_SERVICE_URL` or token | Set the variable and `NOTIFY_TOKEN` (or a PAT with the `notification-service` audience) |
+| `422 invalid_notification_rule`, `unknown_event_type` | The event type is not from the core catalog known to the service | Check the type; a new event type reaches the service with its update |
+| `invalid_spec` at `/on` | An unquoted `on` turned into `true` | Write `"on":` |
+| `unknown_field` at a `task.…` path | The event has no task, or the field is not in the task projection | Remove the `task` root or change the event |
+| No "Open task" link | `TASK_URL_BASE` is empty or the result is not an absolute URL | Set the installation variable and apply the package |
+| The buttons did not close after the decision | The `dedupKeyTemplate` of the opening and closing events produces different keys | Build the key from `event.entityId` |
+| `403` on `/notification-rules` | The token lacks the `notifications:admin` scope | Issue a token with this scope |
 
-## См. также
+## See also
 
-- [Уведомления](index.md) — каналы, адресаты, журнал доставки, потребитель событий.
-- [Telegram](telegram.md) — решения кнопками.
-- [Пакеты каталога](../control-plane/catalog-packages.md) — вид `NotificationRule`.
-- [События](../control-plane/events.md) — каталог событий ядра.
-- [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md#verification-stage) — `task.verification_failed`.
+- [Notifications](index.md) — channels, recipients, delivery log, event consumer.
+- [Telegram](telegram.md) — decisions with buttons.
+- [Catalog packages](../control-plane/catalog-packages.md) — the `NotificationRule` kind.
+- [Events](../control-plane/events.md) — the core event catalog.
+- [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md#verification-stage) — `task.verification_failed`.
 - [Approvals](../control-plane/approvals.md)

@@ -1,249 +1,254 @@
-# Конфигурация
 
-Справочник настроек Control Plane: все переменные `CP_*` сервера с
-умолчаниями из `control_plane/config.py`, переменные уровня `compose.yml` и
-переменные `CONTROL_PLANE_*` клиентских инструментов (CLI, MCP-сервер, SDK).
-Статья для тех, кто разворачивает и сопровождает Control Plane.
+# Configuration
 
-## Как читаются настройки
+Reference for Control Plane settings: all server `CP_*` variables with the
+defaults from `control_plane/config.py`, variables at the `compose.yml` level,
+and the `CONTROL_PLANE_*` variables of the client tools (CLI, MCP server, SDK).
+It is for those who deploy and maintain the Control Plane.
 
-- Все настройки сервера — поля класса `Settings` (pydantic-settings) с
-  префиксом `CP_`. Регистр имени переменной не важен.
-- Источники: переменные окружения процесса и файл `.env` в рабочем каталоге
-  процесса. Переменные окружения важнее файла.
-- **Списки задаются JSON-массивом**, например
-  `CP_CORS_ORIGINS='["https://platform.example.com"]'`. Строка через запятую
-  не распарсится.
-- Одни и те же настройки читают три процесса из одного образа:
+## How settings are read
 
-| Процесс | Команда | Сервис в `compose.yml` |
+- All server settings are fields of the `Settings` class (pydantic-settings)
+  with the `CP_` prefix. Variable names are case-insensitive.
+- Sources: the process environment variables and the `.env` file in the
+  process's working directory. Environment variables take precedence over the
+  file.
+- **Lists are set as a JSON array**, for example
+  `CP_CORS_ORIGINS='["https://platform.example.com"]'`. A comma-separated
+  string will not parse.
+- The same settings are read by three processes from one image:
+
+| Process | Command | Service in `compose.yml` |
 |---|---|---|
 | API | `alembic upgrade head && uvicorn control_plane.main:app --host 0.0.0.0 --port 8000` | `control-plane-api` |
 | Worker | `python -m control_plane.worker` | `control-plane-worker` |
 | Context-adapter | `python -m control_plane.worker.context_adapter` | `context-adapter` |
 
-!!! warning "Незаконченная конфигурация валит старт"
-    Процесс не стартует, если режим включён наполовину:
-    `CP_IAM_ENABLED=true` без `CP_IAM_ISSUER` или `CP_IAM_JWKS_URL`;
-    `CP_ENTITLEMENT_ENABLED=true`, `CP_AUTHZ_MODE=shadow|policy` или
-    `CP_CONTEXT_AUTH=iam` без `CP_IAM_CLIENT_ID` и `CP_IAM_CLIENT_SECRET`;
-    неизвестное значение `CP_AUTHZ_MODE`, `CP_CONTEXT_PROVIDER` или
-    `CP_CONTEXT_AUTH`. Молча откатиться в предыдущий режим было бы хуже.
+!!! warning "An incomplete configuration fails startup"
+    The process does not start if a mode is half-enabled:
+    `CP_IAM_ENABLED=true` without `CP_IAM_ISSUER` or `CP_IAM_JWKS_URL`;
+    `CP_ENTITLEMENT_ENABLED=true`, `CP_AUTHZ_MODE=shadow|policy`, or
+    `CP_CONTEXT_AUTH=iam` without `CP_IAM_CLIENT_ID` and `CP_IAM_CLIENT_SECRET`;
+    an unknown value of `CP_AUTHZ_MODE`, `CP_CONTEXT_PROVIDER`, or
+    `CP_CONTEXT_AUTH`. Silently falling back to the previous mode would be
+    worse.
 
-## Основные
+## Core settings
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_ENV` | `dev` | метка окружения |
-| `CP_DATABASE_URL` | `postgresql+psycopg://control_plane:control_plane@localhost:5433/control_plane` | строка подключения к PostgreSQL (драйвер psycopg 3, async) |
-| `CP_LOG_LEVEL` | `INFO` | уровень структурированного JSON-лога |
-| `CP_BOOTSTRAP_TOKEN` | — | токен `POST /api/v1/bootstrap`; не задан — endpoint выключен (`403 bootstrap_disabled`) |
-| `CP_CORS_ORIGINS` | `[]` | разрешённые origins; пустой список — CORS выключен |
-| `CP_MAX_BODY_BYTES` | `1048576` (1 МиБ) | предельный размер тела запроса, больше — `413 request_too_large` |
-| `CP_KNOWLEDGE_SNAPSHOT_MAX_BODY_BYTES` | `8388608` (8 МиБ) | предел тела только для `POST /api/v1/knowledge/snapshots` |
-| `CP_KNOWLEDGE_PACK_ADMINS` | `[]` | id principal (Control Plane или IAM), которым разрешён `POST /api/v1/knowledge/packs`; пустой список закрывает endpoint |
+| `CP_ENV` | `dev` | environment label |
+| `CP_DATABASE_URL` | `postgresql+psycopg://control_plane:control_plane@localhost:5433/control_plane` | PostgreSQL connection string (psycopg 3 driver, async) |
+| `CP_LOG_LEVEL` | `INFO` | structured JSON log level |
+| `CP_BOOTSTRAP_TOKEN` | — | token for `POST /api/v1/bootstrap`; if not set, the endpoint is disabled (`403 bootstrap_disabled`) |
+| `CP_CORS_ORIGINS` | `[]` | allowed origins; an empty list disables CORS |
+| `CP_MAX_BODY_BYTES` | `1048576` (1 MiB) | maximum request body size; larger — `413 request_too_large` |
+| `CP_KNOWLEDGE_SNAPSHOT_MAX_BODY_BYTES` | `8388608` (8 MiB) | body limit only for `POST /api/v1/knowledge/snapshots` |
+| `CP_KNOWLEDGE_PACK_ADMINS` | `[]` | principal ids (Control Plane or IAM) allowed to call `POST /api/v1/knowledge/packs`; an empty list closes the endpoint |
 
-## Аренды: сессии и claims
+## Leases: sessions and claims
 
-TTL, переданный клиентом, зажимается в границы `[MIN, MAX]`. Если клиент TTL не
-передал, берётся значение по умолчанию.
+A TTL passed by the client is clamped to the `[MIN, MAX]` bounds. If the client
+did not pass a TTL, the default is used.
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_SESSION_TTL_SECONDS` | `300` | TTL сессии по умолчанию |
-| `CP_SESSION_TTL_MIN_SECONDS` | `10` | нижняя граница |
-| `CP_SESSION_TTL_MAX_SECONDS` | `3600` | верхняя граница |
-| `CP_CLAIM_TTL_SECONDS` | `300` | TTL claim по умолчанию |
-| `CP_CLAIM_TTL_MIN_SECONDS` | `10` | нижняя граница; ею же ограничен lease вызова скилла |
-| `CP_CLAIM_TTL_MAX_SECONDS` | `3600` | верхняя граница |
+| `CP_SESSION_TTL_SECONDS` | `300` | default session TTL |
+| `CP_SESSION_TTL_MIN_SECONDS` | `10` | lower bound |
+| `CP_SESSION_TTL_MAX_SECONDS` | `3600` | upper bound |
+| `CP_CLAIM_TTL_SECONDS` | `300` | default claim TTL |
+| `CP_CLAIM_TTL_MIN_SECONDS` | `10` | lower bound; it also limits the skill invocation lease |
+| `CP_CLAIM_TTL_MAX_SECONDS` | `3600` | upper bound |
 
-## Идемпотентность
+## Idempotency
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_IDEMPOTENCY_TTL_SECONDS` | `86400` | сколько хранится ответ по `Idempotency-Key` |
-| `CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS` | `10.0` | сколько параллельный дубль ждёт первый запрос, потом `409 idempotency_in_flight` |
-| `CP_IDEMPOTENCY_PENDING_TTL_SECONDS` | `60` | сколько живёт запись без сохранённого ответа (исполнитель упал) |
+| `CP_IDEMPOTENCY_TTL_SECONDS` | `86400` | how long a response is stored by `Idempotency-Key` |
+| `CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS` | `10.0` | how long a parallel duplicate waits for the first request, then `409 idempotency_in_flight` |
+| `CP_IDEMPOTENCY_PENDING_TTL_SECONDS` | `60` | how long a record without a stored response lives (the executor crashed) |
 
 ## Realtime, worker, outbox
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_WS_POLL_INTERVAL_SECONDS` | `5.0` | период опроса журнала WebSocket-ом, если NOTIFY потерян |
-| `CP_WORKER_POLL_INTERVAL_SECONDS` | `1.0` | период цикла worker'а |
-| `CP_OUTBOX_BATCH_SIZE` | `50` | записей outbox за цикл |
-| `CP_OUTBOX_MAX_ATTEMPTS` | `8` | попыток доставки до dead-letter |
-| `CP_OUTBOX_LOCK_TIMEOUT_SECONDS` | `60` | блокировка записи outbox |
-| `CP_OUTBOX_BACKOFF_BASE_SECONDS` | `2.0` | база экспоненциального backoff |
-| `CP_OUTBOX_BACKOFF_MAX_SECONDS` | `300.0` | потолок backoff |
-| `CP_APPROVAL_OUTCOME_DEFER_SECONDS` | `15.0` | через сколько повторить исход approval, если цель занята живым claim |
-| `CP_API_KEY_LAST_USED_REFRESH_SECONDS` | `60` | не чаще этого обновлять `last_used_at` legacy-ключа |
-| `CP_JOURNAL_RETENTION_MIN_AGE_SECONDS` | `2592000` (30 суток) | минимальный возраст события для архивации и очистки журнала |
+| `CP_WS_POLL_INTERVAL_SECONDS` | `5.0` | the WebSocket's event log polling period if NOTIFY is lost |
+| `CP_WORKER_POLL_INTERVAL_SECONDS` | `1.0` | worker loop period |
+| `CP_OUTBOX_BATCH_SIZE` | `50` | outbox records per cycle |
+| `CP_OUTBOX_MAX_ATTEMPTS` | `8` | delivery attempts before dead-letter |
+| `CP_OUTBOX_LOCK_TIMEOUT_SECONDS` | `60` | outbox record lock |
+| `CP_OUTBOX_BACKOFF_BASE_SECONDS` | `2.0` | exponential backoff base |
+| `CP_OUTBOX_BACKOFF_MAX_SECONDS` | `300.0` | backoff ceiling |
+| `CP_APPROVAL_OUTCOME_DEFER_SECONDS` | `15.0` | after how long to retry an approval outcome if the target is held by a live claim |
+| `CP_API_KEY_LAST_USED_REFRESH_SECONDS` | `60` | update a legacy key's `last_used_at` no more often than this |
+| `CP_JOURNAL_RETENTION_MIN_AGE_SECONDS` | `2592000` (30 days) | minimum event age for event log archiving and pruning |
 
-Worker доставляет outbox, пожинает просроченные сессии, claims и lease
-вызовов скиллов, чистит записи идемпотентности и исполняет исходы approvals.
-Для корректности он не обязателен: аренды пожинаются и лениво, самими
-командами. Но без него не будут исполняться исходы approvals и доставляться
-outbox.
+The worker delivers the outbox, reaps expired sessions, claims, and skill
+invocation leases, cleans up idempotency records, and executes approval
+outcomes. It is not required for correctness: leases are also reaped lazily by
+the commands themselves. But without it, approval outcomes are not executed
+and the outbox is not delivered.
 
-## Память (context provider и context-adapter)
+## Memory (context provider and context-adapter)
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_CONTEXT_PROVIDER` | `none` | `none` — без памяти (Control Plane автономен, readiness от памяти не зависит); `http` — memory-service |
-| `CP_CONTEXT_BASE_URL` | `http://localhost:8077` | адрес memory-service |
-| `CP_CONTEXT_API_KEY` | — | статический Bearer к memory-service |
-| `CP_CONTEXT_AUTH` | `auto` | `api_key`, `iam` или `auto` (`iam`, если задан service account, иначе `api_key`) |
-| `CP_CONTEXT_IAM_AUDIENCE` | `memory-service` | audience токена service account |
-| `CP_CONTEXT_IAM_SCOPES` | `["memory:read","memory:write","memory:tenants","memory:service"]` | scopes токена; при `CP_AUTHZ_MODE=policy` добавляется `memory:on-behalf` |
-| `CP_CONTEXT_NAMESPACE_PREFIX` | `tenant:` | namespace tenant'а = префикс + `<tenant-id>` |
-| `CP_CONTEXT_TIMEOUT_SECONDS` | `3.0` | таймаут чтения `/context` (синхронный путь харнесса) |
-| `CP_CONTEXT_INGEST_TIMEOUT_SECONDS` | `15.0` | таймаут пакетной записи адаптера |
-| `CP_CONTEXT_RECONCILE_TIMEOUT_SECONDS` | `60.0` | таймаут `/knowledge/*` |
-| `CP_CONTEXT_BATCH_SIZE` | `100` | размер пакета событий |
-| `CP_CONTEXT_TENANT_BATCH_SIZE` | `100` | событий одного tenant'а за цикл |
-| `CP_CONTEXT_MAX_TENANTS_PER_CYCLE` | `20` | tenant'ов за цикл (справедливость) |
-| `CP_CONTEXT_POLL_INTERVAL_SECONDS` | `1.0` | период опроса журнала адаптером |
-| `CP_CONTEXT_RETRY_BACKOFF_BASE_SECONDS` | `1.0` | база backoff при сбое доставки |
-| `CP_CONTEXT_RETRY_BACKOFF_MAX_SECONDS` | `60.0` | потолок backoff |
-| `CP_CONTEXT_MAX_TOKENS_LIMIT` | `16000` | потолок бюджета пакета памяти |
-| `CP_CONTEXT_DEFAULT_MAX_TOKENS` | `8000` | бюджет по умолчанию |
+| `CP_CONTEXT_PROVIDER` | `none` | `none` — no memory (the Control Plane is autonomous, readiness does not depend on memory); `http` — memory-service |
+| `CP_CONTEXT_BASE_URL` | `http://localhost:8077` | memory-service address |
+| `CP_CONTEXT_API_KEY` | — | static Bearer for memory-service |
+| `CP_CONTEXT_AUTH` | `auto` | `api_key`, `iam`, or `auto` (`iam` if a service account is set, otherwise `api_key`) |
+| `CP_CONTEXT_IAM_AUDIENCE` | `memory-service` | the service account token audience |
+| `CP_CONTEXT_IAM_SCOPES` | `["memory:read","memory:write","memory:tenants","memory:service"]` | token scopes; with `CP_AUTHZ_MODE=policy`, `memory:on-behalf` is added |
+| `CP_CONTEXT_NAMESPACE_PREFIX` | `tenant:` | tenant namespace = prefix + `<tenant-id>` |
+| `CP_CONTEXT_TIMEOUT_SECONDS` | `3.0` | `/context` read timeout (the harness's synchronous path) |
+| `CP_CONTEXT_INGEST_TIMEOUT_SECONDS` | `15.0` | timeout of the adapter's batch write |
+| `CP_CONTEXT_RECONCILE_TIMEOUT_SECONDS` | `60.0` | `/knowledge/*` timeout |
+| `CP_CONTEXT_BATCH_SIZE` | `100` | event batch size |
+| `CP_CONTEXT_TENANT_BATCH_SIZE` | `100` | events of one tenant per cycle |
+| `CP_CONTEXT_MAX_TENANTS_PER_CYCLE` | `20` | tenants per cycle (fairness) |
+| `CP_CONTEXT_POLL_INTERVAL_SECONDS` | `1.0` | the adapter's event log polling period |
+| `CP_CONTEXT_RETRY_BACKOFF_BASE_SECONDS` | `1.0` | backoff base on a delivery failure |
+| `CP_CONTEXT_RETRY_BACKOFF_MAX_SECONDS` | `60.0` | backoff ceiling |
+| `CP_CONTEXT_MAX_TOKENS_LIMIT` | `16000` | memory pack budget ceiling |
+| `CP_CONTEXT_DEFAULT_MAX_TOKENS` | `8000` | default budget |
 
-Подробности — в [Контекст задачи и память](context.md).
+Details are in [Task context and memory](context.md).
 
-## Хранилище содержимого артефактов { #content-store }
+## Artifact content storage { #content-store }
 
-Байты артефактов (`PUT /artifact-contents`) ядро хранит в любом
-S3-совместимом хранилище. Без `CP_S3_ENDPOINT_URL` хранилище выключено:
-маршруты содержимого отвечают `503 content_store_unavailable`, а записи
-артефактов (ссылки и JSON) работают как обычно. См.
-[Артефакты](artifacts.md#content) и [Хранилище объектов](../operations/object-storage.md).
+The core stores artifact bytes (`PUT /artifact-contents`) in any S3-compatible
+storage. Without `CP_S3_ENDPOINT_URL` the storage is disabled: the content
+routes respond `503 content_store_unavailable`, while artifact records
+(references and JSON) work as usual. See
+[Artifacts](artifacts.md#content) and [Object storage](../operations/object-storage.md).
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_S3_ENDPOINT_URL` | — | адрес S3-совместимого сервиса; не задан — хранилище выключено |
-| `CP_S3_BUCKET` | `artifacts` | бакет содержимого; API при старте создаёт его, если его нет и хватает прав |
-| `CP_S3_REGION` | `us-east-1` | регион подписи запросов |
-| `CP_S3_ACCESS_KEY_ID` | — | ключ доступа пользователя ядра |
-| `CP_S3_SECRET_ACCESS_KEY` | — | секрет пользователя ядра |
-| `CP_S3_CONNECT_TIMEOUT_SECONDS` | `5.0` | таймаут соединения с хранилищем |
-| `CP_S3_READ_TIMEOUT_SECONDS` | `60.0` | таймаут чтения |
-| `CP_ARTIFACT_MAX_BYTES` | `104857600` (100 МиБ) | предел одного файла; для `PUT /artifact-contents` заменяет `CP_MAX_BODY_BYTES`, больше — `413 request_too_large`. Тип артефакта может только сузить его (`maxBytes`) |
-| `CP_ARTIFACT_UPLOAD_TTL_SECONDS` | `86400` (24 ч) | сколько загрузка ждёт артефакта, который на неё сошлётся; потом worker её удаляет |
+| `CP_S3_ENDPOINT_URL` | — | address of the S3-compatible service; if not set, the storage is disabled |
+| `CP_S3_BUCKET` | `artifacts` | content bucket; the API creates it at startup if it does not exist and permissions allow |
+| `CP_S3_REGION` | `us-east-1` | request signing region |
+| `CP_S3_ACCESS_KEY_ID` | — | access key of the core's user |
+| `CP_S3_SECRET_ACCESS_KEY` | — | secret of the core's user |
+| `CP_S3_CONNECT_TIMEOUT_SECONDS` | `5.0` | storage connection timeout |
+| `CP_S3_READ_TIMEOUT_SECONDS` | `60.0` | read timeout |
+| `CP_ARTIFACT_MAX_BYTES` | `104857600` (100 MiB) | single-file limit; for `PUT /artifact-contents` it replaces `CP_MAX_BODY_BYTES`, larger — `413 request_too_large`. An artifact type can only narrow it (`maxBytes`) |
+| `CP_ARTIFACT_UPLOAD_TTL_SECONDS` | `86400` (24 h) | how long an upload waits for an artifact to reference it; after that the worker deletes it |
 
-Хранилище читают API и worker: worker удаляет загрузки без ссылок после
-срока и объекты, на которые больше никто не ссылается. Недоступное при
-старте хранилище API не останавливает: в журнал пишется предупреждение, а
-бакет проверяется повторно при первом обращении.
+The API and the worker read the storage: the worker deletes unreferenced
+uploads after the deadline and objects that nothing references anymore. A
+storage that is unavailable at startup does not stop the API: a warning is
+written to the log, and the bucket is checked again on first access.
 
 ## IAM
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_IAM_ENABLED` | `false` | принимать IAM access tokens |
-| `CP_IAM_ISSUER` | `""` | ожидаемый issuer; **обязателен** при включённом IAM |
-| `CP_IAM_JWKS_URL` | `""` | адрес JWKS; **обязателен** при включённом IAM |
-| `CP_IAM_AUDIENCE` | `control-plane` | ожидаемый audience |
-| `CP_IAM_LEEWAY_SECONDS` | `5.0` | допуск расхождения часов при проверке времени жизни токена |
-| `CP_IAM_JWKS_REFRESH_AFTER_SECONDS` | `300.0` | через сколько обновлять JWKS |
-| `CP_IAM_JWKS_STALE_AFTER_SECONDS` | `3600.0` | сколько можно жить на старом JWKS, если IAM недоступен |
-| `CP_IAM_JWKS_MIN_REFRESH_INTERVAL_SECONDS` | `10.0` | минимальный интервал между внеплановыми обновлениями JWKS |
-| `CP_IAM_REQUEST_TIMEOUT_SECONDS` | `3.0` | таймаут запросов к IAM |
-| `CP_IAM_BINDING_CACHE_TTL_SECONDS` | `30.0` | кэш проекции `iam_principal_bindings` |
-| `CP_IAM_BINDING_STALE_AFTER_SECONDS` | `120.0` | после этого срока без успешного перечитывания вход закрывается |
-| `CP_LEGACY_API_KEYS_ENABLED` | `true` | принимать legacy-ключи `cp_…`; `false` — только IAM |
-| `CP_BREAK_GLASS_ENABLED` | `true` | аварийные ключи `cp_bg…` из shell хоста (CP-ADR-0065): выпуск и приём, в том числе при закрытом окне legacy-ключей |
-| `CP_BREAK_GLASS_MAX_TTL_SECONDS` | `14400` | предельный срок жизни аварийного ключа |
-| `CP_IAM_BASE_URL` | `http://localhost:8010` | адрес IAM для service account ядра |
-| `CP_IAM_CLIENT_ID` | `""` | client id service account ядра |
-| `CP_IAM_CLIENT_SECRET` | — | секрет service account ядра |
-| `CP_IAM_CLIENT_SCOPES` | `["entitlement:check-on-behalf"]` | scopes токена ядра для entitlement |
+| `CP_IAM_ENABLED` | `false` | accept IAM access tokens |
+| `CP_IAM_ISSUER` | `""` | the expected issuer; **required** when IAM is enabled |
+| `CP_IAM_JWKS_URL` | `""` | JWKS address; **required** when IAM is enabled |
+| `CP_IAM_AUDIENCE` | `control-plane` | the expected audience |
+| `CP_IAM_LEEWAY_SECONDS` | `5.0` | allowed clock skew when checking token lifetime |
+| `CP_IAM_JWKS_REFRESH_AFTER_SECONDS` | `300.0` | after how long to refresh the JWKS |
+| `CP_IAM_JWKS_STALE_AFTER_SECONDS` | `3600.0` | how long you can live on a stale JWKS if IAM is unavailable |
+| `CP_IAM_JWKS_MIN_REFRESH_INTERVAL_SECONDS` | `10.0` | minimum interval between unscheduled JWKS refreshes |
+| `CP_IAM_REQUEST_TIMEOUT_SECONDS` | `3.0` | timeout of requests to IAM |
+| `CP_IAM_BINDING_CACHE_TTL_SECONDS` | `30.0` | cache of the `iam_principal_bindings` projection |
+| `CP_IAM_BINDING_STALE_AFTER_SECONDS` | `120.0` | after this time without a successful re-read, sign-in is closed |
+| `CP_LEGACY_API_KEYS_ENABLED` | `true` | accept legacy `cp_…` keys; `false` — IAM only |
+| `CP_BREAK_GLASS_ENABLED` | `true` | emergency `cp_bg…` keys from the host shell (CP-ADR-0065): issuance and acceptance, including when the legacy key window is closed |
+| `CP_BREAK_GLASS_MAX_TTL_SECONDS` | `14400` | maximum lifetime of an emergency key |
+| `CP_IAM_BASE_URL` | `http://localhost:8010` | IAM address for the core's service account |
+| `CP_IAM_CLIENT_ID` | `""` | client id of the core's service account |
+| `CP_IAM_CLIENT_SECRET` | — | secret of the core's service account |
+| `CP_IAM_CLIENT_SCOPES` | `["entitlement:check-on-behalf"]` | scopes of the core's token for entitlement |
 
-Service account ядра нужен для памяти в режиме `iam`, для entitlement и для
-PDP. Bootstrap создаёт его и пишет `CP_IAM_CLIENT_ID` и `CP_IAM_CLIENT_SECRET`
-в `secrets/control-plane-iam.env`. См. [Service accounts](../iam/service-accounts.md).
+The core's service account is needed for memory in `iam` mode, for
+entitlement, and for the PDP. Bootstrap creates it and writes
+`CP_IAM_CLIENT_ID` and `CP_IAM_CLIENT_SECRET` to
+`secrets/control-plane-iam.env`. See [Service accounts](../iam/service-accounts.md).
 
 ## Entitlement
 
-!!! note "Точка расширения"
-    Проверка лицензии выключена по умолчанию: сервис лицензий в поставку не
-    входит. Переменные ниже нужны, только если он подключён.
+!!! note "Extension point"
+    The license check is disabled by default: the license service is not part
+    of the delivery. The variables below are needed only if it is connected.
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_ENTITLEMENT_ENABLED` | `false` | проверять лицензии |
-| `CP_ENTITLEMENT_BASE_URL` | `http://localhost:8020` | адрес сервиса лицензий |
-| `CP_ENTITLEMENT_PRODUCT` | `control-plane` | продукт |
-| `CP_ENTITLEMENT_AUDIENCE` | audience сервиса лицензий | audience токена ядра |
-| `CP_ENTITLEMENT_DEFAULT_FEATURE` | `api` | feature для путей, которые не разбираются |
-| `CP_ENTITLEMENT_CACHE_TTL_SECONDS` | `30.0` | кэш решений |
-| `CP_ENTITLEMENT_DEGRADED_MAX_AGE_SECONDS` | `300.0` | сколько можно жить на старом решении при недоступности |
-| `CP_ENTITLEMENT_TIMEOUT_SECONDS` | `3.0` | таймаут |
+| `CP_ENTITLEMENT_ENABLED` | `false` | check licenses |
+| `CP_ENTITLEMENT_BASE_URL` | `http://localhost:8020` | license service address |
+| `CP_ENTITLEMENT_PRODUCT` | `control-plane` | product |
+| `CP_ENTITLEMENT_AUDIENCE` | license service audience | the audience of the core's token |
+| `CP_ENTITLEMENT_DEFAULT_FEATURE` | `api` | feature for paths that cannot be parsed |
+| `CP_ENTITLEMENT_CACHE_TTL_SECONDS` | `30.0` | decision cache |
+| `CP_ENTITLEMENT_DEGRADED_MAX_AGE_SECONDS` | `300.0` | how long you can live on a stale decision when the service is unavailable |
+| `CP_ENTITLEMENT_TIMEOUT_SECONDS` | `3.0` | timeout |
 
-## Доменная авторизация (PDP)
+## Domain authorization (PDP)
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_AUTHZ_MODE` | `local` | `local`, `shadow` или `policy`, см. [Авторизация и права](authorization.md#authz-mode) |
-| `CP_POLICY_BASE_URL` | `http://localhost:8030` | адрес внешнего PDP |
-| `CP_POLICY_AUDIENCE` | audience PDP | audience токена ядра |
-| `CP_POLICY_SCOPES` | `["policy:check","policy:check-on-behalf"]` | scopes токена ядра |
-| `CP_POLICY_TIMEOUT_SECONDS` | `3.0` | таймаут |
-| `CP_POLICY_CACHE_TTL_SECONDS` | `5.0` | кэш решений |
+| `CP_AUTHZ_MODE` | `local` | `local`, `shadow`, or `policy`, see [Authorization and permissions](authorization.md#authz-mode) |
+| `CP_POLICY_BASE_URL` | `http://localhost:8030` | external PDP address |
+| `CP_POLICY_AUDIENCE` | PDP audience | the audience of the core's token |
+| `CP_POLICY_SCOPES` | `["policy:check","policy:check-on-behalf"]` | scopes of the core's token |
+| `CP_POLICY_TIMEOUT_SECONDS` | `3.0` | timeout |
+| `CP_POLICY_CACHE_TTL_SECONDS` | `5.0` | decision cache |
 
-!!! note "Точка расширения"
-    `shadow` и `policy` требуют внешнего PDP, который в поставку не входит.
+!!! note "Extension point"
+    `shadow` and `policy` require an external PDP that is not part of the
+    delivery.
 
-## Переменные уровня `compose.yml`
+## `compose.yml`-level variables
 
-Этих переменных Control Plane сам не читает. Их подставляет `compose.yml` из
-`.env` суперпроекта.
+The Control Plane itself does not read these variables. `compose.yml`
+substitutes them from the superproject's `.env`.
 
-| Переменная `.env` | По умолчанию | Куда уходит |
+| `.env` variable | Default | Where it goes |
 |---|---|---|
-| `CP_POSTGRES_PASSWORD` | обязательна | пароль `control-plane-db`; собирается в `CP_DATABASE_URL` |
-| `CP_BOOTSTRAP_TOKEN` | обязательна | `CP_BOOTSTRAP_TOKEN` сервиса API |
-| `MEMORY_API_KEY` | обязательна | `CP_CONTEXT_API_KEY` всех трёх процессов |
+| `CP_POSTGRES_PASSWORD` | required | `control-plane-db` password; assembled into `CP_DATABASE_URL` |
+| `CP_BOOTSTRAP_TOKEN` | required | the API service's `CP_BOOTSTRAP_TOKEN` |
+| `MEMORY_API_KEY` | required | `CP_CONTEXT_API_KEY` of all three processes |
 | `TAIMEN_PUBLIC_URL` | — | `CP_IAM_ISSUER=${TAIMEN_PUBLIC_URL}/iam` |
 | `LOG_LEVEL` | `INFO` | `CP_LOG_LEVEL` |
-| `CP_CONTEXT_AUTH` | `auto` | как есть |
-| `CP_AUTHZ_MODE` | `local` | как есть |
-| `CP_LEGACY_API_KEYS_ENABLED` | `false` | как есть |
-| `CP_ENTITLEMENT_ENABLED` | `false` | как есть |
-| `CP_CORS_ORIGINS` | `[]` | как есть |
-| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | обязательны | ключи пользователя ядра в хранилище; для MinIO контура их же заводит `minio-bootstrap` |
-| `CP_S3_BUCKET` | `artifacts` | как есть; бакет создаёт `minio-bootstrap` |
-| `CP_S3_ENDPOINT_URL` | `http://minio:9000` | как есть; внешний S3 — адрес провайдера |
-| `CP_S3_REGION` | `us-east-1` | как есть |
-| `CP_HOST_PORT` | `18000` | публикация API на `127.0.0.1:<порт>` хоста |
-| `CP_MEM_LIMIT` | `512m` | лимит памяти API |
-| `CP_WORKER_MEM_LIMIT` | `256m` | лимит памяти worker и context-adapter |
-| `CP_BUILD_CONTEXT` | `.` | контекст сборки образа (корень суперпроекта: SDK подключён соседним каталогом) |
+| `CP_CONTEXT_AUTH` | `auto` | as is |
+| `CP_AUTHZ_MODE` | `local` | as is |
+| `CP_LEGACY_API_KEYS_ENABLED` | `false` | as is |
+| `CP_ENTITLEMENT_ENABLED` | `false` | as is |
+| `CP_CORS_ORIGINS` | `[]` | as is |
+| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | required | keys of the core's user in the storage; for the deployment's MinIO, `minio-bootstrap` creates them too |
+| `CP_S3_BUCKET` | `artifacts` | as is; `minio-bootstrap` creates the bucket |
+| `CP_S3_ENDPOINT_URL` | `http://minio:9000` | as is; for external S3 — the provider's address |
+| `CP_S3_REGION` | `us-east-1` | as is |
+| `CP_HOST_PORT` | `18000` | publishes the API on the host's `127.0.0.1:<port>` |
+| `CP_MEM_LIMIT` | `512m` | API memory limit |
+| `CP_WORKER_MEM_LIMIT` | `256m` | memory limit of the worker and context-adapter |
+| `CP_BUILD_CONTEXT` | `.` | image build context (the superproject root: the SDK is included as a neighboring directory) |
 
-Значения, которые `compose.yml` фиксирует для процессов Control Plane:
+Values that `compose.yml` fixes for the Control Plane processes:
 
 ```yaml
 CP_CONTEXT_PROVIDER: http
 CP_CONTEXT_BASE_URL: http://memory-service:8077
 CP_IAM_BASE_URL: http://iam-service:8010
-CP_S3_ENDPOINT_URL: http://minio:9000        # если не переопределён в .env
-CP_S3_BUCKET: artifacts                      # если не переопределён в .env
-# только control-plane-api:
+CP_S3_ENDPOINT_URL: http://minio:9000        # unless overridden in .env
+CP_S3_BUCKET: artifacts                      # unless overridden in .env
+# control-plane-api only:
 CP_IAM_ENABLED: "true"
 CP_IAM_JWKS_URL: http://iam-service:8010/.well-known/jwks.json
 CP_IAM_AUDIENCE: control-plane
 ```
 
-Service account ядра подключается необязательным `env_file`
-`./secrets/control-plane-iam.env`: первый `up` проходит и без него. После
-bootstrap перезапустите `control-plane-api`, `control-plane-worker` и
-`context-adapter`, чтобы они подхватили файл. Полный список переменных
-платформы — в [Переменные окружения](../reference/environment.md) и
-[Конфигурация .env](../getting-started/configuration.md).
+The core's service account is connected through the optional `env_file`
+`./secrets/control-plane-iam.env`: the first `up` succeeds without it. After
+bootstrap, restart `control-plane-api`, `control-plane-worker`, and
+`context-adapter` so they pick up the file. The full list of platform variables
+is in [Environment variables](../reference/environment.md) and
+[.env configuration](../getting-started/configuration.md).
 
-## Типовые профили
+## Typical profiles
 
-=== "Поставка (IAM-only)"
+=== "Delivery (IAM-only)"
 
     ```dotenv
     CP_IAM_ENABLED=true
@@ -255,7 +260,7 @@ bootstrap перезапустите `control-plane-api`, `control-plane-worker`
     CP_AUTHZ_MODE=local
     ```
 
-=== "Локальная разработка без памяти"
+=== "Local development without memory"
 
     ```dotenv
     CP_DATABASE_URL=postgresql+psycopg://control_plane:control_plane@localhost:5433/control_plane
@@ -265,64 +270,64 @@ bootstrap перезапустите `control-plane-api`, `control-plane-worker`
     CP_LEGACY_API_KEYS_ENABLED=true
     ```
 
-=== "Проверка политики (shadow)"
+=== "Policy verification (shadow)"
 
     ```dotenv
     CP_AUTHZ_MODE=shadow
-    CP_POLICY_BASE_URL=http://<адрес PDP>:8030
+    CP_POLICY_BASE_URL=http://<PDP address>:8030
     CP_IAM_CLIENT_ID=<client-id>
     CP_IAM_CLIENT_SECRET=<secret>
     ```
 
-## Клиентские переменные `CONTROL_PLANE_*`
+## Client variables `CONTROL_PLANE_*`
 
-Эти переменные читают CLI `control-plane`, MCP-сервер `control-plane-mcp` и
-SDK `control_plane_client`, а не сервер. Подробности — в [CLI и
-MCP-сервер](cli-and-mcp.md#credentials).
+These variables are read by the `control-plane` CLI, the `control-plane-mcp`
+MCP server, and the `control_plane_client` SDK, not by the server. Details are
+in [CLI and MCP server](cli-and-mcp.md#credentials).
 
-| Переменная | Кто читает | Смысл |
+| Variable | Who reads it | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_SERVER` | CLI, MCP | адрес Control Plane |
-| `CONTROL_PLANE_API_KEY` | SDK | legacy-ключ (явный override) |
-| `CONTROL_PLANE_NO_KEYCHAIN` | SDK | `1` — не использовать macOS Keychain для legacy-ключа |
-| `CONTROL_PLANE_IAM_URL` | SDK | базовый URL IAM; включает IAM-identity |
-| `CONTROL_PLANE_IAM_TENANT` | SDK | tenant в IAM |
-| `CONTROL_PLANE_IAM_AUDIENCE` | SDK | audience обмена, по умолчанию `control-plane` |
-| `CONTROL_PLANE_IAM_SCOPES` | SDK | scopes обмена (через пробел или запятую) |
-| `CONTROL_PLANE_HARNESS_TYPE` | MCP | `harness.type` сессии, по умолчанию `mcp-client` |
-| `CONTROL_PLANE_HARNESS_VERSION` | MCP | `harness.version`, по умолчанию версия пакета |
-| `CONTROL_PLANE_HARNESS_CLIENT_NAME` | MCP | `clientName`, по умолчанию `control-plane-mcp` |
-| `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` | адаптеры исполнителей | бюджет раздела памяти в prompt, по умолчанию `12000` |
+| `CONTROL_PLANE_SERVER` | CLI, MCP | Control Plane address |
+| `CONTROL_PLANE_API_KEY` | SDK | legacy key (explicit override) |
+| `CONTROL_PLANE_NO_KEYCHAIN` | SDK | `1` — do not use the macOS Keychain for the legacy key |
+| `CONTROL_PLANE_IAM_URL` | SDK | IAM base URL; enables the IAM identity |
+| `CONTROL_PLANE_IAM_TENANT` | SDK | the tenant in IAM |
+| `CONTROL_PLANE_IAM_AUDIENCE` | SDK | exchange audience, `control-plane` by default |
+| `CONTROL_PLANE_IAM_SCOPES` | SDK | exchange scopes (separated by spaces or commas) |
+| `CONTROL_PLANE_HARNESS_TYPE` | MCP | the session's `harness.type`, `mcp-client` by default |
+| `CONTROL_PLANE_HARNESS_VERSION` | MCP | `harness.version`, the package version by default |
+| `CONTROL_PLANE_HARNESS_CLIENT_NAME` | MCP | `clientName`, `control-plane-mcp` by default |
+| `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` | executor adapters | memory section budget in the prompt, `12000` by default |
 
-Рядом используются переменные IAM-хранилища: `IAM_PRINCIPAL`,
+The IAM store variables are used alongside: `IAM_PRINCIPAL`,
 `IAM_CREDENTIAL_MODE`, `IAM_PLATFORM_ACCESS_TOKEN`, `IAM_NO_KEYCHAIN`.
 
-Переменные демона исполнителя (`CONTROL_PLANE_AGENT_*`,
+The executor daemon variables (`CONTROL_PLANE_AGENT_*`,
 `CONTROL_PLANE_CLAUDE_*`, `CONTROL_PLANE_CODEX_*`, `CONTROL_PLANE_SKILLS_*`,
-`CONTROL_PLANE_TRACE_*`) описаны в [Конфигурации runner](../runner/configuration.md).
+`CONTROL_PLANE_TRACE_*`) are described in [Executor configuration](../runner/configuration.md).
 
-## Проверка конфигурации
+## Verifying the configuration
 
 ```bash
-# процесс поднялся, миграции применены
+# the process is up, migrations are applied
 curl -s http://127.0.0.1:18000/health/ready
 # {"status": "ready", "revision": "<alembic-head>"}
 
-# IAM-вход работает и права корректны
+# IAM sign-in works and permissions are correct
 control-plane whoami
 
-# память подключена
+# memory is connected
 curl -s -X POST http://127.0.0.1:18000/api/v1/context \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"query": "ping"}' | jq '.memoryStatus, .warnings'
 ```
 
-## См. также
+## See also
 
-- [Авторизация и права](authorization.md)
-- [Контекст задачи и память](context.md)
+- [Authorization and permissions](authorization.md)
+- [Task context and memory](context.md)
 - [API](api.md)
-- [Переменные окружения](../reference/environment.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
-- [Секреты и ротация](../operations/secrets.md)
-- [Хранилище объектов (MinIO)](../operations/object-storage.md)
+- [Environment variables](../reference/environment.md)
+- [Services and ports](../reference/services-and-ports.md)
+- [Secrets and rotation](../operations/secrets.md)
+- [Object storage (MinIO)](../operations/object-storage.md)

@@ -1,77 +1,77 @@
+
 # Telegram
 
-Канал `telegram` сервиса уведомлений: бот присылает уведомления в личный чат
-человека и в групповые чаты команды, а кнопками под сообщением человек
-принимает решения по approvals, не открывая рабочее место. Статья описывает
-привязку людей и групп, путь нажатия кнопки до решения в Control Plane,
-настройку бота оператором и типичные проблемы. Общее устройство сервиса — в
-статье [Уведомления](index.md).
+The `telegram` channel of the notification service: the bot sends notifications to a
+person's private chat and to the team's group chats, and with buttons under a message a
+person makes approval decisions without opening the workplace. The article describes linking
+people and groups, the path from a button press to a decision in Control Plane, bot setup by
+the operator, and common problems. The overall service design is in the
+[Notifications](index.md) article.
 
-## Как это устроено
+## How it works
 
-Три участника, у каждого своя ответственность:
+Three participants, each with its own responsibility:
 
-| Участник | Что делает |
+| Participant | What it does |
 |---|---|
-| **IAM** (`iam-service`) | Владеет привязкой «человек ↔ аккаунт Telegram» как внешней identity. Выдаёт одноразовые коды привязки и обменивает нажатие кнопки на короткий токен человека |
-| **notification-service** | Держит бота: принимает вебхук Telegram, подтверждает привязки в IAM (service account со scope `iam:channel-links`), рассылает сообщения, превращает нажатия в решения |
-| **Control Plane** | Принимает решение approval токеном человека и записывает в событие решения канал, через который оно пришло |
+| **IAM** (`iam-service`) | Owns the "person ↔ Telegram account" link as an external identity. Issues one-time link codes and exchanges a button press for a short-lived token of the person |
+| **notification-service** | Runs the bot: receives the Telegram webhook, confirms links in IAM (a service account with the `iam:channel-links` scope), sends messages, turns presses into decisions |
+| **Control Plane** | Accepts the approval decision with the person's token and records in the decision event the channel through which it came |
 
-Код привязки знают только человек и IAM: сервис уведомлений не может
-привязать к человеку чужой аккаунт. Решать через канал может только человек —
-привязка к агенту или service account отвергается. Обоснование — TAI-ADR-0050
-и CP-ADR-0070.
+Only the person and IAM know the link code: the notification service cannot link someone
+else's account to a person. Only a human can decide through the channel — linking to an
+agent or a service account is rejected. Rationale: TAI-ADR-0050 and CP-ADR-0070.
 
-!!! warning "Доверие к сервису уведомлений"
-    Подписи нажатия от имени пользователя у Telegram нет: утверждение «этот
-    аккаунт нажал кнопку» делает сервис уведомлений как владелец бота.
-    Компрометация сервиса позволяет решать approvals за привязанных людей —
-    но только по одному, в течение 60 секунд, конкретный approval, в пределах
-    прав человека, и каждое такое решение видно в audit IAM и в журнале ядра.
-    Держите токен бота и секрет вебхука как секреты уровня IAM.
+!!! warning "Trust in the notification service"
+    Telegram has no user signature on a press: the claim "this account pressed the button" is
+    made by the notification service as the bot owner. A compromised service can decide
+    approvals on behalf of linked people — but only one at a time, within 60 seconds, a
+    specific approval, within the person's permissions, and every such decision is visible in
+    the IAM audit and the core log. Treat the bot token and the webhook secret as IAM-level
+    secrets.
 
-## Настройка оператором
+## Operator setup
 
-### 1. Создать бота
+### 1. Create a bot
 
-Создайте бота у `@BotFather` в Telegram и сохраните токен и имя бота
-(`@username`). Если бот будет работать в группах в режиме приватности (по
-умолчанию), он видит только команды, адресованные ему, — именно такие команды
-выдаёт сервис (`/start@<бот> <код>`).
+Create a bot with `@BotFather` in Telegram and save the token and the bot name
+(`@username`). If the bot works in groups in privacy mode (the default), it sees only
+commands addressed to it — exactly the kind of commands the service issues
+(`/start@<bot> <code>`).
 
-### 2. Передать сервису токен и секрет вебхука
+### 2. Give the service the token and the webhook secret
 
-Файл `secrets/notification-telegram.env` подключается к контейнеру через
-`env_file` (`required: false`: без файла канала нет):
+The `secrets/notification-telegram.env` file is attached to the container through `env_file`
+(`required: false`: without the file there is no channel):
 
 ```bash
 cat > secrets/notification-telegram.env <<EOF
-NS_TELEGRAM_BOT_TOKEN=<токен от BotFather>
+NS_TELEGRAM_BOT_TOKEN=<token from BotFather>
 NS_TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)
-NS_TELEGRAM_BOT_USERNAME=<имя бота без @>
+NS_TELEGRAM_BOT_USERNAME=<bot name without @>
 EOF
 chmod 600 secrets/notification-telegram.env
 docker compose --profile notify up -d notification-service
 ```
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `NS_TELEGRAM_BOT_TOKEN` | пусто | Токен бота. Без него канала `telegram` нет, вебхук отвечает `404` |
-| `NS_TELEGRAM_WEBHOOK_SECRET` | пусто | Секрет вебхука. Без него вебхук отклоняет любой вызов (`401`) |
-| `NS_TELEGRAM_BOT_USERNAME` | пусто | Имя бота: команды и ссылки привязки групп |
-| `NS_TELEGRAM_API_URL` | `https://api.telegram.org` | Адрес Bot API |
-| `NS_TELEGRAM_TIMEOUT_SECONDS` | `10` | Таймаут вызова Bot API |
-| `NS_CHANNEL_GROUP_CODE_TTL_SECONDS` | `600` | Срок кода привязки группы |
-| `NS_IAM_CHANNEL_AUDIENCE`, `NS_IAM_CHANNEL_SCOPE` | `iam`, `iam:channel-links` | С каким audience и scope сервис ходит в IAM как адаптер канала |
+| `NS_TELEGRAM_BOT_TOKEN` | empty | Bot token. Without it there is no `telegram` channel, and the webhook returns `404` |
+| `NS_TELEGRAM_WEBHOOK_SECRET` | empty | Webhook secret. Without it the webhook rejects every call (`401`) |
+| `NS_TELEGRAM_BOT_USERNAME` | empty | Bot name: commands and group link URLs |
+| `NS_TELEGRAM_API_URL` | `https://api.telegram.org` | Bot API address |
+| `NS_TELEGRAM_TIMEOUT_SECONDS` | `10` | Bot API call timeout |
+| `NS_CHANNEL_GROUP_CODE_TTL_SECONDS` | `600` | Group link code lifetime |
+| `NS_IAM_CHANNEL_AUDIENCE`, `NS_IAM_CHANNEL_SCOPE` | `iam`, `iam:channel-links` | The audience and scope the service uses when calling IAM as a channel adapter |
 
-Токен бота входит только в URL запросов к Bot API и не попадает в ошибки и
-логи сервиса.
+The bot token appears only in the URLs of Bot API requests and does not end up in the
+service's errors or logs.
 
-### 3. Включить провайдер в IAM
+### 3. Enable the provider in IAM
 
-Канал как способ входа включается **для каждого tenant'а** отдельно
-bootstrap-эндпоинтом IAM. Административная поверхность IAM на периметре
-закрыта, поэтому вызов делается с хоста:
+The channel as a login method is enabled **for each tenant** separately with an IAM bootstrap
+endpoint. The IAM administrative surface is closed at the edge, so the call is made from the
+host:
 
 ```bash
 curl -s -X PUT "http://127.0.0.1:18010/api/v1/tenants/<tenant-id>/channel-providers/telegram" \
@@ -84,19 +84,19 @@ curl -s -X PUT "http://127.0.0.1:18010/api/v1/tenants/<tenant-id>/channel-provid
 {"channel": "telegram", "status": "active", "updatedAt": "2026-01-15T10:00:00Z"}
 ```
 
-`GET …/channel-providers` показывает состояние. `{"status": "disabled"}`
-сразу закрывает подтверждение новых привязок и обмен нажатий на токены;
-сами привязки остаются и снова работают после включения.
+`GET …/channel-providers` shows the state. `{"status": "disabled"}` immediately stops
+confirmation of new links and the exchange of presses for tokens; the links themselves remain
+and work again after re-enabling.
 
-Кроме провайдера нужно, чтобы в tenant'е были audience `iam` со scope
-`iam:channel-links` и scope `control-plane:decide` у audience
-`control-plane`. Оба регистрирует `deploy/bootstrap.py`.
+Besides the provider, the tenant needs the `iam` audience with the `iam:channel-links` scope
+and the `control-plane:decide` scope on the `control-plane` audience. Both are registered by
+`deploy/bootstrap.py`.
 
-### 4. Зарегистрировать вебхук
+### 4. Register the webhook
 
-Вебхук — `POST /channels/telegram/webhook` сервиса, публично через
-периметр `https://platform.example.com/notify/channels/telegram/webhook`.
-Зарегистрируйте его в Bot API с тем же секретом:
+The webhook is the service's `POST /channels/telegram/webhook`, publicly available through
+the edge as `https://platform.example.com/notify/channels/telegram/webhook`. Register it in
+the Bot API with the same secret:
 
 ```bash
 source secrets/notification-telegram.env
@@ -108,65 +108,61 @@ curl -s "https://api.telegram.org/bot$NS_TELEGRAM_BOT_TOKEN/setWebhook" \
 curl -s "https://api.telegram.org/bot$NS_TELEGRAM_BOT_TOKEN/getWebhookInfo"
 ```
 
-Telegram присылает секрет в заголовке `X-Telegram-Bot-Api-Secret-Token`;
-сервис сравнивает его с `NS_TELEGRAM_WEBHOOK_SECRET` за постоянное время. Это
-единственное доказательство, что запрос пришёл от Telegram, поэтому маршрут
-публичный, но без секрета бесполезен.
+Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header; the service
+compares it with `NS_TELEGRAM_WEBHOOK_SECRET` in constant time. This is the only proof that
+the request came from Telegram, so the route is public but useless without the secret.
 
-Сервис обрабатывает три вида обновлений: `message` (команды), `callback_query`
-(нажатия кнопок) и `my_chat_member` (бота заблокировали или удалили из
-группы). Остальные игнорируются. На любое аутентичное обновление вебхук
-отвечает `200`, даже если обработка упала: иначе Telegram присылал бы то же
-обновление снова и снова. Человек, чьё нажатие не сработало, просто нажимает
-ещё раз.
+The service processes three kinds of updates: `message` (commands), `callback_query` (button
+presses), and `my_chat_member` (the bot was blocked or removed from a group). The rest are
+ignored. The webhook answers `200` to any authentic update, even if processing failed:
+otherwise Telegram would send the same update again and again. A person whose press did not
+work simply presses again.
 
-| Ответ вебхука | Причина |
+| Webhook response | Reason |
 |---|---|
-| `200 {"ok": true}` | Обновление принято |
-| `401 invalid_token` | Нет заголовка секрета, он неверный, или секрет не задан |
-| `404 not_found` | Токен бота не задан — канал не настроен |
-| `400 bad_request` | Тело не JSON-объект |
+| `200 {"ok": true}` | The update is accepted |
+| `401 invalid_token` | No secret header, the secret is wrong, or no secret is set |
+| `404 not_found` | The bot token is not set — the channel is not configured |
+| `400 bad_request` | The body is not a JSON object |
 
-### 5. Проверить
+### 5. Verify
 
-1. Привяжите свой аккаунт (следующий раздел) и получите ответ бота «Готово:
-   Telegram привязан».
-2. В настройках `GET /api/v1/me/notification-preferences` появится адрес
-   канала `telegram`.
-3. Запросите approval на себя — в личный чат придёт сообщение с кнопками
-   «Одобрить» и «Отклонить».
+1. Link your account (next section) and get the bot's reply "Done: Telegram linked".
+2. The `telegram` channel address appears in the preferences at
+   `GET /api/v1/me/notification-preferences`.
+3. Request an approval assigned to yourself — a message with "Approve" and "Reject" buttons
+   arrives in your private chat.
 
-## Привязка человека
+## Linking a person
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor H as Человек
+    actor H as Person
     participant IAM as iam-service
-    participant Bot as Бот (notification-service)
-    H->>IAM: POST …/channel-link-intents {"channel":"telegram"}<br/>(свежий вход, audience iam)
-    IAM-->>H: code (10 минут, в IAM только хэш)
-    H->>Bot: /start <code> в личном чате
+    participant Bot as Bot (notification-service)
+    H->>IAM: POST …/channel-link-intents {"channel":"telegram"}<br/>(fresh login, audience iam)
+    IAM-->>H: code (10 minutes, IAM stores only the hash)
+    H->>Bot: /start <code> in a private chat
     Bot->>IAM: POST …/channel-links:confirm {channel, code, externalSubject}
     IAM-->>Bot: principalId, linkId
-    Bot-->>H: «Готово: Telegram привязан»
+    Bot-->>H: "Done: Telegram linked"
 ```
 
-### Получить код
+### Get a code
 
-Код выдаёт IAM человеку с его собственным токеном. Требования к токену:
+IAM issues the code to the person with the person's own token. Token requirements:
 
-- audience `iam` (`IAM_CHANNEL_AUDIENCE`) и `tenant_id`, совпадающий с путём;
-- `principal_type = human`, principal активен;
-- **свежий вход**: `auth_time` не старше
-  `IAM_CHANNEL_LINK_MAX_AUTHENTICATION_AGE_SECONDS` (300 с) — украденный
-  старый токен не должен открывать атакующему постоянный канал;
-- токен не выпущен самим каналом (`acr=channel:*`): канал не может
-  размножить себя.
+- audience `iam` (`IAM_CHANNEL_AUDIENCE`) and a `tenant_id` that matches the path;
+- `principal_type = human`, the principal is active;
+- **a fresh login**: `auth_time` no older than
+  `IAM_CHANNEL_LINK_MAX_AUTHENTICATION_AGE_SECONDS` (300 s) — a stolen old token must not
+  open a permanent channel for an attacker;
+- the token was not issued by the channel itself (`acr=channel:*`): a channel cannot
+  replicate itself.
 
-Такой токен человек получает сразу после входа, например обменом
-`federation:exchange` с `"audience": "iam"` (см.
-[Федерация identity](../iam/federation.md)).
+A person gets such a token right after login, for example with a `federation:exchange` using
+`"audience": "iam"` (see [Identity federation](../iam/federation.md)).
 
 ```bash
 curl -s -X POST "$IAM/api/v1/tenants/<tenant-id>/channel-link-intents" \
@@ -175,81 +171,79 @@ curl -s -X POST "$IAM/api/v1/tenants/<tenant-id>/channel-link-intents" \
 ```
 
 ```json
-{"intentId": "<intent-id>", "channel": "telegram", "code": "<код>", "expiresAt": "2026-01-15T10:10:00Z"}
+{"intentId": "<intent-id>", "channel": "telegram", "code": "<code>", "expiresAt": "2026-01-15T10:10:00Z"}
 ```
 
-Код показывается один раз и живёт `IAM_CHANNEL_LINK_CODE_TTL_SECONDS`
-(600 с). Не больше `IAM_CHANNEL_LINK_INTENT_LIMIT` (5) кодов за
-`IAM_CHANNEL_LINK_INTENT_WINDOW_SECONDS` (600 с), иначе `429 rate_limited` с
-`Retry-After`.
+The code is shown once and lives for `IAM_CHANNEL_LINK_CODE_TTL_SECONDS` (600 s). No more than
+`IAM_CHANNEL_LINK_INTENT_LIMIT` (5) codes per `IAM_CHANNEL_LINK_INTENT_WINDOW_SECONDS`
+(600 s), otherwise `429 rate_limited` with `Retry-After`.
 
-!!! note "Экрана привязки нет"
-    В поставке код запрашивается вызовом API IAM. Встроить его в свой
-    интерфейс — задача клиента установки: это один `POST` токеном человека.
+!!! note "There is no linking screen"
+    In the delivery, the code is requested with an IAM API call. Embedding it into your own
+    interface is the installation client's job: it is a single `POST` with the person's token.
 
-!!! warning "Маршруты привязки закрыты на эталонном периметре"
-    Эталонный Caddyfile отвечает `404` на все пути
-    `/iam/api/v1/tenants/*`, кроме `federation:authenticate` и
-    `federation:exchange` (см. [Периметр и TLS](../operations/edge-and-tls.md)).
-    Поэтому `channel-link-intents` и `channel-links` доступны только изнутри
-    сети compose (`$IAM` = `http://iam-service:8010`) — например, из вашего
-    веб-бэкенда, который вызывает IAM токеном человека. Если людям нужно
-    обращаться к ним напрямую, добавьте в матчер закрытых путей исключения
-    ровно для `…/channel-link-intents`, `…/channel-links` и
-    `…/channel-links/*:revoke`. Маршруты адаптера (`channel-links:confirm`,
-    `channel-assertions:exchange`) и `channel-providers` наружу не открывайте:
-    их вызывают только сервис уведомлений и оператор изнутри.
+!!! warning "Linking routes are closed at the reference edge"
+    The reference Caddyfile returns `404` for all `/iam/api/v1/tenants/*` paths except
+    `federation:authenticate` and `federation:exchange` (see
+    [Edge and TLS](../operations/edge-and-tls.md)). Therefore `channel-link-intents` and
+    `channel-links` are available only from inside the compose network
+    (`$IAM` = `http://iam-service:8010`) — for example, from your web backend that calls IAM
+    with the person's token. If people need to call them directly, add exceptions to the
+    closed-paths matcher for exactly `…/channel-link-intents`, `…/channel-links`, and
+    `…/channel-links/*:revoke`. Do not expose the adapter routes (`channel-links:confirm`,
+    `channel-assertions:exchange`) and `channel-providers`: only the notification service
+    and the operator call them from inside.
 
-| Отказ | HTTP | Причина |
+| Refusal | HTTP | Reason |
 |---|---|---|
-| `channel_provider_disabled` | 403 | Провайдер не включён для tenant'а |
-| `authentication_context_expired` | 403 | Вход старше 300 с — войти заново |
-| `human_principal_required` | 403 | Токен не человека |
-| `channel_authentication_not_allowed` | 403 | Токен выпущен каналом |
-| `channel_already_linked` | 409 | У человека уже есть активная привязка Telegram — сначала отозвать |
-| `rate_limited` | 429 | Слишком много кодов |
+| `channel_provider_disabled` | 403 | The provider is not enabled for the tenant |
+| `authentication_context_expired` | 403 | The login is older than 300 s — log in again |
+| `human_principal_required` | 403 | The token does not belong to a human |
+| `channel_authentication_not_allowed` | 403 | The token was issued by a channel |
+| `channel_already_linked` | 409 | The person already has an active Telegram link — revoke it first |
+| `rate_limited` | 429 | Too many codes |
 
-### Отправить код боту
+### Send the code to the bot
 
-Человек пишет боту в **личном** чате `/start <код>`. Сервис подтверждает код в
-IAM (`POST …/channel-links:confirm`) с id отправителя как `externalSubject` —
-привязывается ровно тот аккаунт, который прислал код, — и сохраняет чат как
-адрес канала `telegram` этого человека.
+The person writes `/start <code>` to the bot in a **private** chat. The service confirms the
+code in IAM (`POST …/channel-links:confirm`) with the sender id as `externalSubject` —
+exactly the account that sent the code is linked — and saves the chat as this person's
+`telegram` channel address.
 
-| Ответ бота | Причина (код IAM) |
+| Bot reply | Reason (IAM code) |
 |---|---|
-| «Готово: Telegram привязан…» | Привязка создана |
-| «Код не подходит: он неверный, уже использован или истёк.» | `invalid_link_code` — IAM не различает неизвестный, чужой, использованный и просроченный код снаружи; точная причина только в audit |
-| «К вашей учётной записи уже привязан другой Telegram.» | `channel_already_linked` |
-| «Этот Telegram уже привязан к другой учётной записи.» | `channel_account_linked` — один аккаунт Telegram принадлежит одному человеку |
-| «Вход через Telegram выключен организацией.» | `channel_provider_disabled` |
-| «Учётная запись неактивна.» | `principal_not_active` |
-| «Привязать Telegram может только человек.» | `human_principal_required` |
-| «Слишком много попыток. Попробуйте позже.» | `rate_limited` — не больше `IAM_CHANNEL_CONFIRM_FAILURE_LIMIT` (10) неудачных подтверждений за 600 с |
-| «Сервис сейчас недоступен…» | IAM не ответил или сервис не настроен |
+| "Done: Telegram linked…" | The link is created |
+| "The code does not fit: it is wrong, already used, or expired." | `invalid_link_code` — from the outside IAM does not distinguish an unknown, someone else's, used, or expired code; the exact reason is only in audit |
+| "Another Telegram is already linked to your account." | `channel_already_linked` |
+| "This Telegram is already linked to another account." | `channel_account_linked` — one Telegram account belongs to one person |
+| "Login through Telegram is disabled by the organization." | `channel_provider_disabled` |
+| "The account is inactive." | `principal_not_active` |
+| "Only a human can link Telegram." | `human_principal_required` |
+| "Too many attempts. Try again later." | `rate_limited` — no more than `IAM_CHANNEL_CONFIRM_FAILURE_LIMIT` (10) failed confirmations per 600 s |
+| "The service is currently unavailable…" | IAM did not answer or the service is not configured |
 
-Если тот же чат раньше был адресом другого человека в этом tenant'е, прежний
-адрес отключается с причиной `linked_to_another_account`.
+If the same chat was previously the address of another person in this tenant, the previous
+address is disabled with the reason `linked_to_another_account`.
 
-### Команды бота
+### Bot commands
 
-| Команда | Где | Что делает |
+| Command | Where | What it does |
 |---|---|---|
-| `/start <код>` | личный чат | Привязать аккаунт кодом из IAM |
-| `/start <код>` | группа | Привязать группу кодом администратора (см. ниже) |
-| `/start` | личный чат | Вернуть адрес, отключённый блокировкой бота; иначе — справка |
-| `/unlink` | личный чат | Отключить адрес: сообщения сюда не приходят, кнопки не действуют |
-| `/help` | личный чат | Справка |
+| `/start <code>` | private chat | Link the account with a code from IAM |
+| `/start <code>` | group | Link the group with an administrator's code (see below) |
+| `/start` | private chat | Restore an address disabled by blocking the bot; otherwise — help |
+| `/unlink` | private chat | Disable the address: messages no longer arrive here, buttons do not work |
+| `/help` | private chat | Help |
 
-!!! warning "`/unlink` не отзывает привязку в IAM"
-    Команда отключает адрес в сервисе уведомлений — сообщения и кнопки
-    перестают работать. Сама привязка в IAM остаётся: отозвать её человек
-    может через API IAM (ниже). Вернуть сообщения после `/unlink` можно
-    только новым кодом — отвязка считается мерой безопасности, а не паузой.
+!!! warning "`/unlink` does not revoke the link in IAM"
+    The command disables the address in the notification service — messages and buttons stop
+    working. The link itself remains in IAM: the person can revoke it through the IAM API
+    (below). After `/unlink`, messages can be restored only with a new code — unlinking is
+    treated as a security measure, not a pause.
 
-### Просмотр и отзыв привязок
+### Viewing and revoking links
 
-Человек видит и отзывает свои привязки тем же токеном audience `iam`:
+A person sees and revokes their links with the same `iam` audience token:
 
 ```bash
 curl -s "$IAM/api/v1/tenants/<tenant-id>/channel-links" \
@@ -259,26 +253,24 @@ curl -s -X POST "$IAM/api/v1/tenants/<tenant-id>/channel-links/<link-id>:revoke"
   -H "Authorization: Bearer $HUMAN_IAM_TOKEN"
 ```
 
-После отзыва следующий обмен нажатия отклоняется (`channel_account_not_linked`),
-и сервис уведомлений отключает адрес с причиной `iam_link_revoked`. Уже
-выданные токены канала живут не дольше `IAM_CHANNEL_ASSERTION_TTL_SECONDS`
-(60 с); событие IAM `channel_link.revoked` несёт `credentialId` для
-revocation-кэшей. Чужая привязка неотличима от несуществующей (`404
-channel_link_not_found`).
+After revocation, the next press exchange is rejected (`channel_account_not_linked`), and the
+notification service disables the address with the reason `iam_link_revoked`. Channel tokens
+already issued live no longer than `IAM_CHANNEL_ASSERTION_TTL_SECONDS` (60 s); the IAM event
+`channel_link.revoked` carries a `credentialId` for revocation caches. Someone else's link is
+indistinguishable from a nonexistent one (`404 channel_link_not_found`).
 
-### Если бот заблокирован
+### If the bot is blocked
 
-Когда человек блокирует бота (обновление `my_chat_member` со статусом
-`kicked`) или отправка возвращает `403`, адрес отключается с причиной
-`bot_blocked` или `telegram_403…`, и канал перестаёт выбираться. После
-разблокировки достаточно отправить боту `/start` без кода — адрес вернётся.
+When a person blocks the bot (a `my_chat_member` update with status `kicked`) or sending
+returns `403`, the address is disabled with the reason `bot_blocked` or `telegram_403…`, and
+the channel is no longer selected. After unblocking, it is enough to send `/start` to the bot
+without a code — the address comes back.
 
-## Группы команды
+## Team groups
 
-Группа мессенджера привязывается к workspace и, по желанию, к роли в нём.
-Уведомления, адресованные этой роли в этом workspace, приходят и её
-держателям лично, и в группу; группу можно адресовать и напрямую
-(`recipient.kind = group`).
+A messenger group is linked to a workspace and, optionally, to a role in it. Notifications
+addressed to this role in this workspace reach both its holders personally and the group; you
+can also address the group directly (`recipient.kind = group`).
 
 ```bash
 curl -s -X POST "$NS/api/v1/workspaces/<workspace-id>/channel-groups" \
@@ -292,163 +284,155 @@ curl -s -X POST "$NS/api/v1/workspaces/<workspace-id>/channel-groups" \
   "channel": "telegram",
   "workspaceId": "<workspace-id>",
   "roleId": "<role-id>",
-  "code": "<код>",
-  "command": "/start@<бот> <код>",
-  "deepLink": "https://t.me/<бот>?startgroup=<код>",
+  "code": "<code>",
+  "command": "/start@<bot> <code>",
+  "deepLink": "https://t.me/<bot>?startgroup=<code>",
   "expiresAt": "2026-01-15T10:10:00Z"
 }
 ```
 
-Нужен scope `notifications:admin`. Дальше администратор либо добавляет бота
-в группу и отправляет там `command`, либо открывает `deepLink` — Telegram
-предложит выбрать группу, добавит бота и отправит код. Код одноразовый и
-живёт `NS_CHANNEL_GROUP_CODE_TTL_SECONDS` (600 с); `deepLink` есть, только
-если задан `NS_TELEGRAM_BOT_USERNAME`. Бот отвечает в группе «Группа
-привязана…».
+The `notifications:admin` scope is required. Then the administrator either adds the bot to
+the group and sends `command` there, or opens `deepLink` — Telegram offers to choose a group,
+adds the bot, and sends the code. The code is single-use and lives for
+`NS_CHANNEL_GROUP_CODE_TTL_SECONDS` (600 s); `deepLink` is present only if
+`NS_TELEGRAM_BOT_USERNAME` is set. The bot replies in the group "Group linked…".
 
-| Запрос | Смысл |
+| Request | Meaning |
 |---|---|
-| `POST /api/v1/workspaces/{id}/channel-groups` | Код привязки группы (`roleId` необязателен) |
-| `GET /api/v1/workspaces/{id}/channel-groups` | Привязанные группы, включая отключённые |
-| `DELETE /api/v1/workspaces/{id}/channel-groups/{groupId}` | Отвязать: доставка в группу прекращается (причина `unlinked_by_admin`) |
+| `POST /api/v1/workspaces/{id}/channel-groups` | Group link code (`roleId` is optional) |
+| `GET /api/v1/workspaces/{id}/channel-groups` | Linked groups, including disabled ones |
+| `DELETE /api/v1/workspaces/{id}/channel-groups/{groupId}` | Unlink: delivery to the group stops (reason `unlinked_by_admin`) |
 
-- Повторная привязка того же чата переносит его в новый workspace и роль.
-- Группа, ставшая супергруппой, продолжает получать сообщения: сервис
-  переносит её на новый id чата сам.
-- Бот, удалённый из группы, отключает её (`bot_removed`); вернуть — новым
-  кодом.
-- Кнопки решения в группе видны всем участникам, но решение принимает
-  только привязанный человек с правом решать (см. ниже).
+- Linking the same chat again moves it to the new workspace and role.
+- A group that became a supergroup keeps receiving messages: the service moves it to the new
+  chat id itself.
+- A bot removed from a group disables it (`bot_removed`); restore it with a new code.
+- Decision buttons in a group are visible to all members, but only a linked person with the
+  right to decide makes the decision (see below).
 
-## Решение кнопкой {#decisions}
+## Decision with a button {#decisions}
 
-Когда ядро запрашивает решение (`approval.requested`), сервис рассылает
-уведомление с действиями `approve` и `reject` (см.
-[Уведомления](index.md#core-events)). Канал Telegram превращает действия с
-`data.kind = approval.decide` в кнопки под сообщением; прочие действия он не
-показывает.
+When the core requests a decision (`approval.requested`), the service sends a notification
+with the `approve` and `reject` actions (see [Notifications](index.md#core-events)). The
+Telegram channel turns actions with `data.kind = approval.decide` into buttons under the
+message; it does not show other actions.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor H as Человек
+    actor H as Person
     participant TG as Telegram
     participant NS as notification-service
     participant IAM as iam-service
     participant CP as Control Plane
-    H->>TG: нажимает «Одобрить»
-    TG->>NS: callback_query (вебхук, секрет)
-    NS->>NS: сообщение отправлено этим ботом? нажатие новое?<br/>аккаунт привязан в этом tenant'е?
-    NS->>CP: GET /approvals/{id} (service account): ещё pending?
+    H->>TG: presses "Approve"
+    TG->>NS: callback_query (webhook, secret)
+    NS->>NS: message sent by this bot? press is new?<br/>account linked in this tenant?
+    NS->>CP: GET /approvals/{id} (service account): still pending?
     NS->>IAM: POST …/channel-assertions:exchange<br/>{channel, externalSubject, purposeRef: approval:<id>}
-    IAM-->>NS: токен человека: scope control-plane:decide, 60 с
+    IAM-->>NS: person's token: scope control-plane:decide, 60 s
     NS->>CP: POST /approvals/{id}:approve<br/>Idempotency-Key: <callback id>
-    CP-->>NS: approval approved (событие с channel=telegram)
-    NS-->>TG: answerCallbackQuery «Решение принято: одобрено.»
-    NS->>TG: editMessageText во всех сообщениях уведомления: «✅ Одобрено — <имя>, через Telegram»
+    CP-->>NS: approval approved (event with channel=telegram)
+    NS-->>TG: answerCallbackQuery "Decision recorded: approved."
+    NS->>TG: editMessageText in all messages of the notification: "✅ Approved — <name>, via Telegram"
 ```
 
-### Токен одного решения
+### A single-decision token
 
-IAM выпускает по нажатию токен **от имени человека**, у которого нет других
-возможностей:
+On a press, IAM issues a token **on behalf of the person** that has no other capabilities:
 
-| Claim | Значение |
+| Claim | Value |
 |---|---|
 | `aud` | `control-plane` (`IAM_CHANNEL_ASSERTION_AUDIENCE`) |
 | `scope`, `scope_ceiling` | `[control-plane:decide]` (`IAM_CHANNEL_ASSERTION_SCOPE`) |
 | `principal_type` | `human` |
 | `acr`, `amr` | `channel:telegram` |
 | `purpose_ref` | `approval:<approval-id>` |
-| `credential_id` | id привязки: её отзыв закрывает следующий обмен |
-| срок | `IAM_CHANNEL_ASSERTION_TTL_SECONDS` (60 с), не дольше общего TTL токенов |
+| `credential_id` | the link id: revoking the link blocks the next exchange |
+| lifetime | `IAM_CHANNEL_ASSERTION_TTL_SECONDS` (60 s), no longer than the general token TTL |
 
-Control Plane с таким токеном:
+With such a token, Control Plane:
 
-- оставляет из прав binding человека только `approvals.decide` — само по себе
-  scope ничего не даёт, право должно быть у binding (`403 permission_denied`);
-- принимает его **только** на `POST /api/v1/approvals/{id}:approve` и
-  `:reject` с тем же `{id}`; любой другой запрос, включая чтение этого
-  approval, `:cancel`, чужой approval и WebSocket журнала, получает отказ
-  `outside_purpose` (HTTP `403`);
-- требует `Idempotency-Key` (`422 idempotency_key_required`). Сервис ставит
-  ключом id нажатия, поэтому повторная доставка вебхука становится
-  replay первого решения, а не второй попыткой;
-- записывает `channel = "telegram"` в событие `approval.approved` /
-  `approval.rejected` (у прямого вызова API — `null`).
+- keeps only `approvals.decide` from the person's binding permissions — the scope by itself
+  grants nothing, the binding must have the permission (`403 permission_denied`);
+- accepts it **only** on `POST /api/v1/approvals/{id}:approve` and `:reject` with the same
+  `{id}`; any other request, including reading this approval, `:cancel`, another approval,
+  and the log WebSocket, is refused with `outside_purpose` (HTTP `403`);
+- requires `Idempotency-Key` (`422 idempotency_key_required`). The service uses the press id
+  as the key, so a repeated webhook delivery becomes a replay of the first decision rather
+  than a second attempt;
+- records `channel = "telegram"` in the `approval.approved` / `approval.rejected` event (for
+  a direct API call — `null`).
 
-Обмен ограничен по частоте: не больше `IAM_CHANNEL_ASSERTION_LIMIT` (10)
-токенов на привязку и отказов на адаптер за
-`IAM_CHANNEL_ASSERTION_WINDOW_SECONDS` (60 с). Каждый обмен и каждый отказ —
-в audit IAM.
+The exchange is rate-limited: no more than `IAM_CHANNEL_ASSERTION_LIMIT` (10) tokens per link
+and refusals per adapter within `IAM_CHANNEL_ASSERTION_WINDOW_SECONDS` (60 s). Every exchange
+and every refusal is in the IAM audit.
 
-!!! warning "Исходы решения из канала исполняются с правом только на решение"
-    Исходы gate-решения, объявленные типом задачи, исполняются с полномочиями
-    решившего, снятыми с контекста решения, а у токена канала это только
-    `approvals.decide`. Если действию исхода нужны другие права (записать
-    задачу, вызвать скилл), в режимах авторизации `local` и `shadow` оно
-    завершается отказом прав. Решение при этом остаётся в силе, исход — в
-    состоянии `failed`; решивший повторяет его из веба
-    `POST /approvals/{id}:replay-outcome` со своей полной учётной записью
-    (см. [Approvals](../control-plane/approvals.md)).
+!!! warning "Decision outcomes from the channel run with decide-only permissions"
+    Gate decision outcomes declared by the task type run with the authority of the decider,
+    taken from the decision context, and a channel token has only `approvals.decide`. If an
+    outcome action needs other permissions (write the task, call a skill), in the `local` and
+    `shadow` authorization modes it ends with a permission refusal. The decision itself stays
+    in force, and the outcome is in the `failed` state; the decider replays it from the web
+    with `POST /approvals/{id}:replay-outcome` using their full account (see
+    [Approvals](../control-plane/approvals.md)).
 
-### Что видит человек
+### What the person sees
 
-| Ответ на нажатие | Когда |
+| Reply to the press | When |
 |---|---|
-| «Решение принято: одобрено.» / «…отклонено.» | Решение записано |
-| «Уже решено: ✅ Одобрено — <имя>, через Telegram.» | Approval уже решён или отменён — кнопки этого сообщения заодно закрываются |
-| «Ваш Telegram не привязан к учётной записи — решение не принято…» | Аккаунт не привязан в tenant'е сообщения |
-| «Привязка Telegram отозвана — решение не принято.» | Привязка отозвана в IAM; адрес отключается |
-| «Решения из Telegram выключены организацией.» | Провайдер выключен |
-| «У вас нет права принять это решение — решение не записано.» | Ядро отказало: нет права или человек не может решать этот approval |
-| «Решение не найдено — кнопка больше не действует.» | Approval не найден |
-| «Кнопка больше не действует.» | Нажатие не на сообщение этого бота или действие не решение |
-| «Сервис сейчас недоступен. Попробуйте позже.» | IAM или ядро не ответили — нажатие можно повторить |
+| "Decision recorded: approved." / "…rejected." | The decision is recorded |
+| "Already decided: ✅ Approved — <name>, via Telegram." | The approval is already decided or cancelled — the buttons of this message are closed as well |
+| "Your Telegram is not linked to an account — the decision was not made…" | The account is not linked in the message's tenant |
+| "The Telegram link was revoked — the decision was not made." | The link was revoked in IAM; the address is disabled |
+| "Decisions from Telegram are disabled by the organization." | The provider is disabled |
+| "You do not have the right to make this decision — the decision was not recorded." | The core refused: no permission, or the person cannot decide this approval |
+| "Decision not found — the button no longer works." | The approval was not found |
+| "The button no longer works." | The press was not on a message from this bot, or the action is not a decision |
+| "The service is currently unavailable. Try again later." | IAM or the core did not answer — the press can be repeated |
 
-Нажатие проверяется в контексте tenant'а, из которого пришло сообщение:
-человек, привязанный в нескольких tenant'ах, решает там, где его спросили.
-Результат каждого нажатия записывается; повторно доставленное нажатие
-получает тот же ответ. Временные отказы (IAM или ядро недоступны) не
-фиксируются окончательно, и повтор решает заново.
+A press is checked in the context of the tenant the message came from: a person linked in
+several tenants decides where they were asked. The result of every press is recorded; a
+redelivered press gets the same reply. Temporary refusals (IAM or the core unavailable) are
+not recorded as final, and a repeat decides again.
 
-После решения — через Telegram, веб или API — действия уведомления
-закрываются, и **все** сообщения этого уведомления у всех получателей
-редактируются: кнопки исчезают, внизу появляется исход («✅ Одобрено»,
-«❌ Отклонено», «Отменено»), кто решил и через какой канал.
+After the decision — through Telegram, the web, or the API — the notification's actions are
+closed, and **all** messages of this notification for all recipients are edited: the buttons
+disappear, and the outcome appears at the bottom ("✅ Approved", "❌ Rejected", "Cancelled"),
+along with who decided and through which channel.
 
-## Формат сообщений
+## Message format
 
-Сообщение уходит в Bot API с разметкой HTML: заголовок жирным, текст, затем
-ссылки и строка исхода курсивом. Текст экранируется; если сообщение длиннее
-лимита Telegram в 4096 символов, обрезается тело, а ссылки и исход остаются.
+A message goes to the Bot API with HTML markup: the title in bold, the text, then links and
+the outcome line in italics. The text is escaped; if the message exceeds the Telegram limit
+of 4096 characters, the body is truncated, while the links and the outcome remain.
 
-## Типичные проблемы {#troubleshooting}
+## Common problems {#troubleshooting}
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| Бот молчит, `getWebhookInfo` показывает ошибки `401` | Секрет в `setWebhook` не совпадает с `NS_TELEGRAM_WEBHOOK_SECRET` или секрет пуст | Перерегистрировать вебхук с тем же секретом |
-| Вебхук отвечает `404` | Токен бота не дошёл до контейнера | Проверить `secrets/notification-telegram.env`, пересоздать контейнер |
-| Вебхук недоступен снаружи (`502`) | Профиль `notify` не поднят или нет маршрута `/notify/*` в Caddyfile | Поднять профиль, проверить периметр |
-| `/start <код>` — «Код не подходит» | Код истёк (10 минут), использован или выдан в другом tenant'е | Запросить новый код |
-| `/start <код>` — «Сервис сейчас недоступен» | Нет `secrets/notification-iam.env` или у service account нет audience `iam` | Выполнить bootstrap, пересоздать контейнер |
-| Код привязки в IAM — `403 authentication_context_expired` | Вход старше 300 с | Войти заново и сразу запросить код |
-| Сообщения не приходят, в журнале `recipient_unreachable` | Адрес не привязан или отключён (`/unlink`, блокировка, отзыв) | Посмотреть `addresses` в настройках человека; привязать заново |
-| Доставки `pending` с `lastError` `telegram_unauthorized` | Токен бота неверный или отозван | Исправить токен; доставки повторятся сами |
-| `telegram_429…` в `lastError` | Лимит Bot API | Повторяется автоматически с паузой |
-| Кнопки есть, но нажатие — «Решения из Telegram выключены организацией» | Провайдер tenant'а в статусе `disabled` | `PUT …/channel-providers/telegram {"status":"active"}` |
-| Нажатие — «У вас нет права принять это решение» | У binding человека нет `approvals.decide`, approval назначен другому principal'у или человек не держит нужную роль в workspace approval'а (`not_eligible`) | Проверить права и роль человека |
-| Нажатие проходит, но исход решения `failed` с отказом прав | Исходу нужны права шире `approvals.decide` | `:replay-outcome` из веба полной учёткой |
-| В группу ничего не приходит | Группа отвязана (`bot_removed`, `unlinked_by_admin`) или привязана к другой роли | `GET …/channel-groups`, привязать новым кодом |
-| Команда в группе игнорируется | Бот в режиме приватности не видит `/start <код>` без имени бота | Отправлять `command` из ответа (`/start@<бот> <код>`) или `deepLink` |
+| The bot is silent, `getWebhookInfo` shows `401` errors | The secret in `setWebhook` does not match `NS_TELEGRAM_WEBHOOK_SECRET`, or the secret is empty | Re-register the webhook with the same secret |
+| The webhook returns `404` | The bot token did not reach the container | Check `secrets/notification-telegram.env`, recreate the container |
+| The webhook is unreachable from outside (`502`) | The `notify` profile is not up, or there is no `/notify/*` route in the Caddyfile | Start the profile, check the edge |
+| `/start <code>` — "The code does not fit" | The code expired (10 minutes), was used, or was issued in another tenant | Request a new code |
+| `/start <code>` — "The service is currently unavailable" | No `secrets/notification-iam.env`, or the service account lacks the `iam` audience | Run bootstrap, recreate the container |
+| Link code in IAM — `403 authentication_context_expired` | The login is older than 300 s | Log in again and request the code immediately |
+| Messages do not arrive, the log shows `recipient_unreachable` | The address is not linked or is disabled (`/unlink`, blocking, revocation) | Check `addresses` in the person's preferences; link again |
+| Deliveries are `pending` with `lastError` `telegram_unauthorized` | The bot token is wrong or revoked | Fix the token; deliveries retry on their own |
+| `telegram_429…` in `lastError` | Bot API limit | Retried automatically with a pause |
+| Buttons are there, but a press gives "Decisions from Telegram are disabled by the organization" | The tenant's provider is `disabled` | `PUT …/channel-providers/telegram {"status":"active"}` |
+| A press gives "You do not have the right to make this decision" | The person's binding lacks `approvals.decide`, the approval is assigned to another principal, or the person does not hold the required role in the approval's workspace (`not_eligible`) | Check the person's permissions and role |
+| The press goes through, but the decision outcome is `failed` with a permission refusal | The outcome needs permissions wider than `approvals.decide` | `:replay-outcome` from the web with a full account |
+| Nothing arrives in the group | The group is unlinked (`bot_removed`, `unlinked_by_admin`) or linked to another role | `GET …/channel-groups`, link with a new code |
+| A command in the group is ignored | A bot in privacy mode does not see `/start <code>` without the bot name | Send `command` from the response (`/start@<bot> <code>`) or use `deepLink` |
 
-## См. также
+## See also
 
-- [Уведомления](index.md) — отправка, каналы, инбокс, журнал доставки.
-- [Approvals](../control-plane/approvals.md) — запрос, решение и исходы.
-- [Федерация identity](../iam/federation.md) — внешние identity и
+- [Notifications](index.md) — sending, channels, inbox, delivery log.
+- [Approvals](../control-plane/approvals.md) — request, decision, and outcomes.
+- [Identity federation](../iam/federation.md) — external identities and
   `federation:exchange`.
-- [Токены, audiences, scopes](../iam/tokens.md)
-- [Секреты и ротация](../operations/secrets.md)
-- [Периметр и TLS](../operations/edge-and-tls.md) — маршрут `/notify/*` и
-  закрытая административная поверхность IAM.
+- [Tokens, audiences, scopes](../iam/tokens.md)
+- [Secrets and rotation](../operations/secrets.md)
+- [Edge and TLS](../operations/edge-and-tls.md) — the `/notify/*` route and the closed IAM
+  administrative surface.

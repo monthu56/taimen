@@ -1,74 +1,79 @@
-# Модель безопасности
 
-Статья описывает, как в Taimen устроены identity, credentials и авторизация:
-кто выпускает токены, что в них лежит, как сервис решает, разрешено ли действие,
-и как отзывается доступ. Она адресована инженерам безопасности и тем, кто
-подключает к платформе новые сервисы, агентов и харнессы.
+# Security model
 
-## Три вопроса — три ответчика
+This page describes how identity, credentials, and authorization work in
+Taimen: who issues tokens, what they contain, how a service decides whether an
+action is allowed, and how access is revoked. It is intended for security
+engineers and for anyone connecting new services, agents, or harnesses to the
+platform.
 
-Решение о любом запросе разложено на независимые вопросы, у каждого свой
-владелец:
+## Three questions, three owners
 
-| Вопрос | Кто отвечает | Чем |
+The decision on any request is split into independent questions, each with its
+own owner:
+
+| Question | Who answers | With what |
 |---|---|---|
-| **Кто это?** | IAM Service | подписанный RS256 access token одного audience |
-| **Может ли он вообще пользоваться продуктом?** | внешняя проверка лицензии (опционально, если подключена) | решение по лицензии; по умолчанию выключено (`CP_ENTITLEMENT_ENABLED=false`) |
-| **Можно ли ему это действие над этим ресурсом?** | сервис-владелец ресурса (Control Plane, Memory Service, …) | собственные права principal и доменные инварианты |
+| **Who is this?** | IAM Service | a signed RS256 access token for a single audience |
+| **May they use the product at all?** | an external license check (optional, if connected) | a license decision; disabled by default (`CP_ENTITLEMENT_ENABLED=false`) |
+| **May they perform this action on this resource?** | the service that owns the resource (Control Plane, Memory Service, …) | the principal's own permissions and domain invariants |
 
-Токен IAM **не несёт доменных прав**. Право создать задачу принадлежит Control
-Plane, а не провайдеру identity: IAM лишь ограничивает токен scope'ами, а
-сервис пересекает их со своими правами.
+An IAM token **carries no domain permissions**. The right to create a task
+belongs to Control Plane, not to the identity provider: IAM only limits the
+token with scopes, and the service intersects them with its own permissions.
 
-Порядок проверок в общем Policy Enforcement Point (`platform-auth-sdk`) фиксирован
-и не настраивается:
+The order of checks in the shared Policy Enforcement Point
+(`platform-auth-sdk`) is fixed and not configurable:
 
 ```mermaid
 flowchart LR
-    T[Токен] --> I[identity<br/>подпись, iss, aud, exp]
-    I --> R[revocation<br/>binding, principal]
-    R --> E[entitlement<br/>если включён]
-    E --> P[policy<br/>если включён PDP]
-    P --> D[доменные проверки<br/>сервиса]
-    D --> OK[разрешено]
+    T[Token] --> I["identity<br/>signature, iss, aud, exp"]
+    I --> R["revocation<br/>binding, principal"]
+    R --> E[entitlement<br/>if enabled]
+    E --> P[policy<br/>if a PDP is enabled]
+    P --> D[service<br/>domain checks]
+    D --> OK[allowed]
 ```
 
-Каждый следующий шаг дороже предыдущего и имеет смысл только после него.
-Отказ на любом шаге — стабильный код для клиента и точная причина в аудите.
+Each step is more expensive than the previous one and only makes sense after
+it. A denial at any step produces a stable code for the client and the exact
+reason in the audit log.
 
-## IAM: субъекты и credentials
+## IAM: subjects and credentials
 
-IAM владеет tenants, principals и их credentials:
+IAM owns tenants, principals, and their credentials:
 
-| Вид principal в IAM | Кто | Credential |
+| Principal kind in IAM | Who | Credential |
 |---|---|---|
-| `human` | человек | PAT (выпуск только после свежей аутентификации) или федерация через внешний IdP |
-| `agent` | автономный исполнитель | PAT, выпускаемый bootstrap-операцией |
-| `service_account` | сервис | `clientId` + `clientSecret` |
-| `workload` | нагрузка без интерактивного входа | в Control Plane отображается в `service` |
+| `human` | a person | PAT (issued only after fresh authentication) or federation through an external IdP |
+| `agent` | an autonomous executor | PAT issued by a bootstrap operation |
+| `service_account` | a service | `clientId` + `clientSecret` |
+| `workload` | a workload without interactive login | maps to `service` in Control Plane |
 
 ### Platform Access Token (PAT)
 
-PAT — долгоживущий секрет human или agent. Главное свойство: **он
-предъявляется только IAM и только в теле запроса**. Ни один resource service
-PAT не видит.
+A PAT is a long-lived secret of a human or an agent. Its key property: **it is
+presented only to IAM and only in the request body**. No resource service ever
+sees a PAT.
 
-- Выпуск: `POST /api/v1/tenants/{t}/principals/{p}/platform-access-tokens`
-  (bootstrap-заголовок `X-IAM-Bootstrap-Token`, обязательный `Idempotency-Key`),
-  с перечнем `audiences`, потолком `scopeCeiling` и сроком `expiresInSeconds`.
-- Для человека выпуск требует **свежего authentication context** — не старше
-  `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` (300 с); иначе
+- Issuance: `POST /api/v1/tenants/{t}/principals/{p}/platform-access-tokens`
+  (the bootstrap header `X-IAM-Bootstrap-Token` and a required
+  `Idempotency-Key`), with a list of `audiences`, a `scopeCeiling`, and a
+  lifetime `expiresInSeconds`.
+- For a human, issuance requires a **fresh authentication context**, no older
+  than `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` (300 s); otherwise you get
   `authentication_context_required` / `authentication_context_expired`.
-- Для агента снимок происхождения честно фиксирует bootstrap-операцию
-  (`agent_bootstrap`), и в выданных access token у агента нет `auth_time` и
-  `acr` — по этому признаку и по `principal_type` его сессии отличаются от
-  человеческих.
-- Service account PAT получить не может: `422 principal_kind_not_allowed`.
-- Срок: по умолчанию 30 дней (`IAM_PAT_DEFAULT_TTL_SECONDS`), максимум 365
-  дней (`IAM_PAT_MAX_TTL_SECONDS`). **Ротация** (`:rotate`) меняет секрет, но
-  не продлевает окно жизни — для продления нужен новый выпуск.
+- For an agent, the provenance snapshot explicitly records the bootstrap
+  operation (`agent_bootstrap`), and the agent's issued access tokens have no
+  `auth_time` and `acr`. This, together with `principal_type`, is how its
+  sessions are distinguished from human ones.
+- A service account cannot get a PAT: `422 principal_kind_not_allowed`.
+- Lifetime: 30 days by default (`IAM_PAT_DEFAULT_TTL_SECONDS`), 365 days
+  maximum (`IAM_PAT_MAX_TTL_SECONDS`). **Rotation** (`:rotate`) changes the
+  secret but does not extend the lifetime window; to extend it, issue a new
+  PAT.
 
-### Обмен PAT на access token
+### Exchanging a PAT for an access token
 
 ```bash
 curl -s -X POST http://127.0.0.1:18010/api/v1/platform-access-tokens:exchange \
@@ -88,20 +93,22 @@ curl -s -X POST http://127.0.0.1:18010/api/v1/platform-access-tokens:exchange \
 }
 ```
 
-Правила обмена:
+Exchange rules:
 
-1. `audience` должен быть в списке audiences PAT и активен в tenant — иначе
-   `403 audience_not_allowed`.
-2. Запрошенные `scopes` должны входить в пересечение потолка PAT и
-   `allowedScopes` audience — иначе `403 scope_not_allowed`.
-3. Пустой список `scopes` означает «весь потолок» (пересечённый с тем, что
-   разрешено audience).
-4. Scope пишется **с префиксом audience**: `control-plane:read`, а не `read`.
+1. The `audience` must be in the PAT's list of audiences and active in the
+   tenant; otherwise you get `403 audience_not_allowed`.
+2. The requested `scopes` must fall within the intersection of the PAT ceiling
+   and the audience's `allowedScopes`; otherwise you get
+   `403 scope_not_allowed`.
+3. An empty `scopes` list means "the whole ceiling" (intersected with what the
+   audience allows).
+4. A scope is written **with the audience prefix**: `control-plane:read`, not
+   `read`.
 
 ### Service accounts
 
-Сервисы (ядро Control Plane при походе в память, notification-service) получают
-токены по client credentials:
+Services (the Control Plane core when it calls memory, notification-service)
+get tokens with client credentials:
 
 ```bash
 curl -s -X POST http://127.0.0.1:18010/api/v1/tokens/exchange \
@@ -110,179 +117,189 @@ curl -s -X POST http://127.0.0.1:18010/api/v1/tokens/exchange \
        "audience": "memory-service", "scopes": ["memory:read"]}'
 ```
 
-Service account создаётся с набором `audiences` и `scopeCeiling`
-(`POST /api/v1/tenants/{t}/service-accounts`), отзывается
-`POST …/service-accounts/{clientId}:revoke`. Отдельного изменения потолка у
-service account нет: при расширении потолка выпускается новый, прежний
-отзывается. Bootstrap делает это автоматически. См.
+A service account is created with a set of `audiences` and a `scopeCeiling`
+(`POST /api/v1/tenants/{t}/service-accounts`) and revoked with
+`POST …/service-accounts/{clientId}:revoke`. There is no separate operation to
+change a service account's ceiling: to widen the ceiling, you issue a new
+account and revoke the old one. Bootstrap does this automatically. See
 [Service accounts](../iam/service-accounts.md).
 
 ### Access token
 
-Access token — JWT RS256 (`typ: at+jwt`, `kid` из `IAM_SIGNING_KEY_ID`),
-TTL по умолчанию 300 с (`IAM_TOKEN_TTL_SECONDS`):
+An access token is an RS256 JWT (`typ: at+jwt`, `kid` from
+`IAM_SIGNING_KEY_ID`) with a default TTL of 300 s (`IAM_TOKEN_TTL_SECONDS`):
 
-| Claim | Содержимое |
+| Claim | Contents |
 |---|---|
-| `iss` | issuer IAM — `${TAIMEN_PUBLIC_URL}/iam` |
-| `sub` | IAM principal id |
-| `tenant_id` | IAM tenant id |
-| `aud` | ровно один audience |
-| `scope` | выданные scopes |
-| `scope_ceiling` | потолок credential |
-| `principal_type` | вид principal (`human`, `agent`, `service_account`, …) |
-| `credential_id` | id credential, по которому выпущен токен |
-| `session_id` | id сессии обмена |
-| `auth_time`, `acr` | только у человека с подтверждённым входом |
-| `iat`, `nbf`, `exp`, `jti` | время жизни и уникальность |
+| `iss` | the IAM issuer, `${TAIMEN_PUBLIC_URL}/iam` |
+| `sub` | the IAM principal id |
+| `tenant_id` | the IAM tenant id |
+| `aud` | exactly one audience |
+| `scope` | the granted scopes |
+| `scope_ceiling` | the credential's ceiling |
+| `principal_type` | the principal kind (`human`, `agent`, `service_account`, …) |
+| `credential_id` | the id of the credential the token was issued from |
+| `session_id` | the id of the exchange session |
+| `auth_time`, `acr` | only for a human with a confirmed login |
+| `iat`, `nbf`, `exp`, `jti` | lifetime and uniqueness |
 
-Публичные ключи — `GET /.well-known/jwks.json` IAM. Сервисы читают JWKS по
-**внутреннему** адресу (`http://iam-service:8010/.well-known/jwks.json`), а
-issuer сверяют с **публичным**: проверка подписи не зависит от внешнего прокси и
-TLS.
+Public keys are served at IAM's `GET /.well-known/jwks.json`. Services read JWKS
+from the **internal** address (`http://iam-service:8010/.well-known/jwks.json`)
+and check the issuer against the **public** one, so signature verification does
+not depend on the external proxy or TLS.
 
-## Audiences и scopes
+## Audiences and scopes
 
-Каждый сервис — отдельный audience со своим реестром допустимых scopes.
-Bootstrap регистрирует и приводит к реестру:
+Each service is a separate audience with its own registry of allowed scopes.
+Bootstrap registers them and keeps them in line with the registry:
 
 | Audience | Scopes |
 |---|---|
 | `control-plane` | `control-plane:read`, `control-plane:write`, `control-plane:admin` |
 | `memory-service` | `memory:read`, `memory:write`, `memory:pii`, `memory:tenants`, `memory:on-behalf`, `memory:service` |
 
-Один токен — один сервис: токен для Control Plane не принимается памятью и
-наоборот (сервис требует точного совпадения `aud`).
+One token, one service: a token for Control Plane is not accepted by memory and
+vice versa (a service requires an exact `aud` match).
 
-## Control Plane: bindings и права
+## Control Plane: bindings and permissions
 
-Control Plane — resource server: токены проверяет, но не выпускает.
+Control Plane is a resource server: it verifies tokens but does not issue them.
 
 ```mermaid
 flowchart TB
-    TOK[access token<br/>iss, sub, tenant_id, scope] --> B{binding<br/>issuer + sub}
-    B -- "нет / tenant не совпал /<br/>binding или principal не active" --> X[401 — единый ответ,<br/>причина только в аудите]
-    B -- ok --> PERM[permissions binding]
-    PERM --> N[∩ scope токена]
-    N --> AZ[доменная авторизация<br/>CP_AUTHZ_MODE]
+    TOK["access token<br/>iss, sub, tenant_id, scope"] --> B{binding<br/>issuer + sub}
+    B -- "none / tenant mismatch /<br/>binding or principal not active" --> X["401: a single response,<br/>reason only in the audit log"]
+    B -- ok --> PERM[binding permissions]
+    PERM --> N[∩ token scope]
+    N --> AZ[domain authorization<br/>CP_AUTHZ_MODE]
 ```
 
-1. **Binding.** Внешняя identity отображается на локальный principal строкой
-   `iam_principal_bindings` по паре `(issuer, iam_principal_id)`. Неизвестная
-   identity, чужой tenant, отключённый binding или неактивный principal дают
-   один и тот же ответ `401` — код ответа не раскрывает чужой каталог; точная
-   причина (`binding_not_found`, `tenant_mismatch`, `binding_disabled`,
-   `principal_not_active`) остаётся в аудите.
-2. **Сужение scope.** Права binding пересекаются с потолком токена по простому
-   правилу:
-    - `control-plane:admin` — права binding без сужения;
-    - право `admin` без admin-scope не действует никогда;
-    - права вида `*.read` требуют `control-plane:read`;
-    - все остальные — `control-plane:write`.
+1. **Binding.** An external identity maps to a local principal through a row in
+   `iam_principal_bindings` keyed by the pair `(issuer, iam_principal_id)`. An
+   unknown identity, a foreign tenant, a disabled binding, or an inactive
+   principal all produce the same `401` response, so the response code does not
+   reveal another tenant's directory; the exact reason (`binding_not_found`,
+   `tenant_mismatch`, `binding_disabled`, `principal_not_active`) stays in the
+   audit log.
+2. **Scope narrowing.** Binding permissions are intersected with the token's
+   ceiling by a simple rule:
+    - `control-plane:admin`: binding permissions without narrowing;
+    - the `admin` permission never applies without the admin scope;
+    - `*.read` permissions require `control-plane:read`;
+    - all others require `control-plane:write`.
 
-    Scope только сужает, никогда не расширяет: binding с правом записи при
-    токене «только чтение» писать не сможет.
-3. **Доменная авторизация.** Режим `CP_AUTHZ_MODE`:
-    - `local` (по умолчанию) — права из binding и ролей Control Plane;
-    - `shadow` — решение по-прежнему локальное, но параллельно спрашивается
-      внешний PDP (если подключён), расхождения пишутся в журнал;
-    - `policy` — решение принимает внешний PDP (experimental).
+    Scope only narrows and never widens: a binding with write permission cannot
+    write with a read-only token.
+3. **Domain authorization.** The `CP_AUTHZ_MODE` mode:
+    - `local` (default): permissions from the binding and Control Plane roles;
+    - `shadow`: the decision is still local, but an external PDP (if connected)
+      is queried in parallel, and discrepancies are logged;
+    - `policy`: an external PDP makes the decision (experimental).
 
-### Права агентов
+### Agent permissions
 
-Bootstrap выдаёт агентам по умолчанию `sessions.open`, `tasks.read`,
+By default, bootstrap grants agents `sessions.open`, `tasks.read`,
 `tasks.write`, `tasks.claim`, `events.read`, `artifacts.read`,
-`artifacts.write`, `projects.read`, `task_types.read` и **отказывается**
-выдавать агенту `admin` или `approvals.decide`: решение по approval — всегда
-человек. Полный перечень прав — [Права и scopes](../reference/permissions.md).
+`artifacts.write`, `projects.read`, `task_types.read`, and **refuses** to grant
+an agent `admin` or `approvals.decide`: an approval decision is always made by a
+human. For the full list of permissions, see
+[Permissions and scopes](../reference/permissions.md).
 
-### Legacy API-ключи
+### Legacy API keys
 
-Control Plane исторически поддерживает статические ключи `cp_<prefix>_<secret>`.
-В поставке они выключены: `CP_LEGACY_API_KEYS_ENABLED=false`, предъявленный
-ключ даёт `invalid_credentials`. Ключ администратора, который возвращает
-первичный bootstrap Control Plane, bootstrap-скрипт сразу отзывает.
+Control Plane has historically supported static keys `cp_<prefix>_<secret>`. In
+the delivery they are disabled: `CP_LEGACY_API_KEYS_ENABLED=false`, and a
+presented key returns `invalid_credentials`. The administrator key returned by
+the initial Control Plane bootstrap is revoked immediately by the bootstrap
+script.
 
-!!! danger "Аварийный вход"
-    Если IAM недоступен, владелец хоста выпускает аварийный ключ: командой
-    в контейнере `control-plane-api`, для активного человека, с правами
-    `admin`, сроком не больше 4 часов и причиной в журнале (CP-ADR-0065).
-    Такой ключ принимается и при закрытом окне legacy-ключей; граница
-    доверия — shell на хосте. Выключается `CP_BREAK_GLASS_ENABLED=false`. См.
-    [Аварийные процедуры](../operations/emergency.md).
+!!! danger "Emergency access"
+    If IAM is unavailable, the host owner issues an emergency key: with a
+    command in the `control-plane-api` container, for an active human, with
+    `admin` permissions, a lifetime of no more than 4 hours, and a reason
+    recorded in the log (CP-ADR-0065). Such a key is accepted even when the
+    legacy key window is closed; the trust boundary is a shell on the host. You
+    disable it with `CP_BREAK_GLASS_ENABLED=false`. See
+    [Emergency procedures](../operations/emergency.md).
 
 ## Memory Service
 
-Память принимает два вида credential параллельно:
+Memory accepts two kinds of credentials in parallel:
 
-- **статический ключ** `MEMORY_API_KEY` (`CB_SERVER_API_KEY`) — полный доступ ко
-  всем namespace; в поставке нужен до bootstrap и демо-сервисам;
-- **токены IAM** audience `memory-service` (`MEMORY_IAM_ENABLED=true`):
-  `memory:read`/`memory:write` — чтение и запись, `memory:pii` — полный доступ к
-  персональным данным, `memory:service` — регистрация доменных пакетов видов,
-  `memory:tenants` — память всех tenant (только service account ядра). Токен
-  даёт доступ к namespace `tenant:<tenant_id>` и его поддереву.
+- **a static key** `MEMORY_API_KEY` (`CB_SERVER_API_KEY`): full access to all
+  namespaces; in the delivery it is needed before bootstrap and by demo
+  services;
+- **IAM tokens** for the `memory-service` audience (`MEMORY_IAM_ENABLED=true`):
+  `memory:read`/`memory:write` for reading and writing, `memory:pii` for full
+  access to personal data, `memory:service` for registering domain kind
+  packages, `memory:tenants` for the memory of all tenants (only the core's
+  service account). A token grants access to the namespace `tenant:<tenant_id>`
+  and its subtree.
 
-Control Plane ходит в память **service account'ом** из
-`secrets/control-plane-iam.env` (режим `CP_CONTEXT_AUTH=auto` переключается на
-него сам, как только файл появился и ядро перезапущено); до этого — статическим
-ключом. Любой дефект токена — `401`, недоступный JWKS — `503` (fail closed).
+Control Plane calls memory **with a service account** from
+`secrets/control-plane-iam.env` (the `CP_CONTEXT_AUTH=auto` mode switches to it
+automatically once the file exists and the core has been restarted); until
+then, it uses the static key. Any token defect returns `401`, and an
+unavailable JWKS returns `503` (fail closed).
 
-## Отзыв доступа
+## Revoking access
 
-| Что отозвать | Как | Когда перестанет работать |
+| What to revoke | How | When it stops working |
 |---|---|---|
-| PAT | `POST /api/v1/tenants/{t}/platform-access-tokens/{id}:revoke` (bootstrap) или `POST /api/v1/platform-access-tokens:revoke-self` | новые обмены — сразу; уже выданные access token — до истечения (≤ TTL, 300 с) |
-| Service account | `POST /api/v1/tenants/{t}/service-accounts/{clientId}:revoke` | то же |
-| Principal IAM целиком | `POST /api/v1/tenants/{t}/principals/{p}:disable` | то же |
-| Доступ к Control Plane | отозвать binding (`POST /api/v1/iam-bindings/{binding_id}:revoke`) или отключить локальный principal | в пределах кэша binding: `CP_IAM_BINDING_CACHE_TTL_SECONDS` (30 с); отрицательный ответ живёт не дольше `CP_IAM_BINDING_STALE_AFTER_SECONDS` (120 с) |
+| PAT | `POST /api/v1/tenants/{t}/platform-access-tokens/{id}:revoke` (bootstrap) or `POST /api/v1/platform-access-tokens:revoke-self` | new exchanges: immediately; access tokens already issued: at expiry (≤ TTL, 300 s) |
+| Service account | `POST /api/v1/tenants/{t}/service-accounts/{clientId}:revoke` | same as above |
+| An entire IAM principal | `POST /api/v1/tenants/{t}/principals/{p}:disable` | same as above |
+| Access to Control Plane | revoke the binding (`POST /api/v1/iam-bindings/{binding_id}:revoke`) or disable the local principal | within the binding cache: `CP_IAM_BINDING_CACHE_TTL_SECONDS` (30 s); a negative response lives no longer than `CP_IAM_BINDING_STALE_AFTER_SECONDS` (120 s) |
 
-Короткий TTL access token ограничивает окно, но не закрывает его: закрывает
-**локальная revocation policy** сервиса. В Control Plane это проекция binding и
-principal: если источник не смог ответить, доступ не выдаётся (fail closed).
+A short access token TTL narrows the window but does not close it: what closes
+it is the service's **local revocation policy**. In Control Plane this is a
+projection of the binding and the principal: if the source cannot answer,
+access is not granted (fail closed).
 
-!!! tip "Порядок заведения нового principal"
-    Сначала создайте binding в Control Plane, потом делайте первый запрос
-    токеном. Отрицательный ответ «binding не найден» кэшируется процессом
-    `control-plane-api` не дольше `CP_IAM_BINDING_STALE_AFTER_SECONDS`.
-    Создание binding через API (`POST /api/v1/principals/{id}/iam-bindings`)
-    сбрасывает кэш этой identity сразу; если же binding появился в обход API,
-    новый доступ заработает только после истечения этого окна.
+!!! tip "Order for adding a new principal"
+    Create the binding in Control Plane first, then make the first request with
+    the token. A negative "binding not found" response is cached by the
+    `control-plane-api` process for no longer than
+    `CP_IAM_BINDING_STALE_AFTER_SECONDS`. Creating a binding through the API
+    (`POST /api/v1/principals/{id}/iam-bindings`) clears the cache for that
+    identity immediately; if the binding was created bypassing the API, the new
+    access starts working only after that window expires.
 
-## Секреты платформы
+## Platform secrets
 
-| Секрет | Где | Назначение |
+| Secret | Where | Purpose |
 |---|---|---|
-| Ключ подписи IAM | `secrets/iam-signing.pem` (RSA 3072, 0600), монтируется docker-секретом | подпись всех access token |
-| `IAM_BOOTSTRAP_TOKEN` | `.env` | административные операции IAM заголовком `X-IAM-Bootstrap-Token` |
-| `CP_BOOTSTRAP_TOKEN` | `.env` | однократный `POST /api/v1/bootstrap` Control Plane (`Authorization: Bearer`); после первого tenant повтор даёт `409 already_bootstrapped` |
-| `MEMORY_API_KEY` | `.env` | статический ключ памяти |
-| PAT оператора | `secrets/harness-pat` (0600) | вход человека |
-| Client credentials сервисов | `secrets/*-iam.env` (0600) | service accounts ядра и опциональных сервисов |
-| Пароли БД, MinIO | `.env` | инфраструктура |
+| IAM signing key | `secrets/iam-signing.pem` (RSA 3072, 0600), mounted as a Docker secret | signs all access tokens |
+| `IAM_BOOTSTRAP_TOKEN` | `.env` | IAM administrative operations via the `X-IAM-Bootstrap-Token` header |
+| `CP_BOOTSTRAP_TOKEN` | `.env` | the one-time Control Plane `POST /api/v1/bootstrap` (`Authorization: Bearer`); after the first tenant, a repeat returns `409 already_bootstrapped` |
+| `MEMORY_API_KEY` | `.env` | the static memory key |
+| Operator PAT | `secrets/harness-pat` (0600) | human login |
+| Service client credentials | `secrets/*-iam.env` (0600) | service accounts of the core and optional services |
+| Database and MinIO passwords | `.env` | infrastructure |
 
-`.env`, `secrets/` и `deploy/state/` исключены из git. Секреты не печатаются
-bootstrap-скриптом и не попадают в журнал событий: Control Plane отвергает
-текст, похожий на секрет, в полях задач и документах Work Graph
-(`secret_material_rejected`). Локальное хранилище PAT клиента
-(`~/.config/iam/credentials.json`) должно иметь права `600`, иначе клиент
-откажется его читать (`iam_credentials_file_permissions`).
+`.env`, `secrets/`, and `deploy/state/` are excluded from git. The bootstrap
+script does not print secrets, and secrets do not reach the event log: Control
+Plane rejects secret-like text in task fields and Work Graph documents
+(`secret_material_rejected`). The client's local PAT store
+(`~/.config/iam/credentials.json`) must have `600` permissions; otherwise the
+client refuses to read it (`iam_credentials_file_permissions`).
 
-Ротация и хранение — [Секреты и ротация](../operations/secrets.md).
+For rotation and storage, see [Secrets and rotation](../operations/secrets.md).
 
-## Граница доверия харнесса
+## Harness trust boundary
 
-Локальные проверки харнесса (MCP-сервер, runner) — защита клиента, а не
-enforcement boundary: человек с доступом к машине может обойти их. Сильная
-граница — на сервере: claim, fencing token, права binding и gate-approvals
-проверяются Control Plane при каждой записи. У runner-демона периметр задают
-непривилегированный пользователь ОС и ограничения systemd, а не режим
-разрешений кодового агента. См. [Identity агента](../runner/agent-identity.md).
+The harness's local checks (MCP server, runner) protect the client; they are not
+an enforcement boundary: a person with access to the machine can bypass them.
+The strong boundary is on the server: Control Plane checks the claim, fencing
+token, binding permissions, and gate approvals on every write. For the runner
+daemon, the perimeter is set by an unprivileged OS user and systemd
+restrictions, not by the coding agent's permission mode. See
+[Agent identity](../runner/agent-identity.md).
 
-## См. также
+## See also
 
-- [Токены, audiences, scopes](../iam/tokens.md)
-- [Credentials и PAT](../iam/credentials.md)
-- [Авторизация и права](../control-plane/authorization.md)
+- [Tokens, audiences, scopes](../iam/tokens.md)
+- [Credentials and PAT](../iam/credentials.md)
+- [Authorization and permissions](../control-plane/authorization.md)
 - [platform-auth-sdk](../sdk/platform-auth-sdk.md)
-- [Аутентификация и доступ — диагностика](../troubleshooting/auth.md)
+- [Troubleshooting: authentication and access](../troubleshooting/auth.md)

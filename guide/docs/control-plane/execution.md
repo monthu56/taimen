@@ -1,33 +1,34 @@
-# Исполнение — claims и runs
 
-Статья описывает протокол исполнения задач: сессии, claims с арендой и
-fencing token, runs как попытки исполнения, checkpoints и журнал действий,
-приостановку и возобновление, передачу работы человеку, дочерние runs и
-управляющие сообщения. Она адресована разработчикам харнессов и runner'ов и
-операторам, разбирающим, почему задача «застряла».
+# Execution — claims and runs
 
-## Три уровня владения
+This page describes the task execution protocol: sessions, claims with a lease
+and a fencing token, runs as execution attempts, checkpoints and the action
+log, suspension and resumption, handing work off to a human, child runs, and
+control messages. It is for developers of harnesses and runners and for
+operators investigating why a task is "stuck".
+
+## Three levels of ownership
 
 ```mermaid
 flowchart LR
-    P["Principal<br/>кто"] --> S["Session<br/>живое подключение<br/>lease + heartbeat"]
-    S --> C["Claim<br/>эксклюзивное владение задачей<br/>lease + fencing token"]
-    C --> R["Run<br/>попытка исполнения<br/>фиксирует token на старте"]
+    P["Principal<br/>who"] --> S["Session<br/>live connection<br/>lease + heartbeat"]
+    S --> C["Claim<br/>exclusive ownership of a task<br/>lease + fencing token"]
+    C --> R["Run<br/>execution attempt<br/>pins the token at start"]
     R --> CK["Checkpoints"]
     R --> AC["Actions"]
     R --> AR["Artifacts"]
     R --> CM["Control messages"]
 ```
 
-- **Session** — аренда живого подключения клиента. Claims держатся на
-  сессии: закрытие или истечение сессии лишает её claims силы.
-- **Claim** — эксклюзивное право писать в задачу. На задаче одновременно не
-  больше одного активного claim (частичный уникальный индекс в базе).
-- **Run** — одна попытка исполнения под claim. На задаче одновременно не
-  больше одного `running` run. Задача может иметь много runs (номер попытки —
+- **Session** — a lease on a live client connection. Claims are held by a
+  session: when the session closes or expires, its claims lose force.
+- **Claim** — the exclusive right to write to a task. A task has at most one
+  active claim at a time (a partial unique index in the database).
+- **Run** — one execution attempt under a claim. A task has at most one
+  `running` run at a time. A task can have many runs (the attempt number is
   `attempt`).
 
-## Сессия
+## Session
 
 ```bash
 curl -s -X POST "$CP/sessions" \
@@ -41,18 +42,18 @@ curl -s -X POST "$CP/sessions" \
   }'
 ```
 
-| Операция | Путь | Кто |
+| Operation | Path | Who |
 |---|---|---|
-| Открыть | `POST /sessions` | `sessions.open` |
-| Продлить | `POST /sessions/{id}:heartbeat` `{ttlSeconds?}` | Владелец или `sessions.manage` |
-| Закрыть | `POST /sessions/{id}:close` | Владелец или `sessions.manage`; освобождает все claims сессии (`reason: session_closed`) |
+| Open | `POST /sessions` | `sessions.open` |
+| Extend | `POST /sessions/{id}:heartbeat` `{ttlSeconds?}` | Owner or `sessions.manage` |
+| Close | `POST /sessions/{id}:close` | Owner or `sessions.manage`; releases all claims of the session (`reason: session_closed`) |
 
-Регистрация харнесса в блоке `harness` и её семантика описаны в
-[Харнесс-протоколе](harness-protocol.md).
+Registering a harness in the `harness` block and its semantics are described in
+the [Harness protocol](harness-protocol.md).
 
 ## Claim
 
-### Захват
+### Claiming
 
 ```bash
 curl -s -X POST "$CP/tasks/TASK-000123:claim" \
@@ -75,67 +76,67 @@ curl -s -X POST "$CP/tasks/TASK-000123:claim" \
 }
 ```
 
-Захват разрешён, только если одновременно выполнены четыре условия:
+A claim is allowed only if all of the following conditions hold at once:
 
-| Условие | Проверка | Отказ |
+| Condition | Check | Rejection |
 |---|---|---|
-| API-право | `tasks.claim` (в режиме PDP — на ресурсе `task:<id>`) | `403 permission_denied` |
-| Eligibility | Principal сессии удовлетворяет всем требованиям задачи (роли, capabilities, skills) | `403 not_eligible` |
-| Readiness | Все пререквизиты `blocks` / `depends_on` в `terminal_success` | `409 task_not_ready` (`details.blockedBy`) |
-| Gate | Нет ожидающего gate-approval | `409 approval_required` (`details.pendingApprovals`) |
-| Конкурентность | Нет живого claim другого держателя | `409 task_already_claimed` |
+| API permission | `tasks.claim` (in PDP mode — on the `task:<id>` resource) | `403 permission_denied` |
+| Eligibility | The session's principal meets all task requirements (roles, capabilities, skills) | `403 not_eligible` |
+| Readiness | All `blocks` / `depends_on` prerequisites are in `terminal_success` | `409 task_not_ready` (`details.blockedBy`) |
+| Gate | No pending gate approval | `409 approval_required` (`details.pendingApprovals`) |
+| Concurrency | No live claim of another holder | `409 task_already_claimed` |
 
-Кроме того, задача не должна быть терминальной (`422 task_not_claimable`),
-а сессия — принадлежать вызывающему (`403 session_owner_mismatch`), быть
-активной (`409 session_not_active`) и не истёкшей (`409 session_expired`).
+In addition, the task must not be terminal (`422 task_not_claimable`), and the
+session must belong to the caller (`403 session_owner_mismatch`), be active
+(`409 session_not_active`), and not be expired (`409 session_expired`).
 
-### Алгоритм захвата
+### Claim algorithm
 
-Захват выполняется в одной транзакции под блокировкой строки задачи:
+A claim runs in a single transaction under a lock on the task row:
 
-1. share-блокировка сессии (до блокировки задачи — порядок session → task);
-2. `SELECT … FOR UPDATE` задачи;
-3. проверка терминальности, eligibility, readiness и gate;
-4. если есть активный claim: живой — `409 task_already_claimed`; истёкший или
-   с мёртвой сессией — переводится в `stale`, событие `claim.expired`
-   (`reason: expired` или `session_inactive`);
-5. `claim_epoch += 1`; новый claim с `fencingToken = claim_epoch`;
-6. `activeClaimId` указывает на новый claim;
-7. задача переводится в `claimStatus` типа, если ребро объявлено
-   (см. [Типы задач](task-types.md));
-8. `version += 1`, событие `task.claimed`, commit.
+1. a share lock on the session (before the task lock — the order is session → task);
+2. `SELECT … FOR UPDATE` on the task;
+3. check terminality, eligibility, readiness, and the gate;
+4. if there is an active claim: live — `409 task_already_claimed`; expired or
+   with a dead session — it is moved to `stale`, event `claim.expired`
+   (`reason: expired` or `session_inactive`);
+5. `claim_epoch += 1`; a new claim with `fencingToken = claim_epoch`;
+6. `activeClaimId` points to the new claim;
+7. the task moves to the type's `claimStatus` if the edge is declared
+   (see [Task types](task-types.md));
+8. `version += 1`, event `task.claimed`, commit.
 
-Реквизиция истёкшего claim не зависит от воркера: её выполняет сама команда
-захвата.
+Requisitioning an expired claim does not depend on the worker: the claim
+command itself does it.
 
-### Состояния claim
+### Claim states
 
 ```mermaid
 stateDiagram-v2
     [*] --> active: :claim / :reclaim
-    active --> active: :heartbeat (продление expiresAt)
-    active --> released: :release, :complete, :succeed,<br/>:suspend, :handoff, закрытие сессии,<br/>force_cancel
-    active --> stale: истечение аренды (воркер или<br/>следующий захват), мёртвая сессия
+    active --> active: :heartbeat (extends expiresAt)
+    active --> released: :release, :complete, :succeed,<br/>:suspend, :handoff, session close,<br/>force_cancel
+    active --> stale: lease expiry (worker or<br/>next claim), dead session
     released --> [*]
     stale --> [*]
 ```
 
-| Статус | Значение |
+| Status | Meaning |
 |---|---|
-| `active` | Действует; живой, только если `expiresAt` в будущем **и** сессия активна и не истекла |
-| `released` | Освобождён штатно; `releaseReason` — `released`, `completed`, `session_closed`, `waiting_approval`, `human_harness_handoff`, `force_cancel` и т. п. |
-| `stale` | Потерян по аренде; `releaseReason` — `expired` или `session_inactive` |
+| `active` | In effect; live only if `expiresAt` is in the future **and** the session is active and not expired |
+| `released` | Released normally; `releaseReason` — `released`, `completed`, `session_closed`, `waiting_approval`, `human_harness_handoff`, `force_cancel`, and so on |
+| `stale` | Lost by lease; `releaseReason` — `expired` or `session_inactive` |
 
-### Аренда и heartbeat
+### Lease and heartbeat
 
-| Параметр | Переменная | По умолчанию |
+| Parameter | Variable | Default |
 |---|---|---|
-| TTL claim | `CP_CLAIM_TTL_SECONDS` | 300 с |
-| Допустимый `ttlSeconds` claim | `CP_CLAIM_TTL_MIN_SECONDS` … `CP_CLAIM_TTL_MAX_SECONDS` | 10 … 3600 с |
-| TTL сессии | `CP_SESSION_TTL_SECONDS` | 300 с |
-| Допустимый `ttlSeconds` сессии | `CP_SESSION_TTL_MIN_SECONDS` … `CP_SESSION_TTL_MAX_SECONDS` | 10 … 3600 с |
+| Claim TTL | `CP_CLAIM_TTL_SECONDS` | 300 s |
+| Allowed claim `ttlSeconds` | `CP_CLAIM_TTL_MIN_SECONDS` … `CP_CLAIM_TTL_MAX_SECONDS` | 10 … 3600 s |
+| Session TTL | `CP_SESSION_TTL_SECONDS` | 300 s |
+| Allowed session `ttlSeconds` | `CP_SESSION_TTL_MIN_SECONDS` … `CP_SESSION_TTL_MAX_SECONDS` | 10 … 3600 s |
 
-`ttlSeconds` вне границ — `422 invalid_ttl` (значение не обрезается).
+`ttlSeconds` out of bounds — `422 invalid_ttl` (the value is not clamped).
 
 ```bash
 curl -s -X POST "$CP/claims/<claim-id>:heartbeat" \
@@ -143,98 +144,99 @@ curl -s -X POST "$CP/claims/<claim-id>:heartbeat" \
   -d '{"ttlSeconds": 600}'
 ```
 
-Heartbeat claim продлевает аренду на `ttlSeconds` от текущего момента и
-отклоняется, если claim уже не активен (`409 claim_not_active`), истёк
-(`409 claim_expired`) или сессия держателя мертва (`409 session_not_active`).
+A claim heartbeat extends the lease by `ttlSeconds` from now and is rejected if
+the claim is no longer active (`409 claim_not_active`), has expired
+(`409 claim_expired`), or the holder's session is dead (`409 session_not_active`).
 
-!!! tip "Продлевайте обе аренды"
-    Claim жив, только пока жива его сессия. Исполнитель должен регулярно
-    продлевать **и** сессию, **и** claim — с запасом, например каждые
-    TTL/3.
+!!! tip "Extend both leases"
+    A claim is alive only while its session is alive. The executor must
+    regularly extend **both** the session **and** the claim, with a margin,
+    for example every TTL/3.
 
-Истечение обрабатывается тремя независимыми путями, корректность не зависит
-ни от одного из них в отдельности:
+Expiry is handled by three independent paths; correctness does not depend on
+any one of them alone:
 
-1. **лениво** — команда, встретившая истёкшую аренду, отклоняет операцию;
-2. **при захвате** — новый claim реквизирует истёкший атомарно;
-3. **фоном** — воркер переводит истёкшие sessions и claims в `stale` с
-   событиями `session.expired` / `claim.expired` и возвращает задачу в
-   `releaseStatus`.
+1. **lazily** — a command that encounters an expired lease rejects the operation;
+2. **on claim** — a new claim requisitions the expired one atomically;
+3. **in the background** — a worker moves expired sessions and claims to
+   `stale` with the events `session.expired` / `claim.expired` and returns the
+   task to `releaseStatus`.
 
-### Освобождение и перезахват
+### Release and reclaim
 
 ```bash
-# Освободить свой claim (идемпотентно)
+# Release your own claim (idempotent)
 curl -s -X POST "$CP/claims/<claim-id>:release" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"reason": "released"}'
 
-# Перехватить истёкший claim (новый fencing token)
+# Take over an expired claim (new fencing token)
 curl -s -X POST "$CP/claims/<claim-id>:reclaim" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"sessionId": "<session-id>"}'
 ```
 
-`:release` доступен держателю или обладателю `claims.manage`; задача
-переходит в `releaseStatus` типа, если ребро объявлено. `:reclaim` требует
-`tasks.claim` и работает только для истёкшего claim или claim с мёртвой
-сессией — живой даёт `409 claim_not_expired`.
+`:release` is available to the holder or to a principal with `claims.manage`;
+the task moves to the type's `releaseStatus` if the edge is declared.
+`:reclaim` requires `tasks.claim` and works only for an expired claim or a
+claim with a dead session — a live one returns `409 claim_not_expired`.
 
-Список и карточка: `GET /claims?taskId=&sessionId=&status=`,
+List and details: `GET /claims?taskId=&sessionId=&status=`,
 `GET /claims/{id}` (`tasks.read`).
 
 ## Fencing token
 
-Fencing token защищает задачу от «зомби» — исполнителя, который потерял
-аренду (завис, потерял сеть), а потом очнулся и продолжает писать.
+The fencing token protects a task from a "zombie" — an executor that lost its
+lease (hung, lost the network) and then woke up and keeps writing.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Исполнитель A
+    participant A as Executor A
     participant CP as Control Plane
-    participant B as Исполнитель B
+    participant B as Executor B
     A->>CP: :claim → fencingToken = 7
-    Note over A: зависание, аренда истекла
-    B->>CP: :claim → старый claim stale, fencingToken = 8
+    Note over A: hang, lease expired
+    B->>CP: :claim → old claim stale, fencingToken = 8
     B->>CP: :start-run {claimId: B, fencingToken: 8}
-    Note over CP: зомби-run A (если был) → failed, reason superseded
+    Note over CP: zombie run A (if any) → failed, reason superseded
     A->>CP: PATCH /tasks/… {claimId: A, fencingToken: 7}
     CP-->>A: 409 stale_claim
     A->>CP: :succeed run A
-    CP-->>A: 409 stale_claim (или run_not_active)
+    CP-->>A: 409 stale_claim (or run_not_active)
 ```
 
-`claim_epoch` задачи растёт при каждом захвате, и токен claim равен эпохе
-на момент захвата. Пока у задачи есть **живой** claim, любая мутация задачи
-(`PATCH`, `:complete`) обязана предъявить `claimId` и `fencingToken`:
+The task's `claim_epoch` grows with every claim, and the claim token equals the
+epoch at the moment of the claim. While the task has a **live** claim, any task
+mutation (`PATCH`, `:complete`) must present `claimId` and `fencingToken`:
 
-| Ситуация | Ответ |
+| Situation | Response |
 |---|---|
-| Живой claim есть, `claimId` не передан | `409 task_claimed` (в `details` — id и срок действующего claim) |
-| Передан `claimId`, но живого claim нет | `409 stale_claim` |
-| `claimId` не совпадает с `activeClaimId` или токен не передан | `409 stale_claim` |
-| Токен не равен токену claim или текущей эпохе | `409 stale_claim` (`presentedFencingToken`, `currentClaimEpoch`) |
-| Claim принадлежит другому principal | `403 claim_holder_mismatch` |
+| A live claim exists, `claimId` not passed | `409 task_claimed` (`details` holds the id and expiry of the current claim) |
+| `claimId` passed, but there is no live claim | `409 stale_claim` |
+| `claimId` does not match `activeClaimId`, or the token is not passed | `409 stale_claim` |
+| The token does not equal the claim token or the current epoch | `409 stale_claim` (`presentedFencingToken`, `currentClaimEpoch`) |
+| The claim belongs to another principal | `403 claim_holder_mismatch` |
 
-Claim с мёртвой сессией задачу не защищает: запись без `claimId` проходит,
-а сам claim пожнёт следующий захват или воркер.
+A claim with a dead session does not protect the task: a write without
+`claimId` goes through, and the claim itself is reaped by the next claim or
+the worker.
 
-!!! danger "Получили `stale_claim` — остановитесь"
-    `409 stale_claim` означает, что владение потеряно и задачей уже может
-    владеть другой исполнитель. Не повторяйте запись: перечитайте контекст
-    (`GET /harness/context`, `GET /tasks/{ref}`) и начните заново с захвата.
-    Честно зафиксировать провал своего run (`:fail`) при этом можно.
+!!! danger "Got `stale_claim` — stop"
+    `409 stale_claim` means ownership is lost and another executor may
+    already own the task. Do not retry the write: re-read the context
+    (`GET /harness/context`, `GET /tasks/{ref}`) and start over with a claim.
+    You can still honestly record the failure of your run (`:fail`).
 
 ## Run
 
-### Состояния run
+### Run states
 
 ```mermaid
 stateDiagram-v2
     [*] --> running: :start-run
     running --> succeeded: :succeed
-    running --> failed: :fail, supersede<br/>(новый run под новым claim)
+    running --> failed: :fail, supersede<br/>(new run under a new claim)
     running --> cancelled: :cancel, force_cancel
     running --> suspended: :suspend, :handoff
     succeeded --> [*]
@@ -243,11 +245,11 @@ stateDiagram-v2
     suspended --> [*]
 ```
 
-Все статусы, кроме `running`, **терминальны для этого run**. В том числе
-`suspended`: продолжение — это новый claim и новый run, который читает
-checkpoints предыдущих.
+All statuses except `running` are **terminal for this run**. This includes
+`suspended`: continuation is a new claim and a new run that reads the
+checkpoints of the previous ones.
 
-### Старт
+### Start
 
 ```bash
 curl -s -X POST "$CP/tasks/TASK-000123:start-run" \
@@ -262,52 +264,53 @@ curl -s -X POST "$CP/tasks/TASK-000123:start-run" \
   }'
 ```
 
-- Требует `tasks.claim` и живой claim вызывающего с верным токеном.
-- Терминальная задача — `422 task_not_runnable`.
-- Уже есть `running` run под этим же claim — `409 run_already_active`.
-- `running` run от **прежней** эпохи (зомби) переводится в `failed` с
-  `failureReason: superseded` в той же транзакции.
-- `attempt` = число runs задачи + 1; run фиксирует `fencingToken` claim.
-- В той же транзакции компилируется Effective Harness Manifest run'а
-  (см. [Харнесс-протокол](harness-protocol.md)) и, если задача запущена
-  родительским run, привязывается дочерний handle.
+- Requires `tasks.claim` and a live claim of the caller with the correct token.
+- A terminal task — `422 task_not_runnable`.
+- There is already a `running` run under the same claim — `409 run_already_active`.
+- A `running` run from a **previous** epoch (a zombie) is moved to `failed`
+  with `failureReason: superseded` in the same transaction.
+- `attempt` = number of runs of the task + 1; the run pins the claim's
+  `fencingToken`.
+- In the same transaction the run's Effective Harness Manifest is compiled
+  (see [Harness protocol](harness-protocol.md)) and, if the task was launched
+  by a parent run, the child handle is bound.
 
-Бюджет: `maxDurationSeconds` и `maxActions` (положительные, иначе
-`422 invalid_budget`). Превышение отклоняет новые checkpoints и actions
-с `409 budget_exceeded`.
+Budget: `maxDurationSeconds` and `maxActions` (positive, otherwise
+`422 invalid_budget`). Exceeding it rejects new checkpoints and actions with
+`409 budget_exceeded`.
 
-### Завершение run
+### Finishing a run
 
-| Действие | Путь | Кто | Что делает |
+| Action | Path | Who | What it does |
 |---|---|---|---|
-| Успех | `POST /runs/{id}:succeed` `{output?, completeTask=true}` | Владелец run, `tasks.claim`, живой claim | Run → `succeeded`; при `completeTask: true` атомарно завершает задачу (claim освобождается, задача → `completionStatus`); при `false` claim остаётся |
-| Провал | `POST /runs/{id}:fail` `{failureReason, output?}` | Владелец run или `claims.manage` | Run → `failed`; задачу и claim **не трогает** |
-| Отмена | `POST /runs/{id}:cancel` `{reason}` | Владелец run или `claims.manage` | Run → `cancelled`; задачу и claim не трогает |
-| Приостановка | `POST /runs/{id}:suspend` `{reason, waitingForApprovalId?}` | Владелец с живым claim | Run → `suspended`, claim освобождён |
-| Передача человеку | `POST /runs/{id}:handoff` | Владелец с живым claim | См. ниже |
+| Success | `POST /runs/{id}:succeed` `{output?, completeTask=true}` | Run owner, `tasks.claim`, live claim | Run → `succeeded`; with `completeTask: true` atomically completes the task (the claim is released, the task → `completionStatus`); with `false` the claim remains |
+| Failure | `POST /runs/{id}:fail` `{failureReason, output?}` | Run owner or `claims.manage` | Run → `failed`; does **not touch** the task or the claim |
+| Cancellation | `POST /runs/{id}:cancel` `{reason}` | Run owner or `claims.manage` | Run → `cancelled`; does not touch the task or the claim |
+| Suspension | `POST /runs/{id}:suspend` `{reason, waitingForApprovalId?}` | Owner with a live claim | Run → `suspended`, the claim is released |
+| Handoff to a human | `POST /runs/{id}:handoff` | Owner with a live claim | See below |
 
-`:fail` и `:cancel` не требуют fencing: исполнитель, потерявший аренду,
-всё равно может честно зафиксировать исход своей попытки. `:succeed`,
-наоборот, перепроверяет fencing под блокировкой задачи: зомби получит
-`409 stale_claim` и ничего не запишет. Чужой run — `403 run_holder_mismatch`,
-run не в `running` — `409 run_not_active`.
+`:fail` and `:cancel` do not require fencing: an executor that lost its lease
+can still honestly record the outcome of its attempt. `:succeed`, in contrast,
+re-checks fencing under the task lock: a zombie gets `409 stale_claim` and
+writes nothing. Someone else's run — `403 run_holder_mismatch`; a run not in
+`running` — `409 run_not_active`.
 
-`:succeed` с `completeTask: true` дополнительно проверяет то же, что
-`:complete`: задача не завершена (`409 task_already_completed`), не отменена
-(`422 task_cancelled`), нет gate (`409 approval_required`), ребро в
-`completionStatus` объявлено (`422 invalid_transition`).
+`:succeed` with `completeTask: true` additionally checks the same things as
+`:complete`: the task is not completed (`409 task_already_completed`), not
+cancelled (`422 task_cancelled`), there is no gate (`409 approval_required`),
+and the edge to `completionStatus` is declared (`422 invalid_transition`).
 
-!!! note "`:complete` при активном run"
-    `POST /tasks/{ref}:complete` с живым claim, под которым идёт run, даёт
-    `409 run_in_progress`: завершайте через `:succeed`, `:fail` или `:cancel`.
-    Зомби-run прежней эпохи при `:complete` переводится в `failed`
-    (`superseded`).
+!!! note "`:complete` with an active run"
+    `POST /tasks/{ref}:complete` with a live claim under which a run is going
+    returns `409 run_in_progress`: finish through `:succeed`, `:fail`, or
+    `:cancel`. A zombie run of a previous epoch is moved to `failed`
+    (`superseded`) on `:complete`.
 
 ### Checkpoints
 
-Checkpoint — явное операционное состояние для рестарта и возобновления:
-что сделано, что дальше, где результат. Не скрытые рассуждения модели и не
-история чата.
+A checkpoint is explicit operational state for restart and resumption: what is
+done, what is next, where the result is. It is not hidden model reasoning and
+not chat history.
 
 ```bash
 curl -s -X POST "$CP/runs/<run-id>/checkpoints" \
@@ -315,78 +318,78 @@ curl -s -X POST "$CP/runs/<run-id>/checkpoints" \
   -d '{"kind": "progress", "data": {"step": 3, "done": ["schema", "api"], "next": ["tests"]}}'
 ```
 
-- Пишет только владелец run с живым claim (`tasks.claim`).
-- `seq` выделяется под блокировкой run — последовательность без пропусков.
-- `GET /runs/{id}/checkpoints` — по `seq`, старые первыми; без `limit` и
-  `cursor` — весь журнал одной страницей.
-- Событие `run.checkpointed` несёт только ссылки (`checkpointId`, `seq`,
-  `kind`), данные checkpoint в журнал не попадают.
+- Only the run owner with a live claim can write (`tasks.claim`).
+- `seq` is allocated under the run lock — a gapless sequence.
+- `GET /runs/{id}/checkpoints` — by `seq`, oldest first; without `limit` and
+  `cursor` — the whole log as a single page.
+- The `run.checkpointed` event carries only references (`checkpointId`, `seq`,
+  `kind`); checkpoint data does not go into the event log.
 
-### Actions — журнал действий
+### Actions — the action log
 
-Run actions — лёгкий аудит исполнения (вызов инструмента начат / завершён /
-провален), хранящийся **вне** журнала событий.
+Run actions are a lightweight execution audit (a tool call started / finished /
+failed), stored **outside** the event log.
 
 ```bash
-# Однофазная запись
+# Single-phase record
 curl -s -X POST "$CP/runs/<run-id>/actions" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"action": "tool.Bash", "status": "completed", "metadata": {"summary": "make test"}}'
 
-# Двухфазная: started → :finish
+# Two-phase: started → :finish
 curl -s -X POST "$CP/runs/<run-id>/actions/<action-id>:finish" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "failed"}'
 ```
 
-- Статусы: `started`, `completed`, `failed`; повторное завершение —
+- Statuses: `started`, `completed`, `failed`; finishing again —
   `409 action_already_finished`.
-- `skill` (UUID, `name` или `name@version`) проверяется по effective tool
-  policy run'а: вне политики — `403 tool_not_authorized`.
-- Бюджет `maxActions` и `maxDurationSeconds` → `409 budget_exceeded`.
-- После применённого кооперативного cancel новые действия отклоняются:
+- `skill` (UUID, `name`, or `name@version`) is checked against the run's
+  effective tool policy: outside the policy — `403 tool_not_authorized`.
+- The `maxActions` and `maxDurationSeconds` budget → `409 budget_exceeded`.
+- After an applied cooperative cancel, new actions are rejected:
   `409 run_cancel_requested`.
-- Входы и выходы инструментов в actions не хранятся — только ссылки и
-  небольшие метаданные. Полная лента — в артефакте `transcript`
-  (см. [Трассу прогонов](../runner/trace.md)).
+- Tool inputs and outputs are not stored in actions — only references and
+  small metadata. The full feed is in the `transcript` artifact
+  (see [Run trace](../runner/trace.md)).
 
-## Приостановка и возобновление
+## Suspension and resumption
 
-Долгое ожидание (решение approval, внешний ввод) не должно держать
-эксклюзивную аренду. Поэтому ожидание — это **завершение run** в статусе
-`suspended` с освобождением claim, а продолжение — новый claim и новый run.
+A long wait (an approval decision, external input) must not hold an exclusive
+lease. So waiting is a **run finish** with the `suspended` status and the claim
+released, and continuation is a new claim and a new run.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant R as Исполнитель
+    participant R as Executor
     participant CP as Control Plane
-    participant H as Человек
+    participant H as Human
     R->>CP: POST /runs/{r1}/checkpoints {kind: "before_approval", ...}
     R->>CP: POST /approvals {task, gate: true, assignedPrincipalId}
     R->>CP: POST /runs/{r1}:suspend {reason: "waiting_approval", waitingForApprovalId}
-    Note over CP: run r1 → suspended, claim released,<br/>задача → releaseStatus
+    Note over CP: run r1 → suspended, claim released,<br/>task → releaseStatus
     H->>CP: POST /approvals/{id}:approve
-    R->>CP: POST /tasks/{t}:claim → новый claim, fencingToken+1
+    R->>CP: POST /tasks/{t}:claim → new claim, fencingToken+1
     R->>CP: POST /tasks/{t}:start-run → run r2 (attempt 2)
     R->>CP: GET /runs/{r2}/context
-    CP-->>R: checkpoints и артефакты всех прошлых runs
+    CP-->>R: checkpoints and artifacts of all past runs
 ```
 
-`waitingForApprovalId` сохраняется в `metadata` run'а и в событии
-`run.suspended`. Пока gate не решён, повторный захват отклоняется
-`409 approval_required`. Полный протокол восстановления после рестарта —
-в [Харнесс-протоколе](harness-protocol.md).
+`waitingForApprovalId` is stored in the run's `metadata` and in the
+`run.suspended` event. While the gate is undecided, a new claim is rejected
+with `409 approval_required`. The full protocol for recovery after a restart is
+in the [Harness protocol](harness-protocol.md).
 
-## Передача работы человеку (handoff)
+## Handing work off to a human (handoff)
 
-`POST /runs/{id}:handoff` одной транзакцией:
+`POST /runs/{id}:handoff` in a single transaction:
 
-1. пишет checkpoint `kind: "handoff"`;
-2. переводит run в `suspended` (`metadata.suspendReason`,
+1. writes a checkpoint `kind: "handoff"`;
+2. moves the run to `suspended` (`metadata.suspendReason`,
    `metadata.handoffCheckpointId`);
-3. освобождает claim, задача → `releaseStatus`;
-4. пишет события `run.checkpointed`, `run.suspended`, `claim.released`,
+3. releases the claim, the task → `releaseStatus`;
+4. writes the events `run.checkpointed`, `run.suspended`, `claim.released`,
    `run.handoff_prepared`.
 
 ```bash
@@ -398,93 +401,93 @@ curl -s -X POST "$CP/runs/<run-id>:handoff" \
     "checkpoint": {
       "kind": "handoff",
       "data": {
-        "summary": "Схема и API готовы, осталось покрыть тестами граничные случаи",
-        "nextSteps": ["Добавить тесты на пустой ввод", "Проверить миграцию на копии БД"],
+        "summary": "Schema and API are done; edge cases still need test coverage",
+        "nextSteps": ["Add tests for empty input", "Check the migration on a database copy"],
         "evidenceRefs": ["artifact:<artifact-id>"]
       }
     }
   }'
 ```
 
-Ответ содержит `run`, `task`, `checkpoint`, `eventCursor` и подсказку:
+The response contains `run`, `task`, `checkpoint`, `eventCursor`, and a hint:
 
 ```json
 {"resume": {"taskId": "…", "previousRunId": "…", "nextAction": "claim_and_start_new_run"}}
 ```
 
-`reason` допускается только `human_harness_handoff`, `kind` — только
-`handoff`; `summary` до 10 000 символов, `nextSteps` и `evidenceRefs` — до
-100 элементов. Данные проверяются на секреты, транскрипты и локальные пути
-машины (`422 unsafe_handoff_payload`). Используйте `Idempotency-Key`:
-повтор после неоднозначного ответа вернёт тот же checkpoint и курсор.
+Only `human_harness_handoff` is allowed as `reason`, and only `handoff` as
+`kind`; `summary` is up to 10,000 characters, `nextSteps` and `evidenceRefs` up
+to 100 items. The data is checked for secrets, transcripts, and local machine
+paths (`422 unsafe_handoff_payload`). Use an `Idempotency-Key`: a repeat after
+an ambiguous response returns the same checkpoint and cursor.
 
-## Управляющие сообщения run
+## Run control messages
 
-Active Turn Control — надёжная очередь управляющих намерений для живого run,
-хранимая в PostgreSQL, а не в памяти харнесса: команда «остановись» или
-«поменяй курс» переживает рестарт исполнителя.
+Active Turn Control is a durable queue of control intents for a live run,
+stored in PostgreSQL rather than in harness memory: a "stop" or "change
+course" command survives an executor restart.
 
-| `operation` | `directive` | Право | Назначение |
+| `operation` | `directive` | Permission | Purpose |
 |---|---|---|---|
-| `queue` | обязателен | `tasks.write` | Добавить указание в очередь |
-| `steer` | обязателен | `tasks.write` | Скорректировать текущий курс |
-| `redirect` | обязателен | `tasks.write` | Сменить цель хода |
-| `request_cancel` | запрещён | `tasks.write` | Кооперативная остановка |
-| `force_cancel` | запрещён, `reason` обязателен | `claims.manage` | Немедленная остановка сервером |
+| `queue` | required | `tasks.write` | Add an instruction to the queue |
+| `steer` | required | `tasks.write` | Correct the current course |
+| `redirect` | required | `tasks.write` | Change the goal of the turn |
+| `request_cancel` | forbidden | `tasks.write` | Cooperative stop |
+| `force_cancel` | forbidden, `reason` required | `claims.manage` | Immediate stop by the server |
 
 ```bash
 curl -s -X POST "$CP/runs/<run-id>/control-messages" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{"operation": "steer", "causalPosition": "turn:12",
-       "directive": "Сначала исправь падающий тест, потом рефакторинг",
+       "directive": "Fix the failing test first, then refactor",
        "expectedRunVersion": 5}'
 ```
 
-- `Idempotency-Key` (1–200 символов) и `expectedRunVersion` обязательны;
-  несовпадение версии — `409 run_version_conflict`.
-- `directive` и `reason` проверяются на credential-подобные строки и
-  абсолютные локальные пути (`422 unsafe_control_payload`).
-- `GET /runs/{id}/control-messages` — лента с курсором (по умолчанию 50,
-  максимум 200).
+- `Idempotency-Key` (1–200 characters) and `expectedRunVersion` are required;
+  a version mismatch — `409 run_version_conflict`.
+- `directive` and `reason` are checked for credential-like strings and
+  absolute local paths (`422 unsafe_control_payload`).
+- `GET /runs/{id}/control-messages` — a feed with a cursor (50 by default,
+  200 maximum).
 
 ```mermaid
 stateDiagram-v2
     [*] --> accepted
-    accepted --> applied: ack держателя<br/>(safeBoundary обязателен)
-    accepted --> rejected: ack держателя
-    accepted --> superseded: ack держателя или force_cancel
+    accepted --> applied: holder ack<br/>(safeBoundary required)
+    accepted --> rejected: holder ack
+    accepted --> superseded: holder ack or force_cancel
     applied --> [*]
     rejected --> [*]
     superseded --> [*]
 ```
 
-Подтверждение — `POST /runs/{id}/control-messages/{mid}:acknowledge`
-держателем живого claim с `claimId`, `fencingToken`, `expectedRunVersion` и
-`expectedMessageVersion`. Сообщения подтверждаются строго по порядку
-(`409 control_message_out_of_order`); повторное — `409 control_message_terminal`.
+Acknowledgement is `POST /runs/{id}/control-messages/{mid}:acknowledge` by the
+holder of the live claim with `claimId`, `fencingToken`, `expectedRunVersion`,
+and `expectedMessageVersion`. Messages are acknowledged strictly in order
+(`409 control_message_out_of_order`); a repeat — `409 control_message_terminal`.
 
-- Применённый `request_cancel` запрещает новые actions run'а
-  (`409 run_cancel_requested`) и каскадирует кооперативную отмену в дочерние
-  runs с политикой `cascade_cooperative`. Окончательную остановку
-  исполнитель фиксирует `:cancel` или `:fail`.
-- `force_cancel` одной транзакцией переводит run в `cancelled`, освобождает
-  claim, помечает прежние `accepted` сообщения `superseded` и каскадно
-  отменяет активные runs потомков по связям `spawned_by` — независимо от
-  их политики отмены. Остановка самого процесса — ответственность среды
-  исполнения.
-- Упрощённый вариант кооперативной отмены — `POST /runs/{id}:request-cancel`
-  (`tasks.write` или `claims.manage`, идемпотентен): ставит
-  `cancelRequestedAt` и пишет `run.cancel_requested`.
+- An applied `request_cancel` forbids new actions of the run
+  (`409 run_cancel_requested`) and cascades cooperative cancellation to child
+  runs with the `cascade_cooperative` policy. The executor records the final
+  stop with `:cancel` or `:fail`.
+- `force_cancel` in a single transaction moves the run to `cancelled`, releases
+  the claim, marks earlier `accepted` messages `superseded`, and cascades
+  cancellation to the active runs of descendants by `spawned_by` relations —
+  regardless of their cancellation policy. Stopping the process itself is the
+  responsibility of the execution environment.
+- A simplified form of cooperative cancellation is `POST /runs/{id}:request-cancel`
+  (`tasks.write` or `claims.manage`, idempotent): it sets `cancelRequestedAt`
+  and writes `run.cancel_requested`.
 
-Тексты `directive` и `reason` в журнал событий не копируются — события
-`run.control_message.*` несут только идентификаторы, `seq`, операцию,
-статус, `causalPosition` и `safeBoundary`.
+The `directive` and `reason` texts are not copied into the event log — the
+`run.control_message.*` events carry only identifiers, `seq`, the operation,
+the status, `causalPosition`, and `safeBoundary`.
 
-## Дочерние runs
+## Child runs
 
-Run может запустить дочернюю работу через durable handle: дочерняя задача,
-связь `spawned_by` и handle создаются в одной транзакции.
+A run can launch child work through a durable handle: the child task, the
+`spawned_by` relation, and the handle are created in a single transaction.
 
 ```bash
 curl -s -X POST "$CP/runs/<parent-run-id>/child-handles" \
@@ -492,54 +495,54 @@ curl -s -X POST "$CP/runs/<parent-run-id>/child-handles" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "correlationId": "split-tests-1",
-    "title": "Прогнать интеграционные тесты модуля",
+    "title": "Run the module integration tests",
     "grant": {"permissions": ["tasks.read", "tasks.claim", "artifacts.write"]},
     "cancellationPolicy": "cascade_cooperative",
     "expiresInSeconds": 86400
   }'
 ```
 
-| Свойство | Правило |
+| Property | Rule |
 |---|---|
-| Кто запускает | Владелец живого claim родительского run; `tasks.claim` + `tasks.write`; `Idempotency-Key` обязателен |
-| Идемпотентность | Уникальность `(parentRunId, correlationId)`: повтор даёт `200` с тем же handle, новый — `201` |
-| `handleToken` | Непрозрачный локатор, отдаётся **один раз**; не credential — доступ всё равно проверяется |
-| Потолок прав (`grant`) | Пересечение запрошенного с тем, что может родитель; вниз по дереву потолок только сужается. Пропущенное поле наследуется, `[]` не даёт ничего |
-| Глубина | Не больше 8 уровней |
-| Срок жизни | По умолчанию 7 суток, максимум 90 |
-| Политика отмены | `cascade_cooperative` (по умолчанию) или `detach` |
-| Результат | Ограниченный: summary до 2 000 символов, до 50 ссылок на артефакты, данные до 16 КиБ; хэшируется |
+| Who launches | The owner of the live claim of the parent run; `tasks.claim` + `tasks.write`; `Idempotency-Key` is required |
+| Idempotency | Uniqueness of `(parentRunId, correlationId)`: a repeat returns `200` with the same handle, a new one — `201` |
+| `handleToken` | An opaque locator, returned **once**; not a credential — access is still checked |
+| Permission ceiling (`grant`) | The intersection of what is requested with what the parent can do; down the tree the ceiling only narrows. A missing field is inherited, `[]` grants nothing |
+| Depth | At most 8 levels |
+| Lifetime | 7 days by default, 90 maximum |
+| Cancellation policy | `cascade_cooperative` (the default) or `detach` |
+| Result | Bounded: summary up to 2,000 characters, up to 50 artifact references, data up to 16 KiB; hashed |
 
-Дочернюю задачу захватывает любой подходящий исполнитель; handle узнаёт свой
-run при `:start-run`. Статус handle **не хранится**, а выводится из дочерних
-задачи и run при каждом чтении: `pending`, `running`, `suspended`,
-`succeeded`, `failed`, `cancelled`, `revoked`, `expired`.
+Any suitable executor claims the child task; the handle learns its run at
+`:start-run`. The handle status is **not stored**; it is derived from the child
+task and run on every read: `pending`, `running`, `suspended`, `succeeded`,
+`failed`, `cancelled`, `revoked`, `expired`.
 
-- `GET /runs/{id}/child-handles?active=true` — handles родителя;
-- `GET /child-handles/{idOrToken}` — статус и ограниченный результат;
-- `POST /child-handles/{id}:revoke` `{reason, cancelChild}` — отзыв
-  (держатель родительского run или `claims.manage`).
+- `GET /runs/{id}/child-handles?active=true` — the parent's handles;
+- `GET /child-handles/{idOrToken}` — status and bounded result;
+- `POST /child-handles/{id}:revoke` `{reason, cancelChild}` — revocation
+  (the holder of the parent run or `claims.manage`).
 
-События `run.child.launched|started|resolved|revoked|cancel_requested`
-несут идентификаторы, `correlationId`, исход и хэш результата — без
-заголовков, summary и данных дочерней работы.
+The events `run.child.launched|started|resolved|revoked|cancel_requested`
+carry identifiers, `correlationId`, the outcome, and the result hash — without
+the titles, summary, or data of the child work.
 
-## Discovery и диагностика
+## Discovery and diagnostics
 
-### Какую работу можно взять
+### What work can be claimed
 
 ```bash
 curl -s "$CP/work/available?assignedToMe=true&limit=20" -H "Authorization: Bearer $TOKEN"
 ```
 
-`GET /work/available` (`tasks.read`) отдаёт задачи, которые вызывающий может
-взять прямо сейчас: нетерминальные, eligible, готовые, без живого claim и
-без gate. Параметры: `workspaceId`, `includeDescendants`, `projectId`,
-`includeSubprojects`, `assigneeId`, `assignedToMe` (перекрывает
-`assigneeId`), `limit`, `cursor`. Страница может быть короче `limit` при
-непустом `nextCursor`. Выдача рекомендательная — авторитетен только claim.
+`GET /work/available` (`tasks.read`) returns the tasks the caller can claim
+right now: non-terminal, eligible, ready, without a live claim, and without a
+gate. Parameters: `workspaceId`, `includeDescendants`, `projectId`,
+`includeSubprojects`, `assigneeId`, `assignedToMe` (overrides `assigneeId`),
+`limit`, `cursor`. A page can be shorter than `limit` with a non-empty
+`nextCursor`. The listing is advisory — only the claim is authoritative.
 
-### Почему задачу нельзя взять
+### Why a task cannot be claimed
 
 ```bash
 curl -s "$CP/tasks/TASK-000123/claimability" -H "Authorization: Bearer $TOKEN"
@@ -559,59 +562,59 @@ curl -s "$CP/tasks/TASK-000123/claimability" -H "Authorization: Bearer $TOKEN"
 }
 ```
 
-Возможные коды: `task_not_claimable`, `task_already_claimed`,
-`task_not_ready`, `approval_required`, `not_eligible`. Диагностика без
-блокировок — только подсказка.
+Possible codes: `task_not_claimable`, `task_already_claimed`,
+`task_not_ready`, `approval_required`, `not_eligible`. The diagnostics take no
+locks — it is only a hint.
 
-### Контекст исполнителя
+### Executor context
 
-- `GET /harness/context` — self-контекст: identity, активные sessions,
-  claims и runs, роли, skills, ожидающие approvals, курсор журнала.
-- `GET /runs/{id}/context` — Run Context: задача, claim, требования,
-  артефакты и checkpoints **всех прошлых runs** задачи, skills, курсор.
+- `GET /harness/context` — self-context: identity, active sessions, claims and
+  runs, roles, skills, pending approvals, the event log cursor.
+- `GET /runs/{id}/context` — Run Context: the task, claim, requirements,
+  artifacts and checkpoints of **all past runs** of the task, skills, cursor.
 
-Оба описаны в [Контексте задачи и памяти](context.md).
+Both are described in [Task context and memory](context.md).
 
-## Коды ошибок исполнения
+## Execution error codes
 
-| Код | HTTP | Когда |
+| Code | HTTP | When |
 |---|---|---|
-| `task_already_claimed` | 409 | У задачи живой claim другого держателя |
-| `task_not_ready` | 409 | Незавершённые пререквизиты |
-| `approval_required` | 409 | Ожидающий gate-approval блокирует claim / complete |
-| `task_not_claimable` | 422 | Задача терминальна |
-| `not_eligible` | 403 | Не выполнены требования задачи |
-| `task_claimed` | 409 | Мутация без `claimId` при живом claim |
-| `stale_claim` | 409 | Предъявленный claim или токен устарел |
-| `claim_holder_mismatch` | 403 | Claim принадлежит другому principal |
-| `claim_not_active`, `claim_expired`, `claim_not_expired` | 409 | Операции с арендой claim |
-| `session_not_active`, `session_expired`, `session_owner_mismatch` | 409 / 403 | Проблемы с сессией |
-| `invalid_ttl` | 422 | `ttlSeconds` вне границ |
-| `run_already_active` | 409 | Под этим claim уже идёт run |
-| `run_not_active` | 409 | Run уже не `running` |
-| `run_holder_mismatch` | 403 | Run принадлежит другому principal |
-| `run_in_progress` | 409 | `:complete` при активном run |
-| `task_not_runnable` | 422 | `:start-run` на терминальной задаче |
-| `budget_exceeded` | 409 | Исчерпан бюджет run |
-| `run_cancel_requested` | 409 | Новые actions после применённой отмены |
-| `invalid_handoff`, `unsafe_handoff_payload` | 422 | Неверный handoff |
+| `task_already_claimed` | 409 | The task has a live claim of another holder |
+| `task_not_ready` | 409 | Unfinished prerequisites |
+| `approval_required` | 409 | A pending gate approval blocks claim / complete |
+| `task_not_claimable` | 422 | The task is terminal |
+| `not_eligible` | 403 | Task requirements are not met |
+| `task_claimed` | 409 | A mutation without `claimId` while a live claim exists |
+| `stale_claim` | 409 | The presented claim or token is stale |
+| `claim_holder_mismatch` | 403 | The claim belongs to another principal |
+| `claim_not_active`, `claim_expired`, `claim_not_expired` | 409 | Operations on the claim lease |
+| `session_not_active`, `session_expired`, `session_owner_mismatch` | 409 / 403 | Session problems |
+| `invalid_ttl` | 422 | `ttlSeconds` out of bounds |
+| `run_already_active` | 409 | A run is already going under this claim |
+| `run_not_active` | 409 | The run is no longer `running` |
+| `run_holder_mismatch` | 403 | The run belongs to another principal |
+| `run_in_progress` | 409 | `:complete` with an active run |
+| `task_not_runnable` | 422 | `:start-run` on a terminal task |
+| `budget_exceeded` | 409 | The run budget is exhausted |
+| `run_cancel_requested` | 409 | New actions after an applied cancellation |
+| `invalid_handoff`, `unsafe_handoff_payload` | 422 | Invalid handoff |
 
-Полный справочник — [Коды ошибок](../reference/errors.md).
+The full reference is [Error codes](../reference/errors.md).
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| Задача «висит» в `in_progress`, никто не работает | Claim истёк, но воркер не запущен, и никто не пытался взять задачу | Проверить `control-plane-worker`; следующий `:claim` реквизирует claim сам |
-| `409 task_already_claimed` у того же исполнителя после рестарта | Прежний claim ещё жив (аренда не истекла, сессия активна) | Закрыть старую сессию (`:close`) или дождаться истечения; затем захватить заново |
-| Run остаётся `running` после истечения claim | Воркер освобождает claim, но run не трогает | Новый `:start-run` под новым claim переведёт его в `failed` (`superseded`); владелец может вызвать `:fail` |
-| `409 stale_claim` на `:succeed` | Аренда потеряна, задачей владеет другой | Остановить запись, зафиксировать `:fail`, перечитать контекст |
-| `409 approval_required` на `:succeed` | На задаче ждёт gate | `:suspend` с `waitingForApprovalId`, продолжить после решения новым run |
+| The task "hangs" in `in_progress`, nobody is working | The claim expired, but the worker is not running, and nobody tried to claim the task | Check `control-plane-worker`; the next `:claim` requisitions the claim itself |
+| `409 task_already_claimed` for the same executor after a restart | The previous claim is still alive (the lease has not expired, the session is active) | Close the old session (`:close`) or wait for expiry; then claim again |
+| The run stays `running` after the claim expires | The worker releases the claim but does not touch the run | A new `:start-run` under a new claim moves it to `failed` (`superseded`); the owner can call `:fail` |
+| `409 stale_claim` on `:succeed` | The lease is lost; someone else owns the task | Stop writing, record `:fail`, re-read the context |
+| `409 approval_required` on `:succeed` | A gate is pending on the task | `:suspend` with `waitingForApprovalId`, continue after the decision with a new run |
 
-## См. также
+## See also
 
-- [Харнесс-протокол](harness-protocol.md) — регистрация, recovery, manifest.
-- [Approvals](approvals.md) — gate и исходы решения.
-- [Типы задач и статусы](task-types.md) — `claimStatus`, `releaseStatus`, `completionStatus`.
-- [Артефакты и комментарии](artifacts.md)
-- [Диагностика исполнения](../troubleshooting/runner.md)
+- [Harness protocol](harness-protocol.md) — registration, recovery, manifest.
+- [Approvals](approvals.md) — gate and decision outcomes.
+- [Task types and statuses](task-types.md) — `claimStatus`, `releaseStatus`, `completionStatus`.
+- [Artifacts and comments](artifacts.md)
+- [Execution diagnostics](../troubleshooting/runner.md)

@@ -1,43 +1,45 @@
-# Конфигурация IAM
 
-Справочник по настройке `iam-service`: переменные окружения сервиса с
-дефолтами, как они задаются в корневом `compose.yml`, переменные локального
-клиента, bootstrap-токен, ключ подписи, миграции и типичные проблемы
-конфигурации. Для администраторов инсталляции.
+# IAM configuration
 
-## Переменные сервиса
+A reference for configuring `iam-service`: the service's environment variables
+with their defaults, how they are set in the root `compose.yml`, local client
+variables, the bootstrap token, the signing key, migrations, and common
+configuration problems. It is for installation administrators.
 
-Сервис читает настройки из окружения с префиксом `IAM_` (pydantic-settings,
-регистр не важен, неизвестные переменные игнорируются).
+## Service variables
 
-| Переменная | По умолчанию | Описание |
+The service reads its settings from the environment with the `IAM_` prefix
+(pydantic-settings; case-insensitive; unknown variables are ignored).
+
+| Variable | Default | Description |
 |---|---|---|
-| `IAM_DATABASE_URL` | `postgresql+psycopg://iam:iam@localhost:5435/iam` | Строка подключения SQLAlchemy (async, драйвер psycopg). Используется и сервисом, и Alembic |
-| `IAM_BOOTSTRAP_TOKEN` | `""` | Секрет административного API (заголовок `X-IAM-Bootstrap-Token`). Пусто — административные эндпоинты закрыты |
-| `IAM_ISSUER` | `http://localhost:8010` | Значение `iss` в выпускаемых токенах; должно совпадать с настройкой issuer у всех сервисов |
-| `IAM_TOKEN_TTL_SECONDS` | `300` | Срок жизни access token (и `expiresIn` в ответах обмена) |
-| `IAM_SIGNING_PRIVATE_KEY` | `""` | RSA private key в PEM (без пароля) строкой |
-| `IAM_SIGNING_PRIVATE_KEY_FILE` | `""` | Путь к файлу ключа; используется, если `IAM_SIGNING_PRIVATE_KEY` пуст |
-| `IAM_SIGNING_KEY_ID` | `local-dev` | `kid` в заголовке токенов и в JWKS |
-| `IAM_CREATE_SCHEMA_ON_STARTUP` | `false` | Создавать таблицы при старте (`create_all`). Только для разработки; в эксплуатации схему меняет только Alembic |
-| `IAM_PAT_DEFAULT_TTL_SECONDS` | `2592000` (30 дней) | Срок PAT, если `expiresInSeconds` не передан |
-| `IAM_PAT_MAX_TTL_SECONDS` | `31536000` (365 дней) | Максимальный срок PAT |
-| `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` | `300` | Максимальный возраст authentication context человека для выпуска PAT |
-| `IAM_LEGACY_CREDENTIAL_MAX_TTL_SECONDS` | `7776000` (90 дней) | Максимальное окно совместимости импортированного ключа Control Plane |
-| `IAM_SCIM_AUDIENCE` | `iam-scim` | Audience токена SCIM-клиента |
-| `IAM_SCIM_SCOPE` | `scim:write` | Scope, обязательный для SCIM |
-| `IAM_SCIM_MAX_PAGE_SIZE` | `200` | Максимальный размер страницы выдачи SCIM |
+| `IAM_DATABASE_URL` | `postgresql+psycopg://iam:iam@localhost:5435/iam` | SQLAlchemy connection string (async, psycopg driver). Used by both the service and Alembic |
+| `IAM_BOOTSTRAP_TOKEN` | `""` | Secret for the administrative API (header `X-IAM-Bootstrap-Token`). If empty, administrative endpoints are closed |
+| `IAM_ISSUER` | `http://localhost:8010` | The `iss` value in issued tokens; must match the issuer setting of all services |
+| `IAM_TOKEN_TTL_SECONDS` | `300` | Access token lifetime (and `expiresIn` in exchange responses) |
+| `IAM_SIGNING_PRIVATE_KEY` | `""` | RSA private key in PEM (without a passphrase) as a string |
+| `IAM_SIGNING_PRIVATE_KEY_FILE` | `""` | Path to the key file; used if `IAM_SIGNING_PRIVATE_KEY` is empty |
+| `IAM_SIGNING_KEY_ID` | `local-dev` | `kid` in the token header and in JWKS |
+| `IAM_CREATE_SCHEMA_ON_STARTUP` | `false` | Create tables on startup (`create_all`). Development only; in operation, only Alembic changes the schema |
+| `IAM_PAT_DEFAULT_TTL_SECONDS` | `2592000` (30 days) | PAT lifetime if `expiresInSeconds` is not passed |
+| `IAM_PAT_MAX_TTL_SECONDS` | `31536000` (365 days) | Maximum PAT lifetime |
+| `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` | `300` | Maximum age of a human's authentication context for PAT issuance |
+| `IAM_LEGACY_CREDENTIAL_MAX_TTL_SECONDS` | `7776000` (90 days) | Maximum compatibility window for an imported Control Plane key |
+| `IAM_SCIM_AUDIENCE` | `iam-scim` | Audience of the SCIM client's token |
+| `IAM_SCIM_SCOPE` | `scim:write` | Scope required for SCIM |
+| `IAM_SCIM_MAX_PAGE_SIZE` | `200` | Maximum SCIM result page size |
 
-!!! note "Параметры, которые задаются не переменными"
-    Кэш JWKS внешнего IdP (`jwksCacheTtlSeconds`, `jwksStaleGraceSeconds`) и
-    требования к `acr`/`amr` настраиваются на каждом identity provider (см.
-    [Федерация](federation.md)). Реестр audiences и их scopes — данные в базе
-    (см. [Токены](tokens.md)).
+!!! note "Parameters that are not set through variables"
+    The external IdP's JWKS cache (`jwksCacheTtlSeconds`,
+    `jwksStaleGraceSeconds`) and the `acr`/`amr` requirements are configured
+    on each identity provider (see [Federation](federation.md)). The registry
+    of audiences and their scopes is data in the database (see
+    [Tokens](tokens.md)).
 
-## Как это задано в `compose.yml`
+## How it is set in `compose.yml`
 
-Корневой `compose.yml` (профиль `core`) передаёт в контейнер `iam-service`
-только часть переменных; остальные работают с дефолтами:
+The root `compose.yml` (profile `core`) passes only some of the variables to
+the `iam-service` container; the rest use their defaults:
 
 ```yaml
 iam-service:
@@ -55,29 +57,29 @@ iam-service:
   mem_limit: ${IAM_MEM_LIMIT:-256m}
 ```
 
-Переменные `.env`, относящиеся к IAM:
+`.env` variables related to IAM:
 
-| Переменная `.env` | По умолчанию | Куда попадает |
+| `.env` variable | Default | Where it goes |
 |---|---|---|
-| `TAIMEN_PUBLIC_URL` | — (обязательна) | `IAM_ISSUER` = `${TAIMEN_PUBLIC_URL}/iam`; также issuer у всех сервисов (`CP_IAM_ISSUER`, `CB_IAM_ISSUER`, …) |
-| `IAM_POSTGRES_PASSWORD` | — (обязательна) | пароль `iam-db` и `IAM_DATABASE_URL` |
-| `IAM_BOOTSTRAP_TOKEN` | — (обязательна) | `IAM_BOOTSTRAP_TOKEN`; также bootstrap-скрипт и чтение журнала IAM проекциями внешних сервисов (например, PDP) |
-| `IAM_SIGNING_KEY_FILE` | `./secrets/iam-signing.pem` | файл docker-секрета `iam_signing_key` |
+| `TAIMEN_PUBLIC_URL` | — (required) | `IAM_ISSUER` = `${TAIMEN_PUBLIC_URL}/iam`; also the issuer for all services (`CP_IAM_ISSUER`, `CB_IAM_ISSUER`, …) |
+| `IAM_POSTGRES_PASSWORD` | — (required) | password of `iam-db` and `IAM_DATABASE_URL` |
+| `IAM_BOOTSTRAP_TOKEN` | — (required) | `IAM_BOOTSTRAP_TOKEN`; also the bootstrap script and reading of the IAM event log by projections of external services (for example, a PDP) |
+| `IAM_SIGNING_KEY_FILE` | `./secrets/iam-signing.pem` | file of the docker secret `iam_signing_key` |
 | `IAM_SIGNING_KEY_ID` | `local-dev` | `IAM_SIGNING_KEY_ID` |
-| `IAM_TENANT_ID` | пусто | tenant IAM для сервисов и исполнителей, которым он нужен при обмене credentials; заполнить после `make bootstrap` |
-| `IAM_HOST_PORT` | `18010` | порт IAM на `127.0.0.1` хоста |
-| `IAM_MEM_LIMIT` | `256m` | лимит памяти контейнера |
-| `IAM_BUILD_CONTEXT` | `./iam-service` | контекст сборки образа |
-| `PG_MEM_LIMIT` | `256m` | лимит памяти `iam-db` (общий для баз) |
-| `VOLUME_IAM_DB` | `${COMPOSE_PROJECT_NAME}_iam_db` | имя volume базы |
+| `IAM_TENANT_ID` | empty | IAM tenant for services and executors that need it for credential exchange; fill in after `make bootstrap` |
+| `IAM_HOST_PORT` | `18010` | IAM port on the host's `127.0.0.1` |
+| `IAM_MEM_LIMIT` | `256m` | container memory limit |
+| `IAM_BUILD_CONTEXT` | `./iam-service` | image build context |
+| `PG_MEM_LIMIT` | `256m` | memory limit of `iam-db` (shared by the databases) |
+| `VOLUME_IAM_DB` | `${COMPOSE_PROJECT_NAME}_iam_db` | name of the database volume |
 
-`make secrets` создаёт `.env` из `.env.example`, заполняет пустые секреты
-случайными значениями и генерирует `secrets/iam-signing.pem` (RSA 3072, `0600`).
+`make secrets` creates `.env` from `.env.example`, fills empty secrets with
+random values, and generates `secrets/iam-signing.pem` (RSA 3072, `0600`).
 
-### Изменение параметров, которых нет в `compose.yml`
+### Changing parameters not present in `compose.yml`
 
-Чтобы поменять, например, срок access token или PAT, добавьте переменные в
-override-файл compose, не правя поставляемый `compose.yml`:
+To change, for example, the access token or PAT lifetime, add the variables to
+a compose override file instead of editing the shipped `compose.yml`:
 
 ```yaml
 # compose.override.yml
@@ -92,49 +94,50 @@ services:
 docker compose up -d iam-service
 ```
 
-!!! warning "Не увеличивайте TTL access token без нужды"
-    Уже выданный access token IAM не может отозвать: он живёт до `exp`.
-    Чем длиннее `IAM_TOKEN_TTL_SECONDS`, тем шире окно, в течение которого
-    отключённый пользователь ещё проходит проверку у сервисов без собственной
-    revocation-проекции. Режим `TokenLifetimeWindow` в platform-auth-sdk по
-    умолчанию отклоняет токены, которым осталось жить больше 900 с.
+!!! warning "Do not increase the access token TTL without need"
+    IAM cannot revoke an access token already issued: it lives until `exp`.
+    The longer `IAM_TOKEN_TTL_SECONDS` is, the wider the window during which a
+    disabled user still passes verification in services that have no
+    revocation projection of their own. The `TokenLifetimeWindow` mode in
+    platform-auth-sdk rejects by default tokens that have more than 900 s left
+    to live.
 
-## Bootstrap-токен {#bootstrap-token}
+## Bootstrap token {#bootstrap-token}
 
-`IAM_BOOTSTRAP_TOKEN` — единственная граница административного API IAM:
+`IAM_BOOTSTRAP_TOKEN` is the only boundary of the IAM administrative API:
 
-- сравнивается в постоянном времени с заголовком `X-IAM-Bootstrap-Token`;
-- пустое значение переменной закрывает все административные эндпоинты
+- it is compared in constant time with the `X-IAM-Bootstrap-Token` header;
+- an empty variable value closes all administrative endpoints
   (`401 unauthorized`);
-- заголовок `Authorization: Bearer …` для административных операций **не**
-  принимается — только `X-IAM-Bootstrap-Token`;
-- в audit действие записывается от имени `bootstrap`.
+- the `Authorization: Bearer …` header is **not** accepted for administrative
+  operations; only `X-IAM-Bootstrap-Token` is;
+- in audit, the action is recorded on behalf of `bootstrap`.
 
-Рекомендации:
+Recommendations:
 
-1. Генерируйте длинное случайное значение (`make secrets` делает это сам) и
-   храните только в `.env` с правами `0600`.
-2. Не передавайте его клиентам, агентам и в CI, которым нужны только PAT.
-3. Ограничьте административные пути IAM на периметре (см.
-   [API](api.md) и [Периметр и TLS](../operations/edge-and-tls.md)).
-4. При подозрении на компрометацию смените значение в `.env`, пересоздайте
-   `iam-service` (`docker compose up -d iam-service`) и проверьте журнал
-   `GET /api/v1/events` на неожиданные `principal.created`,
+1. Generate a long random value (`make secrets` does this for you) and store
+   it only in `.env` with `0600` permissions.
+2. Do not give it to clients, agents, or CI that need only PATs.
+3. Restrict the IAM administrative paths at the edge (see [API](api.md) and
+   [Edge and TLS](../operations/edge-and-tls.md)).
+4. If you suspect compromise, change the value in `.env`, recreate
+   `iam-service` (`docker compose up -d iam-service`), and check the
+   `GET /api/v1/events` log for unexpected `principal.created`,
    `platform_access_token.issued`, `service_account.created`.
 
-!!! danger "Токен не для разработки в общих средах"
-    Самостоятельный `docker-compose.yml` репозитория `iam-service` по
-    умолчанию использует `dev-bootstrap-token-change-me`. Это значение только
-    для локальной разработки — в любой общей среде его нужно заменить.
+!!! danger "This token is not for development in shared environments"
+    The standalone `docker-compose.yml` of the `iam-service` repository uses
+    `dev-bootstrap-token-change-me` by default. This value is for local
+    development only; replace it in any shared environment.
 
-## Ключ подписи
+## Signing key
 
-| Требование | Почему |
+| Requirement | Why |
 |---|---|
-| RSA, PEM, без пароля | IAM загружает ключ без passphrase и отвергает не-RSA ключи |
-| Файл `0600`, владелец uid `10001` (Linux) | контейнер работает под пользователем `iam` (uid 10001); root-овый `0600` он не прочитает |
-| Уникальный `IAM_SIGNING_KEY_ID` на каждый ключ | сервисы кешируют ключи по `kid` |
-| Файл вне git | `secrets/` в `.gitignore` |
+| RSA, PEM, no passphrase | IAM loads the key without a passphrase and rejects non-RSA keys |
+| File `0600`, owner uid `10001` (Linux) | the container runs as user `iam` (uid 10001); it cannot read a root-owned `0600` file |
+| A unique `IAM_SIGNING_KEY_ID` for each key | services cache keys by `kid` |
+| File outside git | `secrets/` is in `.gitignore` |
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out secrets/iam-signing.pem
@@ -142,27 +145,30 @@ chmod 600 secrets/iam-signing.pem
 sudo chown 10001:10001 secrets/iam-signing.pem   # Linux
 ```
 
-Процедура смены ключа — в статье [Токены, audiences, scopes](tokens.md).
+The key change procedure is in [Tokens, audiences, scopes](tokens.md).
 
 ## Issuer
 
-`IAM_ISSUER` определяет `iss` каждого токена и должен **точно** совпадать с
-issuer, настроенным в сервисах (`CP_IAM_ISSUER`, `CB_IAM_ISSUER`,
-`NS_IAM_ISSUER`, …). В `compose.yml` все
-они выводятся из одного `TAIMEN_PUBLIC_URL`, поэтому совпадают автоматически.
+`IAM_ISSUER` defines the `iss` of every token and must **exactly** match the
+issuer configured in services (`CP_IAM_ISSUER`, `CB_IAM_ISSUER`,
+`NS_IAM_ISSUER`, …). In `compose.yml`, all of them are derived from a single
+`TAIMEN_PUBLIC_URL`, so they match automatically.
 
-!!! danger "Смена `TAIMEN_PUBLIC_URL` меняет issuer"
-    Binding principal в Control Plane хранится по паре
-    `(issuer, iam_principal_id)`. После смены публичного адреса старые
-    bindings перестают находиться, и вход закрывается для всех. Переносите
-    bindings тем же изменением — см. [Обновление и миграции](../operations/upgrades.md).
+!!! danger "Changing `TAIMEN_PUBLIC_URL` changes the issuer"
+    A principal binding in Control Plane is stored by the
+    `(issuer, iam_principal_id)` pair. After the public address changes, old
+    bindings can no longer be found, and sign-in closes for everyone. Migrate
+    the bindings in the same change; see
+    [Upgrades and migrations](../operations/upgrades.md).
 
-## База данных и миграции
+## Database and migrations
 
-- Отдельная база PostgreSQL 16 (`iam-db`, пользователь и база `iam`).
-- Схема управляется Alembic; контейнер выполняет `alembic upgrade head`
-  перед запуском API. `alembic` берёт строку подключения из `IAM_DATABASE_URL`.
-- Ручной запуск миграций (например, из исходников против базы на хосте):
+- A separate PostgreSQL 16 database (`iam-db`, user and database `iam`).
+- Alembic manages the schema; the container runs `alembic upgrade head`
+  before starting the API. `alembic` takes the connection string from
+  `IAM_DATABASE_URL`.
+- Running migrations manually (for example, from source against a database on
+  the host):
 
     ```bash
     cd iam-service
@@ -170,61 +176,62 @@ issuer, настроенным в сервисах (`CP_IAM_ISSUER`, `CB_IAM_ISS
       uv run alembic upgrade head
     ```
 
-| Ревизия | Содержимое |
+| Revision | Contents |
 |---|---|
-| `0001` | tenants, principals, memberships, external identities, группы, audiences, service accounts, outbox, audit |
-| `0002` | identity providers, федерация, проекция групп |
-| `0003` | Platform Access Tokens и authentication contexts |
-| `0004` | SCIM: provisioning sources, SCIM-пользователи и группы |
+| `0001` | tenants, principals, memberships, external identities, groups, audiences, service accounts, outbox, audit |
+| `0002` | identity providers, federation, group projection |
+| `0003` | Platform Access Tokens and authentication contexts |
+| `0004` | SCIM: provisioning sources, SCIM users and groups |
 
-Резервное копирование — обычный `pg_dump` базы `iam` (см.
-[Резервное копирование](../operations/backup.md)). В базе хранятся только хэши
-секретов; ключ подписи в базу не входит и копируется отдельно.
+Backup is a regular `pg_dump` of the `iam` database (see
+[Backup](../operations/backup.md)). The database stores only hashes of
+secrets; the signing key is not part of the database and is backed up
+separately.
 
-## Переменные локального клиента
+## Local client variables
 
-Используются CLI `iam` и клиентами на `control-plane-client` (MCP-плагин,
-runner). Подробно — в [Credentials и PAT](credentials.md).
+Used by the `iam` CLI and by clients built on `control-plane-client` (MCP
+plugin, runner). Details are in [Credentials and PAT](credentials.md).
 
-| Переменная | По умолчанию | Описание |
+| Variable | Default | Description |
 |---|---|---|
-| `IAM_CREDENTIAL_MODE` | пусто | `environment` (или `ci`) — брать PAT из `IAM_PLATFORM_ACCESS_TOKEN` |
-| `IAM_PLATFORM_ACCESS_TOKEN` | пусто | PAT в режиме environment; без режима — ошибка |
-| `IAM_PRINCIPAL` | пусто | чей credential использовать, если на машине их несколько для одной пары IAM + tenant |
-| `IAM_NO_KEYCHAIN` | пусто | `1` — не использовать macOS Keychain (только файл) |
-| `IAM_BINDING_FILE` | пусто | явный путь к `binding.json` вместо поиска `.iam/binding.json` |
-| `XDG_CONFIG_HOME` | `~/.config` | база пути `iam/credentials.json` |
-| `CONTROL_PLANE_IAM_URL` | пусто | адрес IAM для клиента Control Plane |
-| `CONTROL_PLANE_IAM_TENANT` | пусто | tenant IAM |
-| `CONTROL_PLANE_IAM_AUDIENCE` | `control-plane` | audience обмена |
-| `CONTROL_PLANE_IAM_SCOPES` | пусто | scopes через пробел или запятую |
+| `IAM_CREDENTIAL_MODE` | empty | `environment` (or `ci`): take the PAT from `IAM_PLATFORM_ACCESS_TOKEN` |
+| `IAM_PLATFORM_ACCESS_TOKEN` | empty | PAT in environment mode; without the mode, an error |
+| `IAM_PRINCIPAL` | empty | whose credential to use if the machine has several for the same IAM + tenant pair |
+| `IAM_NO_KEYCHAIN` | empty | `1`: do not use macOS Keychain (file only) |
+| `IAM_BINDING_FILE` | empty | explicit path to `binding.json` instead of searching for `.iam/binding.json` |
+| `XDG_CONFIG_HOME` | `~/.config` | base of the `iam/credentials.json` path |
+| `CONTROL_PLANE_IAM_URL` | empty | IAM address for the Control Plane client |
+| `CONTROL_PLANE_IAM_TENANT` | empty | IAM tenant |
+| `CONTROL_PLANE_IAM_AUDIENCE` | `control-plane` | exchange audience |
+| `CONTROL_PLANE_IAM_SCOPES` | empty | scopes separated by spaces or commas |
 
-## Типичные проблемы конфигурации
+## Common configuration problems
 
-| Симптом | Причина | Что сделать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| `401 unauthorized` на административных вызовах | неверный/пустой `X-IAM-Bootstrap-Token`, пустой `IAM_BOOTSTRAP_TOKEN` в контейнере, или использован `Authorization: Bearer` | передавайте именно `X-IAM-Bootstrap-Token`; проверьте переменные контейнера: `docker compose exec iam-service env` (ищите `IAM_BOOTSTRAP_TOKEN`) |
-| `500` на `/.well-known/jwks.json` и на любом обмене | ключ подписи не задан или не читается | проверьте `IAM_SIGNING_KEY_FILE`, наличие файла и владельца uid 10001 |
-| `500` при обмене после смены ключа, `PermissionError` в логах | файл ключа `root:root 0600` | `chown 10001:10001` на хосте, права оставить `0600` |
-| Сервис отвечает `401` на свежий токен | `iss` в токене не равен issuer сервиса | сверить `IAM_ISSUER` и `*_IAM_ISSUER`; оба должны выводиться из `TAIMEN_PUBLIC_URL` |
-| Сервис отвечает `503 verification_unavailable` | сервис не может получить JWKS дольше `stale_after` | проверить доступность `http://iam-service:8010/.well-known/jwks.json` из контейнера сервиса |
-| Все токены отклоняются несколько минут после смены ключа | `kid` не изменён | задать новый `IAM_SIGNING_KEY_ID` и пересоздать `iam-service` |
-| `403 scope_not_allowed` при обмене | scope без префикса (`write` вместо `control-plane:write`) или вне потолка | запрашивать полные имена scopes из `allowedScopes` |
-| `403 authentication_context_required/expired` при выпуске PAT человеку | нет входа или прошло больше 300 с | записать authentication context и сразу выпустить PAT |
-| `400 idempotency_key_required` | не передан `Idempotency-Key` | добавить заголовок с новым UUID |
-| `422 principal_kind_not_allowed` | PAT для service account | использовать client credentials |
-| `iam_environment_mode_required` у клиента | задан `IAM_PLATFORM_ACCESS_TOKEN` без режима | добавить `IAM_CREDENTIAL_MODE=environment` |
-| `credential_ambiguous` / `iam_credential_ambiguous` | несколько credentials одной пары IAM + tenant на машине | задать `IAM_PRINCIPAL` для каждого процесса |
-| `credentials_file_permissions` | `credentials.json` доступен группе/всем | `chmod 600 ~/.config/iam/credentials.json` |
-| `503 identity_provider_unavailable` при федерации | IAM не достаёт discovery/JWKS IdP | проверить, что IAM разрешает адрес issuer; при необходимости задать `jwksUri` |
-| Вход через браузер создаёт второй principal | external identity не привязана к существующему principal | привязать заранее, см. [Федерация](federation.md) |
+| `401 unauthorized` on administrative calls | wrong/empty `X-IAM-Bootstrap-Token`, empty `IAM_BOOTSTRAP_TOKEN` in the container, or `Authorization: Bearer` was used | pass exactly `X-IAM-Bootstrap-Token`; check the container variables: `docker compose exec iam-service env` (look for `IAM_BOOTSTRAP_TOKEN`) |
+| `500` on `/.well-known/jwks.json` and on any exchange | the signing key is not set or cannot be read | check `IAM_SIGNING_KEY_FILE`, that the file exists, and that its owner is uid 10001 |
+| `500` on exchange after a key change, `PermissionError` in the logs | the key file is `root:root 0600` | `chown 10001:10001` on the host, keep permissions at `0600` |
+| A service returns `401` for a fresh token | `iss` in the token does not equal the service's issuer | compare `IAM_ISSUER` and `*_IAM_ISSUER`; both must be derived from `TAIMEN_PUBLIC_URL` |
+| A service returns `503 verification_unavailable` | the service cannot get JWKS for longer than `stale_after` | check that `http://iam-service:8010/.well-known/jwks.json` is reachable from the service container |
+| All tokens are rejected for several minutes after a key change | the `kid` was not changed | set a new `IAM_SIGNING_KEY_ID` and recreate `iam-service` |
+| `403 scope_not_allowed` on exchange | scope without the prefix (`write` instead of `control-plane:write`) or outside the ceiling | request full scope names from `allowedScopes` |
+| `403 authentication_context_required/expired` when issuing a PAT to a human | no sign-in, or more than 300 s have passed | record an authentication context and issue the PAT right away |
+| `400 idempotency_key_required` | `Idempotency-Key` was not passed | add the header with a new UUID |
+| `422 principal_kind_not_allowed` | a PAT for a service account | use client credentials |
+| `iam_environment_mode_required` in the client | `IAM_PLATFORM_ACCESS_TOKEN` is set without the mode | add `IAM_CREDENTIAL_MODE=environment` |
+| `credential_ambiguous` / `iam_credential_ambiguous` | several credentials for the same IAM + tenant pair on the machine | set `IAM_PRINCIPAL` for each process |
+| `credentials_file_permissions` | `credentials.json` is accessible to the group/everyone | `chmod 600 ~/.config/iam/credentials.json` |
+| `503 identity_provider_unavailable` during federation | IAM cannot reach the IdP's discovery/JWKS | check that IAM resolves the issuer address; set `jwksUri` if needed |
+| Browser sign-in creates a second principal | the external identity is not linked to the existing principal | link it in advance; see [Federation](federation.md) |
 
-Больше сценариев — в [Диагностике: аутентификация и доступ](../troubleshooting/auth.md).
+More scenarios are in [Troubleshooting: authentication and access](../troubleshooting/auth.md).
 
-## См. также
+## See also
 
-- [Конфигурация .env](../getting-started/configuration.md)
-- [Переменные окружения](../reference/environment.md)
-- [Секреты и ротация](../operations/secrets.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
-- [API IAM](api.md)
+- [.env configuration](../getting-started/configuration.md)
+- [Environment variables](../reference/environment.md)
+- [Secrets and rotation](../operations/secrets.md)
+- [Services and ports](../reference/services-and-ports.md)
+- [IAM API](api.md)

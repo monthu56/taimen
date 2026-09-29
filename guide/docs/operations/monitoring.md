@@ -1,20 +1,22 @@
-# Мониторинг и здоровье
 
-Как понять, что установка Taimen работает: health-эндпоинты сервисов,
-метрики Control Plane, `make smoke`, логи и набор алертов, которые стоит
-завести. Статья для дежурного инженера и того, кто настраивает наблюдаемость.
+# Monitoring and health
 
-## Быстрая проверка
+How to tell that a Taimen installation is working: service health
+endpoints, Control Plane metrics, `make smoke`, logs, and the set of alerts
+worth setting up. This article is for the on-call engineer and whoever sets
+up observability.
+
+## Quick check
 
 ```bash
 cd /opt/taimen/src
-make smoke                                   # health всех поднятых сервисов
-docker compose --profile "*" ps              # статусы и healthcheck контейнеров
-curl -s http://127.0.0.1:18000/health/ready  # Control Plane: БД + ревизия миграций
+make smoke                                   # health of all running services
+docker compose --profile "*" ps              # container statuses and healthchecks
+curl -s http://127.0.0.1:18000/health/ready  # Control Plane: database + migration revision
 curl -s http://127.0.0.1:18000/metrics | grep -E '^(context_adapter|active_)'
 ```
 
-Пример вывода `make smoke`:
+Sample `make smoke` output:
 
 
 ```text
@@ -23,110 +25,110 @@ curl -s http://127.0.0.1:18000/metrics | grep -E '^(context_adapter|active_)'
   memory-service       OK  200 http://127.0.0.1:18001/healthz
 ```
 
-Скрипт `tools/smoke.py` берёт порты из `.env`, пропускает сервисы, которых
-нет среди запущенных, и завершается с кодом `1`, если хоть один запущенный
-сервис ответил статусом `≥ 400`. Его удобно ставить последним шагом выкладки
-и в cron с алертом по коду возврата.
+The `tools/smoke.py` script takes ports from `.env`, skips services that are
+not running, and exits with code `1` if any running service responded with a
+status `≥ 400`. It works well as the last step of a deployment and in cron
+with an alert on the exit code.
 
-## Health-эндпоинты
+## Health endpoints
 
-| Сервис | Эндпоинт | Порт на хосте | Что проверяет |
+| Service | Endpoint | Host port | What it checks |
 |---|---|---|---|
-| `iam-service` | `GET /healthz` | 18010 | Процесс жив (`{"status":"ok"}`); БД не проверяется |
-| `control-plane-api` | `GET /health/live` | 18000 | Процесс жив (`{"status":"alive"}`) |
-| `control-plane-api` | `GET /health/ready` | 18000 | БД доступна **и** ревизия Alembic равна head; иначе `503` с `reason` |
-| `memory-service` | `GET /healthz` | 18001 | Подключение к БД, число узлов графа и чанков; `503`, если БД недоступна |
-| Базы PostgreSQL | `pg_isready` | — | Healthcheck compose |
+| `iam-service` | `GET /healthz` | 18010 | The process is alive (`{"status":"ok"}`); the database is not checked |
+| `control-plane-api` | `GET /health/live` | 18000 | The process is alive (`{"status":"alive"}`) |
+| `control-plane-api` | `GET /health/ready` | 18000 | The database is reachable **and** the Alembic revision equals head; otherwise `503` with `reason` |
+| `memory-service` | `GET /healthz` | 18001 | Database connection, the number of graph nodes and chunks; `503` if the database is unreachable |
+| PostgreSQL databases | `pg_isready` | — | Compose healthcheck |
 
-Ответы `/health/ready` Control Plane:
+Control Plane `/health/ready` responses:
 
-=== "Готов"
+=== "Ready"
 
     ```json
     {"status": "ready", "revision": "<alembic revision>"}
     ```
 
-=== "БД недоступна"
+=== "Database unreachable"
 
     ```json
     {"status": "unavailable", "reason": "database_unreachable"}
     ```
 
-=== "Миграции отстали"
+=== "Migrations behind"
 
     ```json
     {"status": "unavailable", "reason": "migrations_pending",
-     "dbRevision": "<в базе>", "headRevision": "<в образе>"}
+     "dbRevision": "<in the database>", "headRevision": "<in the image>"}
     ```
 
-!!! note "Healthcheck внутри контейнеров"
-    Все healthcheck в `compose.yml` и Dockerfile обращаются к
-    `127.0.0.1`, а не к `localhost`: в slim- и busybox-образах `localhost`
-    может резолвиться в IPv6 `::1`, а сервис слушает только IPv4 —
-    контейнер навсегда остаётся `unhealthy` при живом сервисе. Если пишете
-    свой healthcheck, следуйте тому же правилу.
+!!! note "Healthchecks inside containers"
+    All healthchecks in `compose.yml` and the Dockerfiles call `127.0.0.1`,
+    not `localhost`: in slim and busybox images `localhost` can resolve to
+    IPv6 `::1` while the service listens only on IPv4, and the container
+    stays `unhealthy` forever while the service is alive. If you write your
+    own healthcheck, follow the same rule.
 
-## Метрики Control Plane
+## Control Plane metrics
 
-`GET /metrics` отдаёт метрики в текстовом формате Prometheus. Эндпоинт **не
-аутентифицирован** — снимайте его с `127.0.0.1:18000` или изнутри сети
-compose (`control-plane-api:8000`) и не публикуйте наружу (см.
-[Периметр и TLS](edge-and-tls.md)). Метки намеренно низкой кардинальности:
-ни tenant, ни задача в метки не попадают.
+`GET /metrics` returns metrics in the Prometheus text format. The endpoint
+is **not authenticated**: scrape it from `127.0.0.1:18000` or from inside the
+compose network (`control-plane-api:8000`) and do not expose it (see
+[Edge and TLS](edge-and-tls.md)). Labels are deliberately low-cardinality:
+neither tenant nor task goes into labels.
 
-### Счётчики и датчики
+### Counters and gauges
 
-| Метрика | Тип | Смысл |
+| Metric | Type | Meaning |
 |---|---|---|
-| `http_requests_total{method,status}` | counter | HTTP-запросы по методу и статусу |
-| `active_harness_sessions` | gauge | Активные сессии harness (не истёкшие) |
-| `active_claims` | gauge | Активные claims задач |
-| `active_runs` | gauge | Runs в статусе `running` |
-| `claim_takeovers_total` | counter | Перехваты claim после истечения аренды |
-| `stale_fencing_rejections_total` | counter | Отказы записи со старым fencing token (зомби-harness после takeover) |
-| `run_cancellations_total` | counter | Отменённые runs |
-| `context_requests_total`, `context_request_duration_seconds_sum`/`_count` | counter | Сборка контекста для harness и её длительность |
-| `context_degraded_total` | counter | Контекст отдан в деградированном виде (память недоступна) |
-| `context_provider_failures_total` | counter | Отказы провайдера памяти на интерактивном пути |
-| `context_adapter_delivered_total`, `_duplicates_total`, `_failures_total` | counter | Доставка журнала в память: доставлено, дубликаты, отказы |
-| `context_adapter_parked_tenants` | gauge | Tenants, доставка которых встала (parked) |
-| `context_adapter_lag` | gauge | Отставание доставки в событиях (ограничено 1000) |
-| `context_adapter_lag_capped` | gauge | `1`, если отставание не меньше 1000 |
-| `event_replay_requests_total`, `event_replay_events_total` | counter | Чтение журнала потребителями |
-| `tool_invocation_denied_total` | counter | Отказы вызова инструментов (скиллов) |
-| `authz_shadow_*`, `authz_policy_unavailable_total` | counter | Только при `CP_AUTHZ_MODE=shadow` или `policy`: сверки и расхождения с PDP |
+| `http_requests_total{method,status}` | counter | HTTP requests by method and status |
+| `active_harness_sessions` | gauge | Active (unexpired) harness sessions |
+| `active_claims` | gauge | Active task claims |
+| `active_runs` | gauge | Runs in `running` status |
+| `claim_takeovers_total` | counter | Claim takeovers after lease expiry |
+| `stale_fencing_rejections_total` | counter | Write rejections with a stale fencing token (a zombie harness after takeover) |
+| `run_cancellations_total` | counter | Cancelled runs |
+| `context_requests_total`, `context_request_duration_seconds_sum`/`_count` | counter | Context assembly for harnesses and its duration |
+| `context_degraded_total` | counter | Context returned in degraded form (memory unavailable) |
+| `context_provider_failures_total` | counter | Memory provider failures on the interactive path |
+| `context_adapter_delivered_total`, `_duplicates_total`, `_failures_total` | counter | Log delivery to memory: delivered, duplicates, failures |
+| `context_adapter_parked_tenants` | gauge | Tenants whose delivery has stopped (parked) |
+| `context_adapter_lag` | gauge | Delivery lag in events (capped at 1000) |
+| `context_adapter_lag_capped` | gauge | `1` if the lag is at least 1000 |
+| `event_replay_requests_total`, `event_replay_events_total` | counter | Log reads by consumers |
+| `tool_invocation_denied_total` | counter | Denied tool (skill) invocations |
+| `authz_shadow_*`, `authz_policy_unavailable_total` | counter | Only with `CP_AUTHZ_MODE=shadow` or `policy`: comparisons and discrepancies with the PDP |
 
-Если база недоступна, эндпоинт не падает, а вместо датчиков выводит строку
-`# DB gauges unavailable`.
+If the database is unavailable, the endpoint does not fail; instead of the
+gauges it outputs the line `# DB gauges unavailable`.
 
-### Сбор Prometheus
+### Prometheus scraping
 
 ```yaml
 scrape_configs:
   - job_name: taimen-control-plane
     metrics_path: /metrics
     static_configs:
-      - targets: ["127.0.0.1:18000"]      # или control-plane-api:8000 изнутри сети compose
+      - targets: ["127.0.0.1:18000"]      # or control-plane-api:8000 from inside the compose network
 ```
 
-## Рекомендуемые алерты
+## Recommended alerts
 
-| Условие | Порог | Что делать |
+| Condition | Threshold | What to do |
 |---|---|---|
-| `/health/ready` Control Plane не `200` | 2 мин | См. [Установка и запуск](../troubleshooting/startup.md): `database_unreachable` или `migrations_pending` |
-| Любой контейнер `unhealthy` или в цикле рестартов | 5 мин | `docker compose logs <сервис>` |
-| `context_adapter_parked_tenants > 0` | сразу | Сценарий «доставка встала» ниже |
-| `context_adapter_lag_capped == 1` или `context_adapter_lag` растёт | 15 мин | Проверить `memory-service`, провайдер эмбеддингов, логи `context-adapter` |
-| Рост `context_provider_failures_total` / `context_degraded_total` | 10 мин | Память недоступна или медленна; координация при этом работает |
-| Доля `http_requests_total{status=~"5.."}` | > 1 % за 10 мин | Логи `control-plane-api` по `request_id` |
-| Всплеск `stale_fencing_rejections_total` | относительно нормы | Два процесса пишут от одного claim: проверить исполнителей |
-| `active_runs > 0`, но `active_harness_sessions == 0` долго | 15 мин | Исполнители потеряли связь; проверить runner-хост |
-| Диск хоста | > 80 % | Журнал, память, образы: `docker system df`, retention журнала |
-| Срок сертификата | < 14 дней | Caddy перестал продлевать: логи `caddy`, DNS, порты |
-| Срок ближайшего PAT | < 14 дней | Перевыпуск, см. [Секреты и ротация](secrets.md) |
-| Возраст последнего бэкапа | > 26 ч | Проверить задание бэкапа |
+| Control Plane `/health/ready` is not `200` | 2 min | See [Installation and startup](../troubleshooting/startup.md): `database_unreachable` or `migrations_pending` |
+| Any container `unhealthy` or in a restart loop | 5 min | `docker compose logs <service>` |
+| `context_adapter_parked_tenants > 0` | immediately | The "delivery stopped" scenario below |
+| `context_adapter_lag_capped == 1` or `context_adapter_lag` growing | 15 min | Check `memory-service`, the embedding provider, `context-adapter` logs |
+| Growth of `context_provider_failures_total` / `context_degraded_total` | 10 min | Memory is unavailable or slow; coordination keeps working |
+| Share of `http_requests_total{status=~"5.."}` | > 1% over 10 min | `control-plane-api` logs by `request_id` |
+| A spike in `stale_fencing_rejections_total` | relative to normal | Two processes write under one claim: check the executors |
+| `active_runs > 0` but `active_harness_sessions == 0` for a long time | 15 min | Executors lost their connection; check the runner host |
+| Host disk | > 80% | Log, memory, images: `docker system df`, log retention |
+| Certificate expiry | < 14 days | Caddy stopped renewing: `caddy` logs, DNS, ports |
+| Expiry of the nearest PAT | < 14 days | Reissue; see [Secrets and rotation](secrets.md) |
+| Age of the last backup | > 26 h | Check the backup job |
 
-## Логи
+## Logs
 
 ```bash
 docker compose logs -f --since 10m control-plane-api
@@ -134,35 +136,37 @@ docker compose logs --since 1h context-adapter | grep -iE 'error|park'
 make logs svc=iam-service                    # docker compose --profile "*" logs -f iam-service
 ```
 
-- Control Plane пишет структурированные логи; уровень — `LOG_LEVEL`
-  (`CP_LOG_LEVEL`). Коррелируйте по `request_id` (один HTTP-запрос, также
-  возвращается в теле ошибки как `requestId`) и `run_id` (сквозная трасса
-  прогона, заголовок `X-Run-Id`; тот же `run_id` виден в логах памяти).
+- Control Plane writes structured logs; the level is `LOG_LEVEL`
+  (`CP_LOG_LEVEL`). Correlate by `request_id` (one HTTP request, also
+  returned in the error body as `requestId`) and `run_id` (the end-to-end
+  trace of a run, the `X-Run-Id` header; the same `run_id` appears in the
+  memory logs).
 
-- Caddy пишет JSON в stderr (в образце промышленного Caddyfile).
-- Ошибки API Control Plane всегда имеют форму
-  `{"error": {"code", "message", "details", "requestId"}}` — ищите в логах
-  по `requestId` из ответа.
+- Caddy writes JSON to stderr (in the production Caddyfile template).
+- Control Plane API errors always have the form
+  `{"error": {"code", "message", "details", "requestId"}}`; search the logs
+  by the `requestId` from the response.
 
-!!! warning "Ротация логов Docker"
-    Сервисы корневого `compose.yml` используют драйвер логов по умолчанию,
-    без ограничения размера. Настройте ротацию для демона Docker
+!!! warning "Docker log rotation"
+    Services in the root `compose.yml` use the default log driver, with no
+    size limit. Configure rotation for the Docker daemon
     (`/etc/docker/daemon.json`):
 
     ```json
     {"log-driver": "json-file", "log-opts": {"max-size": "20m", "max-file": "5"}}
     ```
 
-    Изменение применяется к вновь создаваемым контейнерам.
+    The change applies to newly created containers.
 
-## Эксплуатационные операции Control Plane
+## Control Plane operational tasks
 
-Операции требуют права `operations.manage` и выполняются через API или CLI
-`control-plane` (пакет из суперпроекта, credential оператора).
+These operations require the `operations.manage` permission and run through
+the API or the `control-plane` CLI (the package from the superproject, with
+an operator credential).
 
-### Доставка в память встала (parked)
+### Delivery to memory stopped (parked)
 
-Симптом: `context_adapter_parked_tenants > 0`, в ответе контекста
+Symptom: `context_adapter_parked_tenants > 0`, and the context response has
 `freshness.memoryIngest.status = "parked"`.
 
 ```bash
@@ -170,21 +174,23 @@ control-plane ops adapter status
 # {"parked": true, "parkedReason": "...", "parkedEventId": "...", "cursor": "..."}
 ```
 
-1. Прочитайте `parkedReason` — это ответ провайдера памяти. Типичное:
-   `401/403` из-за сменившегося ключа или service account, отвергнутая схема
-   наблюдения.
-2. Устраните причину (ключ, env-файл service account, доступность памяти).
-3. Повторите ту же позицию:
+1. Read `parkedReason`: it is the memory provider's response. Typical
+   causes: `401/403` due to a changed key or service account, a rejected
+   observation schema.
+2. Fix the cause (the key, the service account env file, memory
+   availability).
+3. Retry the same position:
 
     ```bash
     control-plane ops adapter redrive <tenant-id> --reason "memory credential rotated"
     ```
 
-Redrive не двигает курсор и идемпотентен. API, способного «перепрыгнуть»
-событие, нет намеренно. Пока один tenant запаркован, остальные доставляются
-как обычно; claims, runs и approvals от памяти не зависят вовсе.
+Redrive does not move the cursor and is idempotent. There is deliberately
+no API that can "skip" an event. While one tenant is parked, the others are
+delivered as usual; claims, runs, and approvals do not depend on memory at
+all.
 
-### Перестроение памяти
+### Rebuilding memory
 
 ```bash
 curl -s -X POST http://127.0.0.1:18000/api/v1/operations/context-adapter/<tenant-id>:rebuild \
@@ -192,35 +198,35 @@ curl -s -X POST http://127.0.0.1:18000/api/v1/operations/context-adapter/<tenant
   -d '{"reason": "memory restored from an older backup"}'
 ```
 
-Без `cursor` tenant переигрывается с начала журнала; с `cursor` — только
-назад (вперёд — `422 cursor_must_not_advance`).
+Without `cursor` the tenant is replayed from the start of the log; with
+`cursor`, only backward (forward gives `422 cursor_must_not_advance`).
 
-### Рост журнала
+### Log growth
 
 ```bash
-# перенести подтверждённую историю старше 30 дней в архив той же базы
+# move acknowledged history older than 30 days to the archive in the same database
 curl -s -X POST http://127.0.0.1:18000/api/v1/operations/journal:archive \
   -H "Authorization: Bearer <admin access token>" -H 'Content-Type: application/json' \
   -d '{"beforeSeconds": 2592000, "maxEvents": 50000}'
 ```
 
-`archived: 0` при живом отставании потребителей — работающая защита, а не
-ошибка. Физическое удаление `:prune` — только после бэкапа. Подробно — в
-[Резервном копировании](backup.md).
+`archived: 0` while consumers are still lagging is a working safeguard, not
+an error. Physical deletion with `:prune` only after a backup. Details are
+in [Backup](backup.md).
 
-## Наблюдаемость исполнителей
+## Executor observability
 
-- Логи демона: `docker compose -f <compose-файл исполнителя> logs -f runner`
-  (контейнер) или файл журнала юнита (systemd).
-- Трасса каждого прогона видна через MCP и API: артефакт `transcript`
-  и run actions `tool.<имя>` — см. [Трасса прогонов](../runner/trace.md).
-- Признак проблемы публикации: run успешен, а в артефакте `commit` поле
-  `published: false`.
+- Daemon logs: `docker compose -f <executor compose file> logs -f runner`
+  (container) or the unit's log file (systemd).
+- The trace of each run is visible through MCP and the API: the `transcript`
+  artifact and run actions `tool.<name>`; see [Run trace](../runner/trace.md).
+- A sign of a publishing problem: the run succeeded, but the `commit`
+  artifact has `published: false`.
 
-## См. также
+## See also
 
-- [Периметр и TLS](edge-and-tls.md)
-- [Резервное копирование](backup.md)
-- [Аварийные процедуры](emergency.md)
-- [События Control Plane](../control-plane/events.md)
-- [Диагностика](../troubleshooting/index.md)
+- [Edge and TLS](edge-and-tls.md)
+- [Backup](backup.md)
+- [Emergency procedures](emergency.md)
+- [Control Plane events](../control-plane/events.md)
+- [Troubleshooting](../troubleshooting/index.md)

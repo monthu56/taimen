@@ -1,44 +1,45 @@
-# Правила вывода работы
 
-Правило вывода работы (`WorkRule`) — данные tenant'а, по которым Control Plane
-сам заводит, обновляет, закрывает или отменяет работу, когда в журнале
-появляется факт: наблюдение внешней системы, событие ядра или слот расписания.
-Статья описывает документ правила, его язык, действия, личность правила и
-историю оценок. Она для администраторов tenant'а и авторов пакетов.
-Обоснование — CP-ADR-0063 и TAI-ADR-0036; личность правила, тип задачи на
-элемент и связи — TAI-ADR-0053.
+# Work rules
 
-## Как работает правило
+A work rule (`WorkRule`) is tenant data by which Control Plane
+itself creates, updates, completes, or cancels work when a fact
+appears in the log: an observation of an external system, a core event, or a schedule slot.
+This article describes the rule document, its language, actions, the rule identity, and
+the evaluation history. It is for tenant administrators and package authors.
+Rationale: CP-ADR-0063 and TAI-ADR-0036; the rule identity, per-item task type, and
+relations: TAI-ADR-0053.
+
+## How a rule works
 
 ```mermaid
 flowchart LR
-    F["Факт<br/>(наблюдение, событие, расписание)"] --> C{"condition"}
-    C -- ложь --> N["not_matched"]
-    C -- истина --> I{"interpretation?"}
-    I -- да --> S["Вызов скилла<br/>(оценка ждёт, waiting)"]
-    I -- нет --> A["action"]
+    F["Fact<br/>(observation, event, schedule)"] --> C{"condition"}
+    C -- false --> N["not_matched"]
+    C -- true --> I{"interpretation?"}
+    I -- yes --> S["Skill invocation<br/>(evaluation waits, waiting)"]
+    I -- no --> A["action"]
     S -- succeeded --> A
     S -- failed --> X["failed: rule_skill_failed"]
     A --> W["ensure_work / update_work /<br/>cancel_work / complete_work /<br/>request_decision"]
 ```
 
-- Журнал читает worker ядра своим курсором по tenant'у. Правило видит только
-  события, записанные после его включения, и не реагирует на следствия правил
-  (события сущности `rule`, события с корреляцией правила, вызовы скиллов,
-  поставленные правилом).
-- Каждая оценка — запись в истории правила с версией правила, фактом,
-  результатом (`matched`, `not_matched`, `failed`, `skipped`), evidence и
-  заведённой работой.
-- Повторная доставка факта не дублирует работу: ключ дедупликации связывает
-  работу с правилом, а уникальность оценки по `(правило, факт)` делает повтор
-  пустым.
+- The core worker reads the log with its own per-tenant cursor. A rule sees only
+  events written after it was enabled, and does not react to consequences of rules
+  (events of the `rule` entity, events with a rule's correlation, skill invocations
+  enqueued by a rule).
+- Each evaluation is a record in the rule's history with the rule version, the fact,
+  the result (`matched`, `not_matched`, `failed`, `skipped`), evidence, and
+  the work created.
+- Redelivery of a fact does not duplicate work: the deduplication key links
+  the work to the rule, and the uniqueness of an evaluation per `(rule, fact)` makes a repeat
+  a no-op.
 
-## Документ правила
+## Rule document
 
 ```json
 {
   "key": "doc-review",
-  "description": "Каждый загруженный договор проверяет юрист",
+  "description": "A lawyer reviews every uploaded contract",
   "workspaceId": "<workspace-id>",
   "trigger": {"kind": "observation", "type": "document.uploaded"},
   "condition": {"eq": [{"var": "payload.data.kind"}, "contract"]},
@@ -46,109 +47,109 @@ flowchart LR
                      "inputs": {"document": "{{payload.data.documentId}}"}},
   "action": {"kind": "ensure_work", "taskType": "contract-review",
              "dedupKeyTemplate": "contract:{{payload.data.documentId}}",
-             "fields": {"title": "Проверить договор {{skill.output.number}}",
+             "fields": {"title": "Review contract {{skill.output.number}}",
                         "assignee": "agent:contract-checker"}},
   "identity": {"agent": "contract-rules"},
   "status": "enabled"
 }
 ```
 
-| Поле | Правило |
+| Field | Rule |
 |---|---|
-| `key` | `^[a-z0-9][a-z0-9._-]{0,127}$`, уникален среди неархивных правил tenant'а (`409 rule_key_taken`) |
-| `workspaceId` | Workspace правила или `null` — правило уровня tenant'а. После создания не меняется |
-| `goalId` | Цель, которой служит заведённая работа |
-| `trigger` | Что будит правило (ниже) |
-| `condition` | Выражение над фактом; по умолчанию `true` |
-| `interpretation` | `{skill: "name@version", inputs}` — скилл, который превращает факт в данные для действия |
-| `action` | Что сделать (ниже) |
-| `identity` | `{agent: <key>}` — от чьего имени действует правило (см. [Личность правила](#identity)) |
-| `status` | `enabled`, `disabled`; `DELETE` архивирует |
+| `key` | `^[a-z0-9][a-z0-9._-]{0,127}$`, unique among the tenant's non-archived rules (`409 rule_key_taken`) |
+| `workspaceId` | The rule's workspace or `null` — a tenant-level rule. Does not change after creation |
+| `goalId` | The goal the created work serves |
+| `trigger` | What wakes the rule (below) |
+| `condition` | An expression over the fact; `true` by default |
+| `interpretation` | `{skill: "name@version", inputs}` — a skill that turns the fact into data for the action |
+| `action` | What to do (below) |
+| `identity` | `{agent: <key>}` — on whose behalf the rule acts (see [Rule identity](#identity)) |
+| `status` | `enabled`, `disabled`; `DELETE` archives |
 
-Правило изменяемо: `PATCH` с `If-Match: "rule-<version>"` меняет
-`description`, `trigger`, `condition`, `interpretation`, `action`, `goalId` и
-`identity`; `version` растёт с каждым изменением того, что правило делает.
-Каждая оценка записывает версию, по которой считалась.
+A rule is mutable: `PATCH` with `If-Match: "rule-<version>"` changes
+`description`, `trigger`, `condition`, `interpretation`, `action`, `goalId`, and
+`identity`; `version` increments with each change to what the rule does.
+Each evaluation records the version it was computed with.
 
-При записи проверяется всё, что можно проверить без фактов: грамматика, типы
-задач (`422 unknown_task_type`), скиллы (`422 unknown_skill`), отсутствие
-скиллов с внешней записью в интерпретации (`422 rule_skill_side_effects`),
-секреты в документах (`422 secret_material_rejected`), личность и права
-агента.
+On write, everything that can be checked without facts is checked: grammar, task
+types (`422 unknown_task_type`), skills (`422 unknown_skill`), the absence of
+skills with external writes in the interpretation (`422 rule_skill_side_effects`),
+secrets in documents (`422 secret_material_rejected`), and the agent's identity and
+permissions.
 
-## Триггеры
+## Triggers
 
-| `trigger.kind` | Поля | Когда срабатывает |
+| `trigger.kind` | Fields | When it fires |
 |---|---|---|
-| `observation` | `type` — вид наблюдения, `source?` | Событие `observation.recorded` с этим видом (см. [События](events.md)) |
-| `event` | `type` — тип события журнала | Событие журнала этого типа. `rule.*`, `work.*`, `skill.invocation_*` запрещены (`422 invalid_rule_trigger`); наблюдения — только через `observation` |
-| `schedule` | `type: interval`, `everySeconds` 60…604800 | Раз в интервал; пропущенные за простой слоты не догоняются. Заводящее правило по расписанию обязано иметь `interpretation` |
+| `observation` | `type` — the observation kind, `source?` | An `observation.recorded` event of this kind (see [Events](events.md)) |
+| `event` | `type` — the log event type | A log event of this type. `rule.*`, `work.*`, `skill.invocation_*` are forbidden (`422 invalid_rule_trigger`); observations only through `observation` |
+| `schedule` | `type: interval`, `everySeconds` 60…604800 | Once per interval; slots missed during downtime are not caught up. A work-creating scheduled rule must have `interpretation` |
 
-Триггер `event` позволяет строить цепочки на событиях ядра: например, правило
-на `task.completed` с условием `{eq: [{var: task.typeKey}, feature-tasks]}`
-реагирует только на завершение шага определённого типа.
+The `event` trigger lets you build chains on core events: for example, a rule
+on `task.completed` with the condition `{eq: [{var: task.typeKey}, feature-tasks]}`
+reacts only to the completion of a step of a particular type.
 
-Событие, в payload которого есть `workspaceId`, доходит только до правил этого
-workspace и правил уровня tenant'а; событие без workspace — до всех правил
-tenant'а.
+An event whose payload contains `workspaceId` reaches only the rules of that
+workspace and tenant-level rules; an event without a workspace reaches all rules of the
+tenant.
 
-## Язык условий и шаблонов
+## Condition and template language
 
-**Выражение** — `true`, `false` или объект с одним оператором: `and` / `or`
-(1…50 операндов), `not`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `exists`.
-Операнд — `{"var": "<путь>"}`, `{"const": <JSON>}`, скаляр или список. Путь —
-`корень(.сегмент)*`. Ни вызовов, ни арифметики, ни регулярных выражений;
-глубина до 16, узлов до 256, документ до 16 КиБ. Невалидное условие —
-`422 invalid_rule_condition` при записи. Сравнение несравнимого (строка с
-числом) — ошибка оценки `rule_condition_error`, а не молчаливая ложь.
+An **expression** is `true`, `false`, or an object with one operator: `and` / `or`
+(1…50 operands), `not`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `exists`.
+An operand is `{"var": "<path>"}`, `{"const": <JSON>}`, a scalar, or a list. A path is
+`root(.segment)*`. No calls, no arithmetic, no regular expressions;
+depth up to 16, up to 256 nodes, document up to 16 KiB. An invalid condition is
+`422 invalid_rule_condition` on write. Comparing incomparable values (a string with
+a number) is an evaluation error `rule_condition_error`, not a silent false.
 
-**Шаблон** — строка с `{{ путь }}`. Строка, целиком состоящая из одного
-плейсхолдера, даёт сырое значение (список остаётся списком), иначе значения
-подставляются текстом.
+A **template** is a string with `{{ path }}`. A string consisting entirely of one
+placeholder yields the raw value (a list stays a list); otherwise values
+are substituted as text.
 
-| Корень | Стадия | Что это |
+| Root | Stage | What it is |
 |---|---|---|
-| `trigger` | условие, входы, действие | Вид, тип, ссылка на событие, время |
-| `payload` | условие, входы, действие | Тело события журнала |
-| `goal` | условие, входы, действие | Цель правила: `id`, `title`, `status`, `workspaceId` |
-| `task` | условие, входы, действие | Задача, на которую ссылается событие (сущность `task` или `payload.taskId`) |
-| `skill` | действие | Результат интерпретации: `status`, `output`, `invocationId`, `artifactId` |
-| `item` | действие | Элемент `forEach` |
+| `trigger` | condition, inputs, action | Kind, type, reference to the event, time |
+| `payload` | condition, inputs, action | The body of the log event |
+| `goal` | condition, inputs, action | The rule's goal: `id`, `title`, `status`, `workspaceId` |
+| `task` | condition, inputs, action | The task the event references (a `task` entity or `payload.taskId`) |
+| `skill` | action | The interpretation result: `status`, `output`, `invocationId`, `artifactId` |
+| `item` | action | A `forEach` element |
 
-Представление задачи в корне `task` — как в API задачи, включая **`typeKey`**
-и **`typeVersion`** — ключ и версию типа задачи, и `verification` — сводку
-последней попытки проверки `{status, attempt}` или `null`.
+The task representation in the `task` root is the same as in the task API, including **`typeKey`**
+and **`typeVersion`** — the key and version of the task type, and `verification` — a summary
+of the last verification attempt `{status, attempt}` or `null`.
 
-## Действия
+## Actions
 
-| `action.kind` | Что делает |
+| `action.kind` | What it does |
 |---|---|
-| `ensure_work` | Открытая задача по ключу есть — это она; нет — заводит задачу с `origin = {kind: rule, ruleId, ref, evidence}` |
-| `request_decision` | То же, плюс gate-approval на задачу (`fields.approver` или `fields.approverRole`); решение исполняет исходы `approvalSchema` типа. До решения задачу нельзя взять и завершить (`409 approval_required`) |
-| `update_work` | Меняет `title`, `description`, `priority` открытой задачи по ключу и дописывает evidence; под живым claim — `skipped: task_claimed` |
-| `cancel_work` | Переводит открытую задачу в первый достижимый статус категории `terminal_cancelled` |
-| `complete_work` | Дописывает evidence и завершает задачу **через стадию проверки** (см. [Закрытие работы правилами](goals-and-evidence.md#verification-stage)) |
+| `ensure_work` | If an open task with the key exists, it is that task; if not, creates a task with `origin = {kind: rule, ruleId, ref, evidence}` |
+| `request_decision` | The same, plus a gate approval on the task (`fields.approver` or `fields.approverRole`); the decision executes the outcomes of the type's `approvalSchema`. Until the decision, the task cannot be claimed or completed (`409 approval_required`) |
+| `update_work` | Changes `title`, `description`, `priority` of the open task with the key and appends evidence; under a live claim — `skipped: task_claimed` |
+| `cancel_work` | Moves the open task to the first reachable status of the `terminal_cancelled` category |
+| `complete_work` | Appends evidence and completes the task **through the verification stage** (see [Closing work with rules](goals-and-evidence.md#verification-stage)) |
 
-Общие поля:
+Common fields:
 
-- `forEach` — путь к списку (не больше 50 элементов), `where` — условие над
-  `item`: действие применяется к каждому отобранному элементу;
-- `dedupKeyTemplate` — ключ работы, до 200 символов. Ключ **общий для
-  tenant'а**: второе правило (`cancel_work`, `complete_work`) сверяет работу,
-  заведённую первым;
-- `fields` у `ensure_work` и `request_decision`: `title`, `description`,
-  `priority`, `assignee`, `customFields` (имя → шаблон, до 32 полей; пустое
-  значение опускается), `relations` (ниже); `acceptance` — критерии
-  заводимой задачи (добавляются к критериям её типа).
+- `forEach` — a path to a list (no more than 50 elements), `where` — a condition over
+  `item`: the action is applied to each selected element;
+- `dedupKeyTemplate` — the work key, up to 200 characters. The key is **shared across the
+  tenant**: a second rule (`cancel_work`, `complete_work`) reconciles work
+  created by the first;
+- `fields` of `ensure_work` and `request_decision`: `title`, `description`,
+  `priority`, `assignee`, `customFields` (name → template, up to 32 fields; an empty
+  value is omitted), `relations` (below); `acceptance` — criteria of the
+  task being created (added to the criteria of its type).
 
-Найденная по ключу открытая задача не получает `customFields`,
-`acceptance` и связей: действие — «ensure», а не upsert.
+An open task found by key does not get `customFields`,
+`acceptance`, or relations: the action is "ensure", not upsert.
 
-### Тип задачи на элемент: `taskTypes`
+### Per-item task type: `taskTypes`
 
-Одно действие может заводить задачи разных типов. Для этого `taskType` —
-шаблон (например `{{item.type}}`), а рядом объявлен `taskTypes` — список
-допустимых ключей (1…20, без повторов):
+A single action can create tasks of different types. For this, `taskType` is a
+template (for example `{{item.type}}`), and next to it `taskTypes` is declared — a list
+of allowed keys (1…20, no duplicates):
 
 ```yaml
 action:
@@ -159,16 +160,16 @@ action:
   dedupKeyTemplate: "{{item.dedupKey}}"
 ```
 
-- При записи каждый ключ `taskTypes` должен иметь активную версию (`422
-  unknown_task_type`, `details.field = action.taskTypes[i]`). Литеральный
-  `taskType` рядом с `taskTypes` обязан входить в список, а шаблонный
-  `taskType` без `taskTypes` отвергается (`422 invalid_rule_action`): ядро не
-  заведёт задачу типа, который назвал сам факт.
-- При исполнении отрендеренный тип вне `taskTypes` — отказ элемента
+- On write, each key in `taskTypes` must have an active version (`422
+  unknown_task_type`, `details.field = action.taskTypes[i]`). A literal
+  `taskType` next to `taskTypes` must be in the list, and a templated
+  `taskType` without `taskTypes` is rejected (`422 invalid_rule_action`): the core will not
+  create a task of a type named by the fact itself.
+- On execution, a rendered type outside `taskTypes` is an element refusal
   `task_type_not_allowed`.
-- `request_decision` принимает только литеральный `taskType`.
+- `request_decision` accepts only a literal `taskType`.
 
-### Связи: `fields.relations`
+### Relations: `fields.relations`
 
 ```yaml
 fields:
@@ -177,62 +178,62 @@ fields:
     dependsOn: "{{item.dependsOn}}"
 ```
 
-- **`spawnedBy`** — шаблон, дающий id или `publicId` задачи. Новая задача
-  получает связь `spawned_by` на неё. Задача должна быть видна полномочиям
-  правила, иначе отказ элемента `relation_target_not_found`.
-- **`dependsOn`** — шаблон или список (до 50) шаблонов **ключей
-  дедупликации**. Новая задача получает `depends_on` на задачу каждого ключа
-  и не выдаётся исполнителям, пока та не выполнена. Шаблон из одного
-  плейсхолдера может дать список ключей — так элемент скилла несёт свои
-  зависимости сам. `null`, `""` и пустой список — «зависимостей нет».
+- **`spawnedBy`** — a template yielding the id or `publicId` of a task. The new task
+  gets a `spawned_by` relation to it. The task must be visible to the rule's
+  authority, otherwise an element refusal `relation_target_not_found`.
+- **`dependsOn`** — a template or a list (up to 50) of templates of **deduplication
+  keys**. The new task gets `depends_on` on the task of each key
+  and is not handed out to executors until that task is done. A template of a single
+  placeholder can yield a list of keys — this way a skill element carries its own
+  dependencies. `null`, `""`, and an empty list mean "no dependencies".
 
-Ключ `dependsOn` разрешается сначала среди элементов **той же оценки** (в том
-числе идущих в `forEach` позже), затем по журналу работы правил tenant'а —
-новейшей задачей с этим ключом, закрытая тоже подходит. Связи пишутся после
-заведения всех задач оценки обычной командой связей с её событиями
-`task.relation_added`. Поэтому повторная оценка того же факта не дублирует ни
-задач, ни связей.
+A `dependsOn` key is resolved first among the elements of **the same evaluation** (including
+those that come later in `forEach`), then through the log of the tenant's rule work —
+by the newest task with this key; a closed one also qualifies. Relations are written after
+all tasks of the evaluation are created, by the regular relation command with its
+`task.relation_added` events. That is why a repeated evaluation of the same fact duplicates neither
+tasks nor relations.
 
-### Назначение по ссылке на агента
+### Assignment by agent reference
 
-`fields.assignee` у `ensure_work` и `request_decision` принимает UUID
-principal'а или ссылку **`agent:<key>`** на агента реестра ядра. Ссылка
-разрешается после рендеринга шаблона; неизвестный, выведенный или ещё не
-связанный с личностью агент — ошибка действия `unknown_agent`, действие
-откатывается целиком.
+`fields.assignee` of `ensure_work` and `request_decision` accepts a principal
+UUID or a reference **`agent:<key>`** to an agent in the core registry. The reference
+is resolved after the template is rendered; an unknown, retired, or not yet
+identity-bound agent is an action error `unknown_agent`, and the action
+is rolled back entirely.
 
-### Отказ отдельного элемента
+### Refusal of a single element
 
-Обычно отказ любой команды откатывает всё, что действие записало, и оценка
-становится `failed` с кодом команды. Для отказов, связанных с типом на
-элемент и связями, действует другое правило: отказ касается **одного
-элемента** `forEach`, остальные элементы идут дальше.
+Normally a refusal of any command rolls back everything the action wrote, and the evaluation
+becomes `failed` with the command's code. For refusals related to the per-item type
+and relations, a different rule applies: the refusal affects **a single
+element** of `forEach`, and the other elements proceed.
 
-| Код | Причина |
+| Code | Reason |
 |---|---|
-| `task_type_not_allowed` | Отрендеренный тип не входит в `taskTypes` |
-| `invalid_relations` | `dependsOn` — не строка или больше 50 ключей |
-| `relation_target_not_found` | Задача `spawnedBy` не найдена или не видна правилу |
-| `dependency_not_found` | Ключа `dependsOn` нет ни в оценке, ни в журнале (или его задача не видна) |
-| `dependency_refused` | Элемент зависит от отказанного элемента той же оценки |
-| `dependency_cycle` | Цикл зависимостей среди элементов оценки — отказаны все элементы цикла |
+| `task_type_not_allowed` | The rendered type is not in `taskTypes` |
+| `invalid_relations` | `dependsOn` is not a string or has more than 50 keys |
+| `relation_target_not_found` | The `spawnedBy` task was not found or is not visible to the rule |
+| `dependency_not_found` | The `dependsOn` key is in neither the evaluation nor the log (or its task is not visible) |
+| `dependency_refused` | The element depends on a refused element of the same evaluation |
+| `dependency_cycle` | A dependency cycle among the evaluation's elements — all elements of the cycle are refused |
 
-Отказанный элемент попадает в `work[]` оценки как `{dedupKey, refused:
-<код>, detail}`. Оценка `matched`, если хотя бы один элемент заведён или
-найден, и `failed` с кодом `work_items_refused`, если отказаны все
-(`details.refused` — список кодов).
+A refused element goes into the evaluation's `work[]` as `{dedupKey, refused:
+<code>, detail}`. The evaluation is `matched` if at least one element was created or
+found, and `failed` with the code `work_items_refused` if all were refused
+(`details.refused` is a list of codes).
 
-## Личность правила { #identity }
+## Rule identity { #identity }
 
-По умолчанию правило действует **полномочиями того, кто его включил** (или
-последним изменил включённое): снимок его credential'а. Поле
-**`identity: {agent: <key>}`** переводит правило на полномочия описанного
-агента — обычно вида `service` без размещения (`placement: none`). Так работа
-правил в журнале отличима от работы людей, а права правила равны правам,
-объявленным в описании агента, а не правам человека, применившего пакет.
+By default a rule acts **with the authority of whoever enabled it** (or
+last changed it while enabled): a snapshot of their credential. The
+**`identity: {agent: <key>}`** field switches the rule to the authority of the described
+agent — usually of kind `service` with no placement (`placement: none`). This way the work
+of rules in the log is distinguishable from the work of people, and the rule's permissions equal the permissions
+declared in the agent description, not the permissions of the person who applied the package.
 
 ```yaml
-# Agent — личность правил пакета (процесса нет)
+# Agent — identity of the package's rules (no process)
 apiVersion: taimen.ai/v1
 kind: Agent
 key: contract-rules
@@ -246,7 +247,7 @@ spec:
       scopeCeiling: [control-plane:read, control-plane:write]
   placement: none
 ---
-# WorkRule — действует от имени этого агента
+# WorkRule — acts on behalf of this agent
 apiVersion: taimen.ai/v1
 kind: WorkRule
 key: doc-review
@@ -255,104 +256,104 @@ spec:
   # …
 ```
 
-### Проверки при записи
+### Checks on write
 
-При `POST` и при любом `PATCH`, после которого у правила есть личность:
+On `POST` and on any `PATCH` after which the rule has an identity:
 
-- агент с таким ключом есть и не выведен из оборота — иначе `422
+- an agent with this key exists and is not retired — otherwise `422
   unknown_agent`, `details: {field: identity.agent, agent}`;
-- **каждое право** из `identity.permissions` текущей ревизии агента есть у
-  пишущего (администратор — исключение), иначе `403 permission_escalation` с
-  `details.missing`. Это та же проверка, что у ревизии агента: обладатель
-  `rules.write` не получит через правило права чужого агента, а правку
-  действия такого правила не сделает тот, у кого нет прав агента;
-- связан ли агент с личностью, при записи не проверяется: пакет применяет
-  описание агента и правило одной установкой, а личность заводится позже.
+- **every permission** from `identity.permissions` of the agent's current revision is held by
+  the writer (an administrator is the exception), otherwise `403 permission_escalation` with
+  `details.missing`. This is the same check as for an agent revision: a holder of
+  `rules.write` does not get another agent's permissions through a rule, and someone without the agent's
+  permissions cannot edit the action of such a rule;
+- whether the agent is bound to an identity is not checked on write: a package applies
+  the agent description and the rule in one installation, and the identity is created later.
 
-Смена личности (в том числе `identity: null`, снимающее её) — новая
-`version` правила; поле `changes` события `rule.updated` называет `identity`.
+Changing the identity (including `identity: null`, which removes it) is a new
+`version` of the rule; the `changes` field of the `rule.updated` event names `identity`.
 
-### Оценка и авторство
+### Evaluation and authorship
 
-- Оценка и все действия правила с личностью идут полномочиями principal'а
-  агента. Полномочия строятся заново на каждой оценке из его текущей
-  IAM-связки, поэтому новая ревизия агента с другими правами меняет права
-  правила со следующей оценки.
-- Каждое действие проходит обычные проверки команд полномочиями этой
-  личности: правило не может сделать больше, чем объявлено агенту.
-- Агент без principal, выведенный из оборота или без активной связки —
-  оценка `failed: credential_inactive` (`details.agent`).
-- **Автор работы** — principal агента: `createdBy` заведённых задач, `actorId`
-  событий `work.derived`, `work.reconciled`, `task.created`, запросов решения
-  и артефакта `skill_result`.
-- `RuleOut.authorityPrincipalId` по-прежнему называет того, кто включил
-  правило: он отвечает на вопрос «кто включил», а не «от чьего имени
-  действует».
+- The evaluation and all actions of a rule with an identity run with the authority of the agent's
+  principal. The authority is rebuilt on every evaluation from its current
+  IAM binding, so a new agent revision with different permissions changes the rule's
+  permissions from the next evaluation.
+- Each action goes through the regular command checks with the authority of this
+  identity: a rule cannot do more than is declared for the agent.
+- An agent without a principal, retired, or without an active binding — the
+  evaluation is `failed: credential_inactive` (`details.agent`).
+- **The author of the work** is the agent's principal: `createdBy` of created tasks, `actorId`
+  of `work.derived`, `work.reconciled`, `task.created` events, decision requests,
+  and the `skill_result` artifact.
+- `RuleOut.authorityPrincipalId` still names whoever enabled the
+  rule: it answers the question "who enabled it", not "on whose behalf it
+  acts".
 
-Какие права нужны личности, зависит от действий правила: `events.read` —
-чтение факта; `tasks.read`, `tasks.write` — поиск и заведение работы, связи;
-`skills.invoke` — интерпретация; `approvals.manage` — `request_decision`;
-`claims.manage` — `complete_work` / `cancel_work` работы под живым claim;
-`goals.read` — правило с целью.
+Which permissions the identity needs depends on the rule's actions: `events.read` —
+reading the fact; `tasks.read`, `tasks.write` — finding and creating work, relations;
+`skills.invoke` — interpretation; `approvals.manage` — `request_decision`;
+`claims.manage` — `complete_work` / `cancel_work` of work under a live claim;
+`goals.read` — a rule with a goal.
 
-## История и аудит
+## History and audit
 
 ```bash
 curl -s "https://platform.example.com/api/v1/rules/<rule-id>/evaluations?status=failed" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-- `rule.created`, `rule.updated` (`changes` — имена полей, `version`),
+- `rule.created`, `rule.updated` (`changes` — field names, `version`),
   `rule.enabled`, `rule.disabled`, `rule.archived`;
-- `rule.evaluated` на каждую завершённую оценку: версия, факт, результат,
-  evidence, вызов скилла, работа (в том числе `refused`), код ошибки;
-- `work.derived` — работа заведена правилом, `work.reconciled` — изменена,
-  закрыта или отменена.
+- `rule.evaluated` for each finished evaluation: version, fact, result,
+  evidence, skill invocation, work (including `refused`), error code;
+- `work.derived` — work created by a rule, `work.reconciled` — work changed,
+  completed, or cancelled.
 
 ## API
 
-| Метод | Путь | Право |
+| Method | Path | Permission |
 |---|---|---|
 | `POST` | `/rules` | `rules.write` |
 | `GET` | `/rules?status=&workspaceId=&key=&triggerKind=` | `rules.read` |
 | `GET` | `/rules/{id}` | `rules.read` |
 | `PATCH` | `/rules/{id}` (`If-Match: "rule-<v>"`) | `rules.write` |
-| `DELETE` | `/rules/{id}` — архив | `rules.write` |
+| `DELETE` | `/rules/{id}` — archive | `rules.write` |
 | `POST` | `/rules/{id}:enable`, `/rules/{id}:disable` | `rules.write` |
 | `GET` | `/rules/{id}/evaluations?status=` | `rules.read` |
 
-Права решаются на workspace правила (правило уровня tenant'а — на tenant'е).
+Permissions are resolved on the rule's workspace (a tenant-level rule — on the tenant).
 SDK: `create_rule(identity=…)`, `update_rule(identity=…)`, `list_rules`,
 `get_rule`, `enable_rule`, `disable_rule`, `archive_rule`,
-`list_rule_evaluations`. MCP-сервер даёт только чтение (`cp_list_rules`,
-`cp_get_rule`). В пакетах правило — вид `WorkRule` (см. [Пакеты
-каталога](catalog-packages.md)).
+`list_rule_evaluations`. The MCP server provides read-only access (`cp_list_rules`,
+`cp_get_rule`). In packages, a rule is the `WorkRule` kind (see [Catalog
+packages](catalog-packages.md)).
 
-Настройки worker'а (переменные окружения ядра):
+Worker settings (core environment variables):
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_RULES_BATCH_SIZE` | `200` | Событий журнала в одном пакете оценки tenant'а |
-| `CP_RULES_MAX_ATTEMPTS` | `3` | Неудачных пакетов подряд, после которых сломанная оценка фиксируется `failed` и пакет идёт дальше |
-| `CP_RULES_SKILL_CHECK_SECONDS` | `15` | Как часто возвращаться к оценкам, ждущим скилл или освобождения claim |
-| `CP_RULES_SKILL_WAIT_SECONDS` | `86400` | Сколько ждать, пока вызов скилла кто-то возьмёт |
-| `CP_RULES_CLAIM_WAIT_SECONDS` | `86400` | Сколько `complete_work` / `cancel_work` ждут освобождения claim |
+| `CP_RULES_BATCH_SIZE` | `200` | Log events in one evaluation batch of a tenant |
+| `CP_RULES_MAX_ATTEMPTS` | `3` | Consecutive failed batches after which a broken evaluation is recorded as `failed` and the batch moves on |
+| `CP_RULES_SKILL_CHECK_SECONDS` | `15` | How often to revisit evaluations waiting for a skill or for a claim to be released |
+| `CP_RULES_SKILL_WAIT_SECONDS` | `86400` | How long to wait for someone to pick up a skill invocation |
+| `CP_RULES_CLAIM_WAIT_SECONDS` | `86400` | How long `complete_work` / `cancel_work` wait for a claim to be released |
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| `422 unknown_agent` при записи правила | Нет описания агента `identity.agent` или он выведен из оборота | Применить описание `Agent` раньше правила (установщик пакетов так и делает) |
-| `403 permission_escalation`, `details.missing` | У пишущего нет прав, объявленных агенту-личности | Применять токеном с этими правами или сузить права агента |
-| Оценки `failed: credential_inactive`, `details.agent` | Личность агента ещё не заведена или выведена из оборота | Завести личность агента (для `service` — bootstrap установки) |
-| `422 invalid_rule_action` на `taskType` | Шаблонный `taskType` без `taskTypes` или литерал вне списка | Объявить `taskTypes` |
-| Оценка `failed: work_items_refused` | Все элементы отказаны: `details.refused` называет коды | Смотреть `work[].refused` оценки; чаще всего — неверные ключи `dependsOn` |
-| Оценка `failed: unknown_agent` | `fields.assignee` отрендерился в неизвестного или несвязанного агента | Проверить ключ агента и его фактическое состояние |
-| Правило не реагирует на старые события | Правило видит только события после включения | Ожидаемо |
+| `422 unknown_agent` when writing a rule | There is no agent description `identity.agent` or it is retired | Apply the `Agent` description before the rule (the package installer does exactly that) |
+| `403 permission_escalation`, `details.missing` | The writer lacks the permissions declared for the identity agent | Apply with a token that has these permissions or narrow the agent's permissions |
+| Evaluations `failed: credential_inactive`, `details.agent` | The agent's identity has not been created yet or is retired | Create the agent's identity (for `service` — the installation bootstrap) |
+| `422 invalid_rule_action` on `taskType` | A templated `taskType` without `taskTypes` or a literal outside the list | Declare `taskTypes` |
+| Evaluation `failed: work_items_refused` | All elements were refused: `details.refused` names the codes | Look at the evaluation's `work[].refused`; most often — wrong `dependsOn` keys |
+| Evaluation `failed: unknown_agent` | `fields.assignee` rendered to an unknown or unbound agent | Check the agent key and its actual state |
+| The rule does not react to old events | A rule sees only events after it was enabled | Expected |
 
-## См. также
+## See also
 
-- [Цели, приёмка и evidence](goals-and-evidence.md) — origin `rule`, `complete_work`.
-- [Пакеты каталога](catalog-packages.md) — вид `WorkRule`.
-- [События](events.md)
-- [Approvals](approvals.md) — исходы `request_decision`.
+- [Goals, acceptance, and evidence](goals-and-evidence.md) — origin `rule`, `complete_work`.
+- [Catalog packages](catalog-packages.md) — the `WorkRule` kind.
+- [Events](events.md)
+- [Approvals](approvals.md) — `request_decision` outcomes.

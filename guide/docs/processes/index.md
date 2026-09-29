@@ -1,51 +1,57 @@
-# Процессы
 
-Процесс — описание того, как организация доводит дело до результата: какие
-стадии проходит дело, кто и в какие сроки делает работу, кто согласует, что
-происходит при внешних событиях и как откатывается сделанное при отмене.
-Процесс пишется данными — YAML-файлом пакета каталога вида `Process`, — а
-исполняет его само ядро Control Plane. Статья для авторов пакетов и
-архитекторов: язык процессов целиком, с короткими примерами. Обоснование —
-TAI-ADR-0054, CP-ADR-0074; поля — в [справочнике схемы](../reference/process-schema.md).
+# Processes
 
-## Главное
+A process describes how an organization carries a case through to a result:
+which stages the case goes through, who does the work and by when, who
+approves, what happens on external events, and how completed work is rolled
+back on cancellation. A process is written as data (a catalog package YAML
+file of kind `Process`), and the Control Plane core itself executes it. This
+article is for package authors and architects: the complete process
+language, with short examples. Rationale: TAI-ADR-0054, CP-ADR-0074; the
+fields are in the [schema reference](../reference/process-schema.md).
 
-- **Процесс исполняет ядро.** Отдельного движка нет: задачи и согласования
-  экземпляра — обычные задачи и approvals Control Plane. Их видят рабочее место
-  (список «Важное»), MCP-плагин и исполнители — без доработок.
-- **Экземпляр процесса — дело.** У него есть данные по схеме, текущие стадии,
-  таймеры, журнал решений и исход. Один ключ — один экземпляр.
-- **Движок детерминирован.** Решение — чистая функция «состояние + вход →
-  решения + намерения». Время, ответы скиллов и ответы памяти приходят в
-  движок только входами журнала. Поэтому тест пакета, replay по журналу и
-  живой прогон принимают одни и те же решения.
-- **Каждое решение оставляет след.** Переход, срабатывание таймера, голос,
-  компенсация, миграция записываются в журнал экземпляра с причиной и
-  автором.
-- **Выражения — один язык.** Условия, ключи, сроки, назначения и вычисляемые
-  поля пишутся на CEL (см. [Выражения](expressions.md)).
-- **Проверка без стенда.** Пакет проверяется, тестируется и сравнивается с
-  живыми экземплярами до применения (см. [Тесты пакета](package-tests.md)).
+## Key points
 
-## Где лежит процесс
+- **The core executes the process.** There is no separate engine: an
+  instance's tasks and approvals are regular Control Plane tasks and
+  approvals. The workspace (the "Attention" list), the MCP plugin, and
+  executors see them without any extra work.
+- **A process instance is a case.** It has data following a schema, current
+  stages, timers, a decision log, and an outcome. One key, one instance.
+- **The engine is deterministic.** A decision is a pure function "state +
+  input → decisions + intents". Time, skill responses, and memory responses
+  reach the engine only as log inputs. So a package test, a replay against
+  the log, and a live run make the same decisions.
+- **Every decision leaves a trace.** A transition, a timer firing, a vote, a
+  compensation, a migration are recorded in the instance log with a reason
+  and an author.
+- **Expressions use one language.** Conditions, keys, deadlines,
+  assignments, and computed fields are written in CEL (see
+  [Expressions](expressions.md)).
+- **Verification without a deployment.** A package is checked, tested, and
+  compared with live instances before it is applied (see
+  [Package tests](package-tests.md)).
 
-Процесс — файл `processes/<ключ>.yaml` в пакете каталога. Рядом лежат типы
-задач шагов, роли, описание агента-личности, скиллы и тесты:
+## Where a process lives
+
+A process is the file `processes/<key>.yaml` in a catalog package. Next to
+it are the task types of its steps, roles, the identity agent description,
+skills, and tests:
 
 ```text
-packages/<пакет>/
-├── package.yaml               # манифест; renames — явные переименования объектов
-├── processes/<ключ>.yaml      # kind: Process
-├── calendars/<ключ>.yaml      # kind: Calendar — если пакет несёт свой календарь
-├── schemas/<имя>.yaml         # схема данных экземпляра: data: {$ref: ../schemas/<имя>.yaml}
-├── task-types/                # типы задач человеческих шагов
-├── roles/                     # роли, на которые назначаются шаги
-├── agents/<личность>.yaml     # от чьего имени действует процесс
-├── tests/<имя>.test.yaml      # тесты сценариев
-└── .layout/<ключ>.json        # раскладка схемы для визуального редактора; ядро её не читает
+packages/<package>/
+├── package.yaml               # manifest; renames are explicit object renames
+├── processes/<key>.yaml       # kind: Process
+├── calendars/<key>.yaml       # kind: Calendar, if the package carries its own calendar
+├── schemas/<name>.yaml        # instance data schema: data: {$ref: ../schemas/<name>.yaml}
+├── task-types/                # task types of human steps
+├── roles/                     # roles that steps are assigned to
+├── agents/<identity>.yaml     # on whose behalf the process acts
+├── tests/<name>.test.yaml     # scenario tests
+└── .layout/<key>.json         # diagram layout for the visual editor; the core does not read it
 ```
 
-Каркас процесса:
+Process skeleton:
 
 ```yaml
 # yaml-language-server: $schema=../../schema/v1/object.schema.json
@@ -54,140 +60,143 @@ kind: Process
 key: supplier-invoice
 spec:
   version: 1
-  displayName: Оплата счёта поставщика
-  workspaceId: ${WORKSPACE_ID}            # переменная установки
-  identity: {agent: invoice-process}       # личность процесса
-  owner: [{role: finance-director}]        # владелец процесса
-  calendar: ru                             # календарь по умолчанию для cal.*
-  data: {…}                                # JSON Schema данных экземпляра
-  start: {…}                               # событие старта и ключ экземпляра
-  correlate: […]                           # какие ещё события доходят до экземпляра
-  memory: {…}                              # проекция дела в базу знаний
-  decisions: […]                           # таблицы решений
-  stages: […]                              # стадии кейса
-  onEvent: […]                             # реакции на события сквозь стадии
-  timers: […]                              # таймеры процесса
-  migrations: […]                          # перевод открытых экземпляров на новую версию
+  displayName: Supplier invoice payment
+  workspaceId: ${WORKSPACE_ID}            # installation variable
+  identity: {agent: invoice-process}       # process identity
+  owner: [{role: finance-director}]        # process owner
+  calendar: ru                             # default calendar for cal.*
+  data: {…}                                # JSON Schema of instance data
+  start: {…}                               # start event and instance key
+  correlate: […]                           # which other events reach the instance
+  memory: {…}                              # case projection into the knowledge base
+  decisions: […]                           # decision tables
+  stages: […]                              # case stages
+  onEvent: […]                             # reactions to events across stages
+  timers: […]                              # process timers
+  migrations: […]                          # moving open instances to a new version
 ```
 
 !!! note "YAML 1.2"
-    Язык пакетов — YAML 1.2: булевы значения только `true`/`false`, а ключи
-    `on`, `off`, `yes`, `no` — строки. Инструменты платформы читают файлы
-    именно так. Если файл читает ещё и инструмент на YAML 1.1 (например
-    PyYAML), берите ключ `on` в кавычки: `"on": {observation: …}`.
+    The package language is YAML 1.2: booleans are only `true`/`false`, and
+    the keys `on`, `off`, `yes`, `no` are strings. Platform tools read files
+    exactly this way. If a YAML 1.1 tool (for example, PyYAML) also reads the
+    file, quote the `on` key: `"on": {observation: …}`.
 
-## Два уровня языка
+## Two levels of the language
 
-Процесс описывается на двух уровнях.
+A process is described at two levels.
 
 ```mermaid
 flowchart LR
-    subgraph Кейс
-      S1[Стадия review] -->|entry| S2[Стадия approval]
-      S2 -->|entry| S3[Стадия payment]
-      S2 -.-> M1((веха))
+    subgraph Case
+      S1[Stage review] -->|entry| S2[Stage approval]
+      S2 -->|entry| S3[Stage payment]
+      S2 -.-> M1((milestone))
     end
-    subgraph "Блоки исполнения внутри стадии"
+    subgraph "Execution blocks inside a stage"
       B1[human] --> B2[decide] --> B3[approve] --> B4{when} --> B5[complete]
     end
     S2 --- B1
 ```
 
-- **Кейс** (по мотивам CMMN) — стадии, вехи, сторожа входа и выхода,
-  необязательная работа, граничные таймеры. Здесь живут задачи людей и
-  агентов.
-- **Блоки исполнения** (по мотивам Open Workflow DSL) — последовательность
-  шагов, параллель, ожидание события, повтор с паузой, попытка с обработкой
-  ошибки, компенсация. Здесь живёт автоматическая работа между задачами.
+- **Case** (inspired by CMMN): stages, milestones, entry and exit guards,
+  discretionary work, boundary timers. This is where tasks for people and
+  agents live.
+- **Execution blocks** (inspired by the Open Workflow DSL): a sequence of
+  steps, parallelism, waiting for an event, retry with a delay, an attempt
+  with error handling, compensation. This is where automated work between
+  tasks lives.
 
-Переходы только структурные: `goto` нет, шаг нельзя «перепрыгнуть» на
-произвольный другой. У каждого элемента — стадии, шага, вехи, таймера, ветви,
-таблицы — стабильный `id` (`^[a-z][a-z0-9-]{0,62}$`). На него ссылаются
-журнал, карты миграции, раскладка схемы и граф памяти. Id уникальны в
-процессе.
+Transitions are structural only: there is no `goto`, and a step cannot
+"jump" to an arbitrary other step. Every element (stage, step, milestone,
+timer, branch, table) has a stable `id` (`^[a-z][a-z0-9-]{0,62}$`). The log,
+migration maps, the diagram layout, and the memory graph reference it. Ids
+are unique within a process.
 
-### Стадии и вехи
+### Stages and milestones
 
 ```yaml
 stages:
   - id: review
-    displayName: Проверка счёта
+    displayName: Invoice review
     steps: [ … ]
   - id: approval
-    displayName: Согласование оплаты
+    displayName: Payment approval
     entry: stage.review.completed && data.review == 'ok'
     milestones:
       - {id: routed, when: "has(data.approverRole)"}
     steps: [ … ]
 ```
 
-| Поле стадии | Что делает |
+| Stage field | What it does |
 |---|---|
-| `entry` | сторож входа. Стадия без `entry` открывается при старте экземпляра, с `entry` — когда сторож истинен |
-| `exit` | сторож выхода. Стадия с `exit` закрывается, когда он истинен, и отменяет свою открытую работу (задачи, approvals, таймеры). Без `exit` стадия закрывается, когда закончились её шаги |
-| `repeatable` | стадия с `entry` открывается снова на следующем входе после выхода |
-| `milestones` | вехи: `{id, when}`. Веха достигается, когда её сторож истинен, и снимается, когда перестаёт быть истинным, пока стадия активна (`process.milestone_reached`, `process.milestone_lost`) |
-| `timers` | граничные таймеры стадии: срабатывают, пока она открыта |
-| `discretionary` | необязательная работа: шаги, которые человек добавляет по решению |
-| `governedBy` | регламенты, которым подчиняется стадия (см. [Процессы и база знаний](knowledge.md#regulations)) |
+| `entry` | the entry guard. A stage without `entry` opens when the instance starts; with `entry`, when the guard is true |
+| `exit` | the exit guard. A stage with `exit` closes when it is true and cancels its open work (tasks, approvals, timers). Without `exit`, the stage closes when its steps are finished |
+| `repeatable` | a stage with `entry` opens again on the next input after it exits |
+| `milestones` | milestones: `{id, when}`. A milestone is reached when its guard is true and is lost when the guard stops being true while the stage is active (`process.milestone_reached`, `process.milestone_lost`) |
+| `timers` | the stage's boundary timers: they fire while the stage is open |
+| `discretionary` | discretionary work: steps a person adds at their discretion |
+| `governedBy` | regulations the stage is subject to (see [Processes and the knowledge base](knowledge.md#regulations)) |
 
-В сторожах доступны данные экземпляра (`data`), состояние стадий
-(`stage.<id>.completed`, `stage.<id>.active`) и вехи (`milestone.<id>`).
+Guards can use the instance data (`data`), the state of stages
+(`stage.<id>.completed`, `stage.<id>.active`), and milestones
+(`milestone.<id>`).
 
-Экземпляр завершается шагом `complete` с исходом или сам — с исходом
-`completed`, когда все стадии закрыты и работающих потоков нет.
+An instance ends with a `complete` step with an outcome, or on its own with
+the outcome `completed` when all stages are closed and no flows are running.
 
-!!! tip "Сторож, который никогда не станет истинным"
-    Проверка пакета находит сторожей, которые читают только поля, которые
-    нигде не пишутся, или постоянно ложны: для `entry` это недостижимая стадия
-    (`unreachable_stage`), для `exit` — тупик (`dead_end`), для вехи —
-    предупреждение `unreachable_milestone`.
+!!! tip "A guard that never becomes true"
+    The package check finds guards that read only fields that are never
+    written, or that are always false: for `entry` this is an unreachable
+    stage (`unreachable_stage`), for `exit` a dead end (`dead_end`), and for
+    a milestone an `unreachable_milestone` warning.
 
-## Шаги
+## Steps
 
-Шаг — элемент блока. У шага есть `id`, ровно один **вид** и общие поля:
+A step is an element of a block. A step has an `id`, exactly one **kind**,
+and common fields:
 
-| Общее поле | Что делает |
+| Common field | What it does |
 |---|---|
-| `when` | сторож: шаг выполняется, только если выражение истинно; иначе пропускается |
-| `input.from` | вход шага (выражение); у человеческого шага — попадает в описание задачи |
-| `output.as` | запись результата шага (`step.result`) в данные: путь в данных → выражение |
-| `export.as` | то же, что `output.as`, для экспорта результата |
-| `onCompensate` | блок компенсации сделанного шага (см. [Компенсации](#compensation)) |
-| `governedBy` | регламенты, которым подчиняется шаг |
-| `displayName` | имя шага для людей |
+| `when` | a guard: the step runs only if the expression is true; otherwise it is skipped |
+| `input.from` | the step input (an expression); for a human step, it goes into the task description |
+| `output.as` | writes the step result (`step.result`) into data: data path → expression |
+| `export.as` | the same as `output.as`, for exporting the result |
+| `onCompensate` | a block that compensates the completed step (see [Compensations](#compensation)) |
+| `governedBy` | regulations the step is subject to |
+| `displayName` | the step name for people |
 
-Писать в данные можно только поля, объявленные в схеме данных процесса:
-запись в неизвестное поле — ошибка проверки `unknown_data_field`.
+You can write only to fields declared in the process data schema: writing to
+an unknown field is an `unknown_data_field` check error.
 
-### Виды шагов
+### Kinds of steps
 
-| Вид | Что делает | Пример |
+| Kind | What it does | Example |
 |---|---|---|
-| `human` | задача человеку или агенту: тип задачи, форма, назначение, срок, эскалации, профиль контекста | [ниже](#human) |
-| `approve` | согласование: несколько согласующих, кворум, порядок, разделение обязанностей | [ниже](#approve) |
-| `call` | вызов скилла (`skill: name@version`), агента (`agent: <ключ>`) или вложенного процесса (`process: <ключ>`) | `call: {skill: notify.send@1, input: {…}, timeout: PT1H}` |
-| `decide` | таблица решений по данным | `decide: {table: approval-route}` |
-| `recall` | запрос к базе знаний через ядро | см. [Процессы и база знаний](knowledge.md#recall) |
-| `remember` | запись факта или сущности в базу знаний | см. [Процессы и база знаний](knowledge.md#remember) |
-| `listen` | ожидание первого из нескольких событий с таймаутом | [ниже](#listen) |
-| `wait` | пауза: длительность или момент | `wait: P1D` или `wait: {at: "data.startDate"}` |
-| `set` | вычислить и записать поля данных | `set: {total: "data.amount * 1.2"}` |
-| `raise` | поднять ошибку | `raise: {type: not-ready, detail: "'не готово'"}` |
-| `compensate` | выполнить компенсации сделанных шагов | `compensate: all` |
-| `fork` | параллельные ветви: `all` — ждать все, `compete` — первую | [ниже](#fork) |
-| `try` | попытка с повтором и обработчиками ошибок | [ниже](#try) |
-| `do` | вложенная последовательность шагов | `do: [ … ]` |
-| `suspend` / `resume` | приостановить или возобновить экземпляр | [ниже](#suspend) |
-| `complete` | закрыть экземпляр с исходом | `complete: {outcome: paid}` |
+| `human` | a task for a person or an agent: task type, form, assignment, deadline, escalations, context profile | [below](#human) |
+| `approve` | approval: several approvers, quorum, order, separation of duties | [below](#approve) |
+| `call` | calls a skill (`skill: name@version`), an agent (`agent: <key>`), or a nested process (`process: <key>`) | `call: {skill: notify.send@1, input: {…}, timeout: PT1H}` |
+| `decide` | a decision table over data | `decide: {table: approval-route}` |
+| `recall` | a knowledge base query through the core | see [Processes and the knowledge base](knowledge.md#recall) |
+| `remember` | writes a fact or an entity to the knowledge base | see [Processes and the knowledge base](knowledge.md#remember) |
+| `listen` | waits for the first of several events, with a timeout | [below](#listen) |
+| `wait` | a pause: a duration or a moment | `wait: P1D` or `wait: {at: "data.startDate"}` |
+| `set` | computes and writes data fields | `set: {total: "data.amount * 1.2"}` |
+| `raise` | raises an error | `raise: {type: not-ready, detail: "'not ready'"}` |
+| `compensate` | runs the compensations of completed steps | `compensate: all` |
+| `fork` | parallel branches: `all` waits for all, `compete` for the first | [below](#fork) |
+| `try` | an attempt with retry and error handlers | [below](#try) |
+| `do` | a nested sequence of steps | `do: [ … ]` |
+| `suspend` / `resume` | suspends or resumes the instance | [below](#suspend) |
+| `complete` | closes the instance with an outcome | `complete: {outcome: paid}` |
 
-### Задача человеку — `human` { #human }
+### A task for a person: `human` { #human }
 
 ```yaml
 - id: check-invoice
   human:
     taskType: invoice-review
-    title: "'Проверить счёт ' + data.number + ': ' + data.supplier"
+    title: "'Review invoice ' + data.number + ': ' + data.supplier"
     assign: [{role: accounting}]
     due: P2D
     escalations:
@@ -198,41 +207,46 @@ stages:
         type: object
         required: [verdict]
         properties:
-          verdict: {type: string, enum: [ok, mismatch], title: Итог проверки}
-          note: {type: string, title: Комментарий}
+          verdict: {type: string, enum: [ok, mismatch], title: Review result}
+          note: {type: string, title: Comment}
   output:
     as:
       review: step.result.verdict
       reviewNote: step.result.?note.orValue('')
 ```
 
-- **Задача** — обычная задача ядра в workspace экземпляра, с типом
-  `taskType` и внешней ссылкой на элемент процесса. Результат — поля задачи
-  (`customFields`) при завершении, проверенные по форме шага; в данные они
-  попадают через `output.as`.
-- **Форма** — JSON Schema данных и `uischema` JSON Forms для представления.
-  Без `form.schema` результат проверяется по `fieldSchema` типа задачи.
-- **Назначение** `assign` — цепочка кандидатов по порядку, берётся первый
-  разрешимый: `{principal: <uuid или ${ПЕРЕМЕННАЯ}>}`, `{role: <slug>}`,
-  `{agent: <ключ>}` или `{expr: <CEL>}`. Выражение даёт id principal'а,
-  `agent:<ключ>` или `role:<slug>`. Роль означает задачу роли без конкретного
-  исполнителя: её берёт любой, у кого роль.
-- **Срок** `due` — длительность от создания задачи (`P2D`) или момент:
-  `{at: <CEL>}`, например от даты в данных по календарю.
-- **Эскалации** — до пяти уровней. `after: due` — в момент срока,
-  длительность — после срока. Действия: `remind` (напомнить исполнителю),
-  `reassign` (переназначить на `to`), `notify` (уведомить `to`), `raise`
-  (поднять ошибку `error`). Каждый уровень публикует событие
-  `process.escalated`; доставку делает сервис уведомлений по своим правилам
-  (см. [Правила уведомлений](../notifications/notification-rules.md)).
-- **Контекст** `context` — какой контекст из базы знаний получит исполнитель
-  (см. [Процессы и база знаний](knowledge.md#step-context)).
+- **The task** is a regular core task in the instance's workspace, with the
+  type `taskType` and an external reference to the process element. The
+  result is the task fields (`customFields`) at completion, validated
+  against the step form; they get into data through `output.as`.
+- **The form** is a JSON Schema of the data plus a JSON Forms `uischema` for
+  presentation. Without `form.schema`, the result is validated against the
+  task type's `fieldSchema`.
+- **The assignment** `assign` is a chain of candidates in order; the first
+  resolvable one is taken: `{principal: <uuid or ${VARIABLE}>}`,
+  `{role: <slug>}`, `{agent: <key>}`, or `{expr: <CEL>}`. The expression
+  yields a principal id, `agent:<key>`, or `role:<slug>`. A role means a
+  task for the role without a specific executor: anyone who holds the role
+  can take it.
+- **The deadline** `due` is a duration from task creation (`P2D`) or a
+  moment: `{at: <CEL>}`, for example from a date in the data using the
+  calendar.
+- **Escalations**: up to five levels. `after: due` fires at the deadline; a
+  duration fires that long after the deadline. Actions: `remind` (remind the
+  executor), `reassign` (reassign to `to`), `notify` (notify `to`), `raise`
+  (raise the `error`). Each level publishes a `process.escalated` event;
+  the notification service delivers it according to its own rules (see
+  [Notification rules](../notifications/notification-rules.md)).
+- **The context** `context` defines which context from the knowledge base
+  the executor receives (see
+  [Processes and the knowledge base](knowledge.md#step-context)).
 
-Агентский шаг — тот же `human` с назначением `{agent: <ключ>}` или
-`call: {agent: <ключ>}`: это задача на агента реестра, и исполнитель получает
-её как любую задачу (см. [Пакеты каталога](../control-plane/catalog-packages.md#agent)).
+An agent step is the same `human` with the assignment `{agent: <key>}`, or
+`call: {agent: <key>}`: it is a task for a registry agent, and the executor
+receives it like any task (see
+[Catalog packages](../control-plane/catalog-packages.md#agent)).
 
-### Согласование — `approve` { #approve }
+### Approval: `approve` { #approve }
 
 ```yaml
 - id: approve-payment
@@ -252,35 +266,37 @@ stages:
       rejectedBy: step.result.rejectedBy
 ```
 
-Шаг заводит по approval ядра на каждого согласующего из `approvers`.
+The step creates one core approval for each approver from `approvers`.
 
-| Поле | Значения | Что значит |
+| Field | Values | Meaning |
 |---|---|---|
-| `mode` | `parallel` (по умолчанию), `sequential` | все сразу или по очереди: в `sequential` открыт один approval — первого в порядке, кто ещё не голосовал |
-| `quorum` | `all`, `any`, `{atLeast: n}`, `{percent: p}` | сколько одобрений нужно: все оставшиеся, одно, `n`, или ⌈p·N/100⌉ (не меньше одного) от оставшихся согласующих |
-| `earlyDecision` | `true` (по умолчанию) | решить, как только кворум набран или стал недостижим; `false` — ждать голосов всех оставшихся |
-| `separationOfDuties` | CEL → список principal'ов | кому голосовать нельзя |
-| `due`, `onDue` | срок; `approve`, `reject`, `escalate` | что делать, если к сроку решения нет |
-| `escalations` | уровни, как у `human` | эскалации по сроку |
+| `mode` | `parallel` (default), `sequential` | all at once or one at a time: in `sequential`, one approval is open, for the first approver in order who has not voted yet |
+| `quorum` | `all`, `any`, `{atLeast: n}`, `{percent: p}` | how many approvals are needed: all remaining, one, `n`, or ⌈p·N/100⌉ (at least one) of the remaining approvers |
+| `earlyDecision` | `true` (default) | decide as soon as the quorum is reached or becomes unreachable; `false` waits for the votes of all remaining approvers |
+| `separationOfDuties` | CEL → a list of principals | who is not allowed to vote |
+| `due`, `onDue` | a deadline; `approve`, `reject`, `escalate` | what to do if there is no decision by the deadline |
+| `escalations` | levels, as in `human` | deadline escalations |
 
-**Кворум «двое из трёх»** — `quorum: {atLeast: 2}`: два одобрения — решение
-принято, оставшийся approval закрывается; два отказа — решение отклонено
-сразу, без ожидания третьего. Если согласующий ушёл (его approval отменён),
-кворум пересчитывается по оставшимся: `all` перестаёт его ждать, `percent`
-берёт долю от меньшего числа, недостижимый `atLeast` — отказ
-(`quorum_unreachable`); ушли все — отказ (`no_approvers`).
+**A "two out of three" quorum** is `quorum: {atLeast: 2}`: two approvals
+mean the decision is made, and the remaining approval is closed; two
+rejections mean the decision is rejected immediately, without waiting for
+the third. If an approver has left (their approval was cancelled), the
+quorum is recalculated from the remaining ones: `all` stops waiting for
+them, `percent` takes the share of the smaller number, an unreachable
+`atLeast` means rejection (`quorum_unreachable`); if everyone has left, it
+is a rejection (`no_approvers`).
 
-**Разделение обязанностей проверяет ядро, а не движок.** Список из
-`separationOfDuties` становится полем `excludedPrincipals` каждого approval.
-Голос исключённого principal'а отвергается `403
-separation_of_duties_violation` при любом пути — из рабочего места, канала, MCP или
-API, — даже если у него есть роль согласующего. В списке «Важное» такой
-approval ему не показывается.
+**The core enforces separation of duties, not the engine.** The list from
+`separationOfDuties` becomes the `excludedPrincipals` field of each
+approval. A vote by an excluded principal is rejected with `403
+separation_of_duties_violation` on any path (from the workspace, a channel,
+MCP, or the API), even if they hold the approver role. Such an approval is
+not shown to them in the "Attention" list.
 
-Результат шага: `step.result.outcome` (`approved` или `rejected`),
+Step result: `step.result.outcome` (`approved` or `rejected`),
 `approvedBy`, `rejectedBy`.
 
-### Ожидание события — `listen` { #listen }
+### Waiting for an event: `listen` { #listen }
 
 ```yaml
 - id: await-answer
@@ -297,16 +313,17 @@ approval ему не показывается.
       - {id: no-answer, set: {answer: "''"}}
 ```
 
-`listen` ждёт первое подошедшее событие из `any` (отложенный выбор) и
-выполняет его блок `do`; `step.result` — `{option, event}`. Таймаут —
-длительность или момент `{at: …}`; без `onTimeout` поток просто идёт дальше.
+`listen` waits for the first matching event from `any` (a deferred choice)
+and runs its `do` block; `step.result` is `{option, event}`. The timeout is
+a duration or a moment `{at: …}`; without `onTimeout` the flow simply moves
+on.
 
-!!! warning "Событие должно дойти до экземпляра"
-    `listen` и `onEvent` слышат только события, которые дошли до экземпляра
-    по ключу через `correlate` (см. [Старт и корреляция](#start)). Событие
-    вида, не объявленного в `correlate`, экземпляр не услышит.
+!!! warning "The event must reach the instance"
+    `listen` and `onEvent` hear only events that reached the instance by key
+    through `correlate` (see [Start and correlation](#start)). The instance
+    does not hear an event of a kind not declared in `correlate`.
 
-### Параллель — `fork` { #fork }
+### Parallelism: `fork` { #fork }
 
 ```yaml
 - id: prepare
@@ -319,10 +336,10 @@ approval ему не показывается.
         do: [ {id: provide-guarantee, human: {…}} ]
 ```
 
-`all` ждёт все ветви, `compete` завершается первой закончившейся ветвью, а
-остальные закрывает.
+`all` waits for all branches; `compete` finishes with the first branch to
+complete and closes the others.
 
-### Попытка, повтор, ошибки — `try` и `raise` { #try }
+### Attempt, retry, errors: `try` and `raise` { #try }
 
 ```yaml
 - id: price-round
@@ -335,45 +352,46 @@ approval ему не показывается.
         approve: {…}
       - id: price-rejected
         when: data.priceApproval.outcome != 'approved'
-        raise: {type: price-rejected, detail: "'цена не согласована'"}
+        raise: {type: price-rejected, detail: "'price not approved'"}
     catch:
       - errors: {type: price-rejected}
         do: [{id: price-not-approved, complete: {outcome: price-not-approved}}]
 ```
 
-- Ошибки — в форме RFC 7807: `type`, `status`, `detail`. Их поднимает `raise`
-  процесса, скилл, таймаут вызова (`timeout`), отказ задачи или команды ядра.
-- `retry` повторяет блок `do` до `limit` раз с паузой `delay`; `backoff:
-  exponential` удваивает паузу до `maxDelay`; `on` — типы ошибок для повтора
-  (по умолчанию все). Затем — `catch`.
-- `catch[]` ловит ошибки по `errors.type` и `errors.status`; `as` даёт имя
-  ошибки в выражениях обработчика.
-- Необработанная ошибка поднимается до ближайшего `try` (в том числе сквозь
-  `fork`), а если его нет — экземпляр переходит в `failed` с событием
-  `process.failed`.
+- Errors follow RFC 7807: `type`, `status`, `detail`. They are raised by the
+  process's `raise`, a skill, a call timeout (`timeout`), or a refusal of a
+  task or a core command.
+- `retry` repeats the `do` block up to `limit` times with a `delay` pause;
+  `backoff: exponential` doubles the pause up to `maxDelay`; `on` lists the
+  error types to retry (all by default). Then `catch` applies.
+- `catch[]` catches errors by `errors.type` and `errors.status`; `as` gives
+  the error a name in the handler's expressions.
+- An unhandled error propagates up to the nearest `try` (including through
+  a `fork`), and if there is none, the instance moves to `failed` with a
+  `process.failed` event.
 
-Повтор блока `try` — единственный способ «вернуться назад»: цикла «пока» в
-языке нет.
+Retrying a `try` block is the only way to "go back": the language has no
+"while" loop.
 
-### Ошибки движка
+### Engine errors
 
-| `type` | Когда |
+| `type` | When |
 |---|---|
-| `expression_error` | выражение упало при вычислении: `null`, отсутствующее поле, нет календаря |
-| `expression_cost_exceeded` | выражение превысило лимит стоимости |
-| `decision_no_match`, `decision_ambiguous` | таблица `first` без совпадения; `unique` без ровно одного совпадения |
-| `form_invalid` | результат задачи не проходит форму шага |
-| `task_cancelled` | задачу шага отменили |
-| `timeout` | вызов `call` не ответил в `timeout` |
-| `intent_failed` | ядро отказало команде процесса (например, нет права у личности); `detail` — код отказа |
-| `child_failed` | вложенный процесс закончился ошибкой |
-| `step_limit_exceeded` | больше 10 000 действий движка на один вход |
+| `expression_error` | an expression failed during evaluation: `null`, a missing field, no calendar |
+| `expression_cost_exceeded` | an expression exceeded the cost limit |
+| `decision_no_match`, `decision_ambiguous` | a `first` table with no match; a `unique` table without exactly one match |
+| `form_invalid` | the task result does not pass the step form |
+| `task_cancelled` | the step's task was cancelled |
+| `timeout` | a `call` did not respond within `timeout` |
+| `intent_failed` | the core refused a process command (for example, the identity lacks a permission); `detail` is the refusal code |
+| `child_failed` | a nested process ended with an error |
+| `step_limit_exceeded` | more than 10,000 engine actions for one input |
 
-## Данные экземпляра и схема
+## Instance data and schema
 
-`data` — JSON Schema данных экземпляра. Её можно вынести в файл пакета:
-`data: {$ref: ../schemas/case.yaml}` (путь от файла процесса, не выходя из
-пакета).
+`data` is the JSON Schema of the instance data. You can move it to a package
+file: `data: {$ref: ../schemas/case.yaml}` (a path relative to the process
+file, without leaving the package).
 
 ```yaml
 data:
@@ -384,20 +402,21 @@ data:
     supplier: {type: string}
     amount: {type: number}
     currency: {type: string}
-    uploadedBy: {type: string, description: "Principal, загрузивший счёт"}
+    uploadedBy: {type: string, description: "Principal who uploaded the invoice"}
     dueDate: {type: string, format: date-time}
     review: {type: string, enum: [ok, mismatch]}
 ```
 
-Схема задаёт типы выражений: `data.amount` — `double`, `data.dueDate` —
-`timestamp`, обращение к необъявленному полю — ошибка проверки при
-публикации, а не на живом событии. Подробно — [Выражения](expressions.md#types).
+The schema sets the expression types: `data.amount` is `double`,
+`data.dueDate` is `timestamp`, and accessing an undeclared field is a check
+error at publication, not on a live event. See
+[Expressions](expressions.md#types) for details.
 
-Шаги пишут в данные через `set`, `output.as`, `export.as`, а старт и
-корреляция — через `start.set` и `correlate[].set`. Путь записи — через точку:
-`decision.value`, `price.amount`.
+Steps write to data through `set`, `output.as`, `export.as`, and start and
+correlation through `start.set` and `correlate[].set`. The write path uses
+dots: `decision.value`, `price.amount`.
 
-## Старт и корреляция { #start }
+## Start and correlation { #start }
 
 ```yaml
 start:
@@ -412,19 +431,19 @@ correlate:
     set: {amount: double(event.payload.data.amount)}
 ```
 
-- **Источник** `on` — событие журнала ядра (`event: task.completed`) или
-  наблюдение (`observation: invoice.received`, при необходимости `source`).
-  `where` — фильтр на CEL над `event`.
-- **Ключ экземпляра** `key` — выражение от события. Ядро держит ровно один
-  экземпляр на ключ: событие старта с ключом существующего экземпляра
-  становится входом этого экземпляра (`process.correlated`), а не вторым
-  экземпляром.
-- **Корреляция** `correlate` — какие ещё события и по какому ключу доходят до
-  экземпляра. Её `set` меняет данные, а `do` — блок, который выполняется при
-  таком событии. Только события, дошедшие до экземпляра, слышат `onEvent` и
-  `listen`.
-- **Явный старт** без события — `POST /api/v1/process-instances` с правом
-  `processes.operate`:
+- **The source** `on` is a core log event (`event: task.completed`) or an
+  observation (`observation: invoice.received`, with `source` if needed).
+  `where` is a CEL filter over `event`.
+- **The instance key** `key` is an expression over the event. The core keeps
+  exactly one instance per key: a start event with the key of an existing
+  instance becomes an input of that instance (`process.correlated`), not a
+  second instance.
+- **Correlation** `correlate` defines which other events reach the instance
+  and by which key. Its `set` changes data, and `do` is a block that runs on
+  such an event. Only events that reached the instance are heard by
+  `onEvent` and `listen`.
+- **An explicit start** without an event is
+  `POST /api/v1/process-instances` with the `processes.operate` permission:
 
   ```bash
   curl -sS -X POST https://platform.example.com/api/v1/process-instances \
@@ -432,42 +451,43 @@ correlate:
     -d '{"process": "invoices-on-time", "key": "invoices-on-time", "workspaceId": "<workspace-id>"}'
   ```
 
-  `data` запроса проверяется по схеме данных (`422 invalid_process_data`),
-  `start.set` не исполняется. Повтор с тем же ключом — `409
-  process_instance_exists` с `details.instanceId`.
+  The request's `data` is validated against the data schema
+  (`422 invalid_process_data`), and `start.set` is not executed. A repeat
+  with the same key gives `409 process_instance_exists` with
+  `details.instanceId`.
 
-Экземпляр идёт по последней опубликованной версии на момент старта и
-остаётся на ней до конца или до миграции. Задачи и approvals экземпляра
-заводятся в workspace процесса.
+An instance runs on the latest version published at the moment it starts
+and stays on it until it ends or is migrated. An instance's tasks and
+approvals are created in the process workspace.
 
-### Реакции сквозь стадии — `onEvent`
+### Reactions across stages: `onEvent`
 
 ```yaml
 onEvent:
   - "on": {observation: invoice.withdrawn}
     do:
-      - {id: hold, suspend: {reason: "'счёт отозван: компенсации'"}}
+      - {id: hold, suspend: {reason: "'invoice withdrawn: compensating'"}}
       - {id: undo, compensate: all}
       - {id: withdrawn, complete: {outcome: withdrawn}}
 ```
 
-`onEvent` выполняется при событии, дошедшем до экземпляра, в какой бы стадии
-тот ни был, — в том числе когда экземпляр приостановлен.
+`onEvent` runs on an event that reached the instance, whatever stage the
+instance is in, including when the instance is suspended.
 
-## Таймеры, сроки и календарь
+## Timers, deadlines, and the calendar
 
-Время в процессе задаётся тремя способами:
+Time in a process is set in three ways:
 
-| Форма | Пример | Когда срабатывает |
+| Form | Example | When it fires |
 |---|---|---|
-| длительность ISO 8601 | `P3D`, `PT4H` | через столько после начала шага или открытия стадии |
-| момент из данных | `{at: "data.submissionEnd"}` | в этот момент |
-| сдвиг по календарю | `{at: "cal.addWorkdays(data.submissionEnd, -3)"}` | за три рабочих дня до даты |
+| an ISO 8601 duration | `P3D`, `PT4H` | this long after the step starts or the stage opens |
+| a moment from data | `{at: "data.submissionEnd"}` | at that moment |
+| a calendar offset | `{at: "cal.addWorkdays(data.submissionEnd, -3)"}` | three workdays before the date |
 
-Граничные таймеры — у стадии (`stages[].timers`) и у процесса (`timers`):
-они срабатывают, пока стадия (процесс) открыта, и выполняют свой блок `do`.
-С `interrupting: true` таймер сначала прерывает работу стадии (процесса);
-по умолчанию (`false`) блок идёт параллельно с ней.
+Boundary timers belong to a stage (`stages[].timers`) and to the process
+(`timers`): they fire while the stage (process) is open and run their `do`
+block. With `interrupting: true` the timer first interrupts the work of the
+stage (process); by default (`false`) the block runs in parallel with it.
 
 ```yaml
 timers:
@@ -477,33 +497,34 @@ timers:
     do: [{id: missed-deadline, complete: {outcome: missed-deadline}}]
 ```
 
-- **Пересчёт.** Ядро знает, какие поля данных читает выражение срока. Когда
-  шаг меняет эти поля (например, корреляция перенесла дату), несработавшие
-  таймеры пересчитываются — событие `process.timer_rescheduled` со старым и
-  новым временем. Сработавший таймер не откатывается.
-- **Приостановка** замораживает таймеры: хранится остаток. После
-  возобновления срок — время возобновления плюс остаток. Таймер от даты в
-  данных остатка не хранит и считается от данных.
-- **Нет текущего времени.** В выражениях нет `now()`: время входит только как
-  `instance.clock` (время текущего входа) и `event.time`.
+- **Recalculation.** The core knows which data fields a deadline expression
+  reads. When a step changes those fields (for example, a correlation moved
+  the date), timers that have not fired are recalculated, with a
+  `process.timer_rescheduled` event carrying the old and new time. A timer
+  that has already fired is not rolled back.
+- **Suspension** freezes timers: the remainder is stored. After resumption,
+  the deadline is the resumption time plus the remainder. A timer based on a
+  date in the data stores no remainder and is computed from the data.
+- **No current time.** Expressions have no `now()`: time enters only as
+  `instance.clock` (the time of the current input) and `event.time`.
 
-### Производственный календарь
+### Business calendar
 
-Календарь — отдельный вид каталога `Calendar`: часовой пояс, выходные дни
-недели, по годам — праздники, перенесённые рабочие дни, сокращённые дни и
-признак «предварительный». Он обновляется отдельно от процессов.
+A calendar is a separate catalog kind, `Calendar`: a time zone, weekend days
+of the week, and by year: holidays, moved workdays, shortened days, and a
+"provisional" flag. It is updated separately from processes.
 
 ```yaml
 apiVersion: taimen.ai/v1
 kind: Calendar
 key: ru
 spec:
-  displayName: Производственный календарь РФ
+  displayName: Russian Federation business calendar
   timezone: Europe/Moscow
   weekend: [6, 7]
   years:
     - year: 2026
-      source: постановление о переносе выходных дней
+      source: government decree on moving days off
       holidays: ["2026-01-01", "2026-01-02", …]
       workdays: []
       shortDays: ["2026-02-20"]
@@ -512,27 +533,29 @@ spec:
       holidays: ["2027-01-01", …]
 ```
 
-- Функции `cal.addWorkdays`, `cal.isWorkday`, `cal.workdaysBetween`
-  считают по календарю процесса (`spec.calendar`) или по названному ключу
-  (см. [Выражения](expressions.md#calendar)).
-- Если вычисление задело год с `provisional: true` или год, которого в
-  календаре нет (тогда известны только выходные дни недели), срок помечается
-  **«предварительно»**: таймер и экземпляр показывают `provisional: true`.
-- Новая версия календаря пересчитывает несработавшие таймеры экземпляров,
-  которые им пользуются (`cause: calendar_changed`), — так утверждённый год
-  снимает пометку.
-- Каждое вычисление записывает в журнал версию календаря; replay берёт её, а
-  не текущую.
-- Календари читает любой аутентифицированный вызов (`GET /api/v1/calendars`),
-  публикует — право `calendars.write`. Готовых календарей в поставке нет:
-  календарь публикуется пакетом (вид `Calendar`).
+- The functions `cal.addWorkdays`, `cal.isWorkday`, `cal.workdaysBetween`
+  compute using the process calendar (`spec.calendar`) or a named key (see
+  [Expressions](expressions.md#calendar)).
+- If an evaluation touched a year with `provisional: true` or a year that is
+  not in the calendar (then only the weekend days of the week are known),
+  the deadline is marked **"provisional"**: the timer and the instance show
+  `provisional: true`.
+- A new calendar version recalculates the unfired timers of the instances
+  that use it (`cause: calendar_changed`), so an approved year removes the
+  mark.
+- Every evaluation records the calendar version in the log; replay uses that
+  version, not the current one.
+- Any authenticated call can read calendars (`GET /api/v1/calendars`);
+  publishing requires the `calendars.write` permission. The delivery ships
+  no ready-made calendars: a calendar is published by a package (kind
+  `Calendar`).
 
-## Таблицы решений
+## Decision tables
 
 ```yaml
 decisions:
   - id: approval-route
-    displayName: Кто согласует оплату
+    displayName: Who approves the payment
     hitPolicy: first
     inputs:
       - {id: amount, expr: data.amount, type: number}
@@ -541,28 +564,28 @@ decisions:
     rules:
       - when: {currency: RUB, amount: "[0..100000)"}
         then: {approver: accounting}
-        note: До 100 000 ₽ согласует бухгалтерия
+        note: Accounting approves amounts up to 100,000 RUB
       - when: {currency: "-", amount: "-"}
         then: {approver: finance-director}
 ```
 
-- **Политика**: `first` — первая совпавшая строка; `unique` — ровно одна
-  (иначе ошибка); `collect` — все совпавшие (`step.result.items`).
-- **Ячейка условия**: `-` (любое), литерал, список `a,b`, диапазон `[a..b)`
-  (открытый конец пустой: `[10..)`) или сравнение `<`, `<=`, `>`, `>=`.
-  Диапазоны — у `number`, `date`, `timestamp`.
-- **Проверка** находит перекрытия строк у `unique` (ошибка), строки `first`,
-  которые покрывают предыдущие (предупреждение), и пробелы — с примером
-  входа, на котором ни одна строка не сработает.
-- Таблица читает **только данные экземпляра**. Знание из базы знаний попадает
-  в неё через предшествующий шаг `recall` и `output.as`.
-- Вызов — шаг `decide: {table: <id>}`; результат — выходы строки в
-  `step.result`.
+- **Policy**: `first` is the first matching row; `unique` is exactly one
+  (otherwise an error); `collect` is all matching rows (`step.result.items`).
+- **A condition cell**: `-` (any), a literal, a list `a,b`, a range `[a..b)`
+  (an open end is empty: `[10..)`), or a comparison `<`, `<=`, `>`, `>=`.
+  Ranges apply to `number`, `date`, `timestamp`.
+- **The check** finds overlapping rows in `unique` (an error), `first` rows
+  that cover previous ones (a warning), and gaps, with an example input on
+  which no row fires.
+- A table reads **only instance data**. Knowledge from the knowledge base
+  gets into it through a preceding `recall` step and `output.as`.
+- The call is the step `decide: {table: <id>}`; the result is the row's
+  outputs in `step.result`.
 
-## Согласования и роли
+## Approvals and roles
 
-Назначение согласующих — та же цепочка, что у задач. Роль из таблицы
-решений подставляется выражением:
+Assigning approvers uses the same chain as tasks. A role from a decision
+table is substituted with an expression:
 
 ```yaml
 - id: route
@@ -575,14 +598,15 @@ decisions:
     separationOfDuties: "[data.uploadedBy]"
 ```
 
-Роли (`role: <slug>`) — объекты каталога вида `Role` того же пакета или
-tenant'а; роль ищется сначала в workspace экземпляра, затем в tenant'е.
+Roles (`role: <slug>`) are catalog objects of kind `Role` from the same
+package or the tenant; a role is looked up first in the instance's
+workspace, then in the tenant.
 
-## Компенсации { #compensation }
+## Compensations { #compensation }
 
-У сделанного шага может быть блок `onCompensate` — как откатить сделанное.
-Шаг `compensate: all` (или список id шагов) выполняет компенсации сделанных
-шагов **в обратном порядке**.
+A completed step can have an `onCompensate` block that describes how to roll
+back what was done. The step `compensate: all` (or a list of step ids) runs
+the compensations of completed steps **in reverse order**.
 
 ```yaml
 - id: reserve
@@ -594,52 +618,54 @@ tenant'а; роль ищется сначала в workspace экземпляр�
       output: {as: {released: step.result.released}}
 ```
 
-- Внутри `onCompensate` `step` значит то же, что в любом блоке: результат
-  текущего шага. Компенсируемый шаг доступен как `compensated` (`id`,
-  `status`, `result`).
-- Компенсацией может быть и задача человеку: например, «освободить
-  обеспечение» после отмены сделки.
-- **Ошибка компенсации** не закрывает экземпляр как отменённый: он
-  переходит в `failed` с пометкой `attention: compensation_failed` и требует
-  внимания человека.
-- Отмена экземпляра оператором (`:cancel`) выполняет компенсации сделанных
-  шагов, если не передано `compensate: false`.
+- Inside `onCompensate`, `step` means the same as in any block: the result
+  of the current step. The step being compensated is available as
+  `compensated` (`id`, `status`, `result`).
+- A compensation can also be a task for a person: for example, "release the
+  guarantee" after a deal is cancelled.
+- **A compensation error** does not close the instance as cancelled: it
+  moves to `failed` with the mark `attention: compensation_failed` and
+  requires a person's attention.
+- Cancelling an instance by an operator (`:cancel`) runs the compensations
+  of completed steps unless `compensate: false` is passed.
 
-## Приостановка { #suspend }
+## Suspension { #suspend }
 
-Экземпляр приостанавливается шагом `suspend` или командой оператора и
-возобновляется шагом `resume` или командой:
+An instance is suspended by a `suspend` step or an operator command and
+resumed by a `resume` step or a command:
 
 ```yaml
 onEvent:
   - "on": {observation: case.suspended}
-    do: [{id: pause, suspend: {reason: "'приостановлено: ' + string(event.payload.data.reason)"}}]
+    do: [{id: pause, suspend: {reason: "'suspended: ' + string(event.payload.data.reason)"}}]
   - "on": {observation: case.resumed}
-    do: [{id: unpause, resume: {reason: "'возобновлено'"}}]
+    do: [{id: unpause, resume: {reason: "'resumed'"}}]
 ```
 
-На время приостановки таймеры стоят, ответы на работу стадий откладываются и
-подаются после возобновления по порядку. События (`correlate`, `onEvent`)
-исполняются — поэтому `resume` из `onEvent` работает.
+While suspended, timers stop, and responses to stage work are deferred and
+fed in order after resumption. Events (`correlate`, `onEvent`) are
+executed, which is why `resume` from `onEvent` works.
 
-Команды оператора — с правом `processes.operate` на workspace экземпляра:
+Operator commands require the `processes.operate` permission on the
+instance's workspace:
 
-| Маршрут | Что делает |
+| Route | What it does |
 |---|---|
-| `POST /api/v1/process-instances/{id}:suspend` | `{reason}`; приостановить можно только `running` |
-| `POST /api/v1/process-instances/{id}:resume` | `{reason?}`; возобновить можно только `suspended` |
-| `POST /api/v1/process-instances/{id}:cancel` | `{reason, compensate=true}`; открытая работа закрывается, компенсации — в обратном порядке |
+| `POST /api/v1/process-instances/{id}:suspend` | `{reason}`; only a `running` instance can be suspended |
+| `POST /api/v1/process-instances/{id}:resume` | `{reason?}`; only a `suspended` instance can be resumed |
+| `POST /api/v1/process-instances/{id}:cancel` | `{reason, compensate=true}`; open work is closed, compensations run in reverse order |
 
-Команда в неподходящем статусе — `409 invalid_process_instance_state`.
+A command in an unsuitable status gives `409 invalid_process_instance_state`.
 
-## Исходы и статусы
+## Outcomes and statuses
 
-Статус экземпляра — `running`, `suspended`, `completed`, `failed` или
-`cancelled`. Исход (`outcome`) задаёт шаг `complete: {outcome: <имя>}`
-(`^[a-z][a-z0-9-]*$`): `paid`, `rejected`, `declined`, `contract-signed`.
-Исход виден в экземпляре, в событии `process.completed` и в базе знаний.
+The instance status is `running`, `suspended`, `completed`, `failed`, or
+`cancelled`. The outcome (`outcome`) is set by the step
+`complete: {outcome: <name>}` (`^[a-z][a-z0-9-]*$`): `paid`, `rejected`,
+`declined`, `contract-signed`. The outcome is visible in the instance, in
+the `process.completed` event, and in the knowledge base.
 
-Экземпляр и его журнал читаются с правом `processes.read`:
+An instance and its log are read with the `processes.read` permission:
 
 ```bash
 curl -sS "https://platform.example.com/api/v1/process-instances?definitionKey=supplier-invoice&status=running" \
@@ -648,117 +674,125 @@ curl -sS "https://platform.example.com/api/v1/process-instances/<instance-id>/jo
   -H "Authorization: Bearer $TOKEN"
 ```
 
-`GET /process-instances/{id}` отдаёт данные, стадии, открытые элементы (с
-задачей и approvals ожидания), ожидающие и замороженные таймеры. Журнал —
-записи по шагам: вход (что пришло, `actorId`, `eventId`), каждое решение с
-`reason` и каждое намерение.
+`GET /process-instances/{id}` returns the data, stages, open elements (with
+the task and pending approvals), and pending and frozen timers. The log
+consists of per-step records: the input (what arrived, `actorId`,
+`eventId`), each decision with a `reason`, and each intent.
 
-### События процессов
+### Process events
 
-| Событие | Когда |
+| Event | When |
 |---|---|
-| `process.definition_published` | опубликована новая версия процесса |
-| `process.started`, `process.correlated` | старт экземпляра; событие попало в существующий экземпляр |
-| `process.data_changed` | изменились данные |
-| `process.stage_entered`, `process.stage_exited` | вход и выход стадии |
-| `process.milestone_reached`, `process.milestone_lost` | веха достигнута; веха перестала выполняться |
-| `process.timer_fired`, `process.timer_rescheduled` | таймер сработал; срок сдвинулся (`cause`: `data_changed`, `calendar_changed`, `resumed`) |
-| `process.escalated` | уровень эскалации |
-| `process.suspended`, `process.resumed` | приостановка и возобновление |
-| `process.compensated` | компенсации выполнены |
-| `process.recall_completed`, `process.recall_timed_out` | ответ базы знаний или его отсутствие |
-| `process.migrated` | экземпляр перенесён на новую версию |
-| `process.completed`, `process.cancelled`, `process.failed` | исход, отмена оператором, ошибка без обработчика |
-| `calendar.published` | новая версия календаря |
+| `process.definition_published` | a new process version was published |
+| `process.started`, `process.correlated` | an instance started; an event reached an existing instance |
+| `process.data_changed` | data changed |
+| `process.stage_entered`, `process.stage_exited` | a stage was entered or exited |
+| `process.milestone_reached`, `process.milestone_lost` | a milestone was reached; a milestone stopped holding |
+| `process.timer_fired`, `process.timer_rescheduled` | a timer fired; a deadline moved (`cause`: `data_changed`, `calendar_changed`, `resumed`) |
+| `process.escalated` | an escalation level |
+| `process.suspended`, `process.resumed` | suspension and resumption |
+| `process.compensated` | compensations completed |
+| `process.recall_completed`, `process.recall_timed_out` | a knowledge base response or its absence |
+| `process.migrated` | an instance was moved to a new version |
+| `process.completed`, `process.cancelled`, `process.failed` | an outcome, cancellation by an operator, an error without a handler |
+| `calendar.published` | a new calendar version |
 
-Автор событий экземпляра (`actorId`) — личность процесса; на события можно
-подписываться, как на любые события ядра (см. [События](../control-plane/events.md)).
+The author of an instance's events (`actorId`) is the process identity; you
+can subscribe to these events like to any core events (see
+[Events](../control-plane/events.md)).
 
-## Версии и миграции { #versions }
+## Versions and migrations { #versions }
 
-- **Версия неизменяема.** Пара `(key, version)` публикуется один раз. Повтор
-  той же версии с тем же содержимым — без записи; то же число с другим
-  содержимым или версия не больше последней — `409
-  process_version_conflict`. Правка процесса — это `spec.version: N+1`.
-- **Экземпляр закреплён за версией.** Без карты миграции открытые экземпляры
-  дорабатывают по своей версии, новые идут по новой.
-- **Карта миграции** переводит открытые экземпляры явно:
+- **A version is immutable.** The pair `(key, version)` is published once.
+  Repeating the same version with the same content writes nothing; the same
+  number with different content, or a version not greater than the latest,
+  gives `409 process_version_conflict`. Editing a process means
+  `spec.version: N+1`.
+- **An instance is pinned to its version.** Without a migration map, open
+  instances run to completion on their version, and new ones use the new
+  version.
+- **A migration map** moves open instances explicitly:
 
   ```yaml
   version: 2
   migrations:
     - from: 1
       to: 2
-      policy: migrate          # pin — оставить на версии 1
-      map: {check-invoice: review-invoice}   # старый id → новый
+      policy: migrate          # pin keeps them on version 1
+      map: {check-invoice: review-invoice}   # old id → new id
   ```
 
-  Состояние переносится по карте: не названные элементы остаются под своими
-  id, позиция потока — «после того же элемента». У каждого перенесённого
-  экземпляра — запись журнала и событие `process.migrated`.
-- **Удалённый элемент с открытыми экземплярами без карты** — ошибка плана
-  `migration_required`: применение отказывает, пока не выбрана политика.
-- **Id не меняет вид**: шаг `human` не может стать `approve` под тем же id
-  (`element_kind_changed`).
-- **Переименование объекта целиком** — `renames` в `package.yaml`:
-  `[{kind: Process, from: old-key, to: new-key}]`. План переносит объект, а не
-  удаляет и создаёт; старый ключ выводится и новых экземпляров не заводит
-  (`409 process_retired`).
+  The state is moved according to the map: elements that are not named keep
+  their ids, and the flow position is "after the same element". Each moved
+  instance gets a log record and a `process.migrated` event.
+- **A removed element with open instances and no map** is a
+  `migration_required` plan error: applying is refused until a policy is
+  chosen.
+- **An id does not change kind**: a `human` step cannot become `approve`
+  under the same id (`element_kind_changed`).
+- **Renaming a whole object** is done with `renames` in `package.yaml`:
+  `[{kind: Process, from: old-key, to: new-key}]`. The plan moves the object
+  rather than deleting and creating it; the old key is retired and does not
+  start new instances (`409 process_retired`).
 
-Переименование элемента удобнее делать командой
-`tools/pkg.py rename --file <процесс> --from <id> --to <id>`: она меняет id,
-ссылки и тесты и сама дописывает карту `migrations`
-(см. [Пакеты каталога](../control-plane/catalog-packages.md#pkg)). Как план
-показывает судьбу экземпляров — в [Тестах пакета](package-tests.md#plan).
+It is more convenient to rename an element with the command
+`tools/pkg.py rename --file <process> --from <id> --to <id>`: it changes the
+id, the references, and the tests and adds the `migrations` map itself (see
+[Catalog packages](../control-plane/catalog-packages.md#pkg)). How the plan
+shows the fate of instances is covered in
+[Package tests](package-tests.md#plan).
 
-## Владелец и личность процесса
+## Process owner and identity
 
-- **Личность** `identity: {agent: <ключ>}` — описание агента вида `service`
-  или `agent` (см. [Пакеты каталога](../control-plane/catalog-packages.md#agent)). От
-  его principal'а экземпляры заводят задачи и approvals, вызывают скиллы,
-  пишут наблюдения и события `process.*` — а не от имени того, кто применил
-  пакет. Процесс без личности не публикуется (`process_identity_required`),
-  неизвестный или выведенный агент — `unknown_agent`, права агента шире прав
-  публикующего — `403 permission_escalation`.
-- Права личности — ровно то, что исполняют намерения процесса. Типичный
-  набор: `tasks.read`, `tasks.write` (задачи шагов), `approvals.manage`
-  (согласования), `skills.invoke` (скиллы), `observations.write` (запись в
-  базу знаний), `events.read` (корреляция событий).
-- **Владелец** `owner` — цепочка назначения, как у `human.assign`. Ему
-  адресуются задачи о самом процессе: расхождение с регламентом, ошибки
-  экземпляров. Поле необязательно, но без него проверка даёт предупреждение
-  `process_owner_missing`.
-- **Автор процесса и оператор дела — разные роли**: право описать процесс
-  (`processes.write`) не даёт права остановить или отменить чужое дело
-  (`processes.operate`).
+- **The identity** `identity: {agent: <key>}` is an agent description of
+  kind `service` or `agent` (see
+  [Catalog packages](../control-plane/catalog-packages.md#agent)). Instances
+  create tasks and approvals, call skills, and write observations and
+  `process.*` events on behalf of its principal, not on behalf of whoever
+  applied the package. A process without an identity is not published
+  (`process_identity_required`); an unknown or retired agent gives
+  `unknown_agent`; agent permissions broader than the publisher's give
+  `403 permission_escalation`.
+- The identity's permissions are exactly what the process's intents carry
+  out. A typical set: `tasks.read`, `tasks.write` (step tasks),
+  `approvals.manage` (approvals), `skills.invoke` (skills),
+  `observations.write` (writing to the knowledge base), `events.read`
+  (event correlation).
+- **The owner** `owner` is an assignment chain, as in `human.assign`. Tasks
+  about the process itself are addressed to the owner: a discrepancy with a
+  regulation, instance errors. The field is optional, but without it the
+  check gives a `process_owner_missing` warning.
+- **The process author and the case operator are different roles**: the
+  permission to describe a process (`processes.write`) does not grant the
+  permission to stop or cancel someone else's case (`processes.operate`).
 
-| Право | Где | Что даёт |
+| Permission | Where | What it grants |
 |---|---|---|
-| `processes.read` | workspace процесса (без него — tenant) | определения, экземпляры, журнал |
-| `processes.write` | workspace процесса | публикация версии процесса |
-| `processes.operate` | workspace процесса | явный старт, `:suspend`, `:resume`, `:cancel` |
-| `packages.test` | tenant | проверка и тесты пакета, replay |
-| `packages.plan` | tenant | план и применение пакета (плюс права видов) |
-| `calendars.write` | tenant | публикация календаря |
+| `processes.read` | the process workspace (without one, the tenant) | definitions, instances, log |
+| `processes.write` | the process workspace | publishing a process version |
+| `processes.operate` | the process workspace | explicit start, `:suspend`, `:resume`, `:cancel` |
+| `packages.test` | tenant | package check and tests, replay |
+| `packages.plan` | tenant | package plan and apply (plus the permissions of the kinds) |
+| `calendars.write` | tenant | publishing a calendar |
 
-## Цели как процессы { #goals }
+## Goals as processes { #goals }
 
-Желаемое состояние описывается процессом, а не отдельной сущностью
+A desired state is described by a process, not by a separate entity
 (TAI-ADR-0055):
 
-| Что нужно | Форма |
+| What you need | Form |
 |---|---|
-| цель дела («оплатить этот счёт», «выиграть эту закупку») | экземпляр процесса и его исход `complete: {outcome: …}` |
-| постоянная цель («все счета оплачены в срок») | **процесс-сверка без `complete`**: один экземпляр, `onEvent` и `listen` на наблюдения, вехи «достигнуто / нарушено», задачи на восстановление |
-| сводная цель поверх дел («10 заявок за квартал») | процесс, который слушает `process.completed` других процессов и считает итог в своих данных |
-| цель из подцелей | вложенные процессы `call: {process: …}` и связи дел в базе знаний |
+| a case goal ("pay this invoice", "win this bid") | a process instance and its outcome `complete: {outcome: …}` |
+| a standing goal ("all invoices are paid on time") | **a reconciliation process without `complete`**: one instance, `onEvent` and `listen` on observations, "achieved / violated" milestones, recovery tasks |
+| an aggregate goal over cases ("10 bids per quarter") | a process that listens to `process.completed` of other processes and computes the total in its data |
+| a goal made of subgoals | nested processes `call: {process: …}` and case relations in the knowledge base |
 
-Фрагмент процесса-сверки:
+A fragment of a reconciliation process:
 
 ```yaml
 spec:
   version: 1
-  displayName: Счета оплачиваются в срок
+  displayName: Invoices are paid on time
   identity: {agent: finance-process}
   owner: [{role: finance-director}]
   data:
@@ -776,46 +810,49 @@ spec:
       steps: [ … ]
 ```
 
-- Экземпляр постоянной цели заводит человек или установка пакета явным
-  стартом (`POST /process-instances`) — ключ задаётся один раз.
-- Веха следует своему сторожу: снимается, когда состояние нарушено, и
-  достигается снова (`process.milestone_lost`, `process.milestone_reached`).
-- У процесса-сверки нет `complete`, и проверка может сообщить `dead_end`:
-  для такого процесса это ожидаемо.
-- Процесс-цель — узел базы знаний, как любой процесс: вопрос «какие дела
-  работали на эту цель и чем кончились» — обход графа.
+- A person or the package installation creates the standing goal instance
+  with an explicit start (`POST /process-instances`); the key is set once.
+- A milestone follows its guard: it is lost when the state is violated and
+  reached again later (`process.milestone_lost`,
+  `process.milestone_reached`).
+- A reconciliation process has no `complete`, and the check may report
+  `dead_end`: for such a process this is expected.
+- A goal process is a knowledge base node like any process: the question
+  "which cases worked toward this goal and how did they end" is a graph
+  traversal.
 
-!!! warning "`goalId` в новых описаниях не использовать"
-    Сущность Goal выводится из ядра (TAI-ADR-0055). Задачам экземпляров
-    `goalId` не выставляется; в новых правилах и процессах на него не
-    ссылайтесь. Происхождение работы (origin), приёмка и evidence остаются
-    (см. [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)).
+!!! warning "Do not use `goalId` in new descriptions"
+    The Goal entity is being retired from the core (TAI-ADR-0055). Instance
+    tasks do not get a `goalId`; do not reference it in new rules and
+    processes. Work origin, acceptance, and evidence remain (see
+    [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)).
 
-## Нейтральность ядра
+## Core neutrality
 
-В движке, профиле выражений и схеме вида `Process` нет понятий предметных
-областей — это проверяет страж-тест ядра. Предметная область приходит только
-пакетом: данными, таблицами, ролями, типами задач и скиллами. Процессы разных
-доменов пишутся на одном языке, а доменные пакеты в поставку не входят.
+The engine, the expression profile, and the `Process` kind schema contain no
+domain concepts; a core guard test verifies this. The domain arrives only
+through a package: data, tables, roles, task types, and skills. Processes of
+different domains are written in one language, and domain packages are not
+part of the delivery.
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| `422 invalid_process` при публикации | находки проверки: неизвестное поле, ошибка типа выражения, недостижимый шаг | прогнать `cp_packages check --server` и исправить по `file`, `line`, `hint` |
-| `process_identity_required` | нет `identity` | описать агента-личность и сослаться на него |
-| экземпляр не слышит событие в `listen` | событие не объявлено в `correlate` | добавить `correlate` с тем же ключом |
-| второй экземпляр на то же дело не появился | так и задумано: ключ совпал, событие ушло в существующий экземпляр (`process.correlated`) | — |
-| задача шага не появилась, экземпляр в `failed` с `intent_failed` | ядро отказало команде от личности процесса (права, неизвестная роль) | выдать личности нужное право; проверить роли назначения |
-| срок помечен «предварительно» | вычисление задело год календаря с `provisional: true` или год вне календаря | опубликовать утверждённый год календаря — таймеры пересчитаются сами |
-| `409 process_version_conflict` | версия уже опубликована с другим содержимым | поднять `spec.version` |
-| `422 migration_required` при применении | открытые экземпляры стоят на удалённом элементе | добавить `migrations` с `pin` или `migrate` и картой |
+| `422 invalid_process` at publication | check findings: an unknown field, an expression type error, an unreachable step | run `cp_packages check --server` and fix using `file`, `line`, `hint` |
+| `process_identity_required` | no `identity` | describe the identity agent and reference it |
+| the instance does not hear an event in `listen` | the event is not declared in `correlate` | add a `correlate` with the same key |
+| a second instance for the same case did not appear | by design: the key matched, and the event went to the existing instance (`process.correlated`) | — |
+| the step's task did not appear, the instance is `failed` with `intent_failed` | the core refused a command from the process identity (permissions, unknown role) | grant the identity the needed permission; check the assignment roles |
+| a deadline is marked "provisional" | the evaluation touched a calendar year with `provisional: true` or a year outside the calendar | publish the approved calendar year; the timers are recalculated automatically |
+| `409 process_version_conflict` | the version was already published with different content | increase `spec.version` |
+| `422 migration_required` when applying | open instances are on a removed element | add `migrations` with `pin` or `migrate` and a map |
 
-## См. также
+## See also
 
-- [Процессы и база знаний](knowledge.md)
-- [Выражения](expressions.md)
-- [Тесты пакета](package-tests.md)
-- [Схема языка процессов](../reference/process-schema.md)
-- [Пакеты каталога](../control-plane/catalog-packages.md#processes)
+- [Processes and the knowledge base](knowledge.md)
+- [Expressions](expressions.md)
+- [Package tests](package-tests.md)
+- [Process language schema](../reference/process-schema.md)
+- [Catalog packages](../control-plane/catalog-packages.md#processes)
 - [Approvals](../control-plane/approvals.md)

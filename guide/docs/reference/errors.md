@@ -1,21 +1,22 @@
-# Коды ошибок
 
-Машинные коды ошибок всех сервисов платформы: код, HTTP-статус, причина и
-что делать. Статья для разработчика харнесса или интеграции и для
-инженера, который разбирает отказ по логу. Коды — стабильный контракт:
-реагируйте на `code`, а не на текст сообщения.
+# Error codes
 
-## Форматы ответа об ошибке
+Machine error codes of all platform services: code, HTTP status, cause, and
+what to do. This page is for a harness or integration developer and for an
+engineer who investigates a denial from a log. Codes are a stable contract:
+react to `code`, not to the message text.
 
-Сервисы используют разные конверты. Код ошибки всегда в одном поле:
+## Error response formats
 
-| Сервис | Конверт | Поле с кодом |
+Services use different envelopes. The error code is always in one field:
+
+| Service | Envelope | Code field |
 |---|---|---|
 | Control Plane | `{"error": {"code", "message", "details", "requestId"}}` | `error.code` |
-| iam-service | стандартный FastAPI `{"detail": "<code>"}` (SCIM — формат SCIM, см. ниже) | `detail` |
-| memory-service | `{"detail": "<текст>"}` — человекочитаемый текст, машинных кодов нет | HTTP-статус |
+| iam-service | standard FastAPI `{"detail": "<code>"}` (SCIM uses the SCIM format, see below) | `detail` |
+| memory-service | `{"detail": "<text>"}`: human-readable text, no machine codes | HTTP status |
 
-Пример ответа Control Plane:
+Example Control Plane response:
 
 ```json
 {
@@ -28,355 +29,355 @@
 }
 ```
 
-`requestId` совпадает с полем в логе сервиса — по нему ищется запись с
-трассировкой для `500 internal_error`.
+`requestId` matches the field in the service log; use it to find the entry
+with the stack trace for `500 internal_error`.
 
-### Общие правила реакции
+### General response rules
 
-| HTTP | Смысл | Повторять? |
+| HTTP | Meaning | Retry? |
 |---|---|---|
-| 400, 422 | Запрос нарушает контракт или бизнес-правило | Нет — исправить запрос |
-| 401 | Нет действительного credential | Нет — перевыпустить токен |
-| 403 | Credential валиден, но прав не хватает | Нет — выдать права |
-| 404 | Не найдено или не видно этому principal | Нет |
-| 409 | Конфликт состояния (claim, версия, идемпотентность) | Зависит от кода: перечитать состояние |
-| 413 | Слишком большое тело | Нет |
-| 428 | Нужен `If-Match` | Повторить с заголовком |
-| 429 | Лимит частоты | Да, с задержкой |
-| 502, 503 | Зависимость недоступна; решение не принято (fail closed) | Да, с задержкой и тем же `Idempotency-Key` |
+| 400, 422 | The request violates the contract or a business rule | No: fix the request |
+| 401 | No valid credential | No: reissue the token |
+| 403 | The credential is valid, but permissions are insufficient | No: grant the permissions |
+| 404 | Not found, or not visible to this principal | No |
+| 409 | State conflict (claim, version, idempotency) | Depends on the code: reread the state |
+| 413 | Body too large | No |
+| 428 | `If-Match` required | Retry with the header |
+| 429 | Rate limit | Yes, with a delay |
+| 502, 503 | A dependency is unavailable; no decision was made (fail closed) | Yes, with a delay and the same `Idempotency-Key` |
 
-!!! warning "Отказы аутентификации намеренно неразличимы"
-    Битый, истёкший, отозванный токен, чужой issuer или audience,
-    отключённый principal, отсутствующий binding — клиент всегда видит
-    один и тот же ответ (`401 invalid_credentials` у Control Plane,
-    `401 invalid_token` у IAM и SDK-сервисов). Разные коды превратили бы
-    эндпоинт в оракул о чужих credential. Точная причина пишется только в
-    audit и лог — см. [Причины в audit](#audit-reasons).
+!!! warning "Authentication denials are deliberately indistinguishable"
+    A malformed, expired, or revoked token, a foreign issuer or audience, a
+    disabled principal, a missing binding: the client always sees the same
+    response (`401 invalid_credentials` from Control Plane, `401 invalid_token`
+    from IAM and SDK services). Different codes would turn the endpoint into
+    an oracle about other people's credentials. The exact reason is written
+    only to the audit trail and the log; see [Audit reasons](#audit-reasons).
 
 ## Control Plane
 
-Коды `DomainError` и обработчиков API `control-plane`. Статус по классу
-ошибки: `ValidationError` — 422, `BadRequestError` — 400, `ConflictError`
-— 409, `AuthorizationError` — 403, `AuthenticationError` — 401,
-`UpstreamError` — 502, `DependencyUnavailableError` — 503.
+Codes of `DomainError` and of the `control-plane` API handlers. Status by
+error class: `ValidationError` 422, `BadRequestError` 400, `ConflictError`
+409, `AuthorizationError` 403, `AuthenticationError` 401, `UpstreamError`
+502, `DependencyUnavailableError` 503.
 
-### Общие ошибки запроса
+### General request errors
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `custom_fields_invalid` | 422 | `customFields` не проходят JSON Schema типа задачи, шаблона или workspace. | Сверить поля со схемой (`details`). |
-| `empty_update` | 422 | PATCH без полей. | Передать хотя бы одно поле. |
-| `if_match_required` | 428 | Операция требует заголовок `If-Match` (оптимистичная блокировка). | Прочитать сущность, передать её `ETag` вида `"task-<version>"`. |
-| `internal_error` | 500 | Необработанная ошибка сервера; трассировка — только в логе. | Найти запись в логе по `requestId`. |
-| `invalid_document` | 422 | Поле должно быть JSON-объектом. | Передать объект. |
-| `invalid_field` | 422 | Поле передано в недопустимом виде (например, `null` там, где нужно `{}`). | См. `details.field`. |
-| `invalid_if_match` | 400 | `If-Match` не в формате `"<entity>-<version>"`. | Передавать значение `ETag` без изменений. |
-| `invalid_json_schema` | 422 | Недопустимая JSON Schema (например, `$ref` не на тот же документ). | Оставить только локальные `$ref`. |
-| `invalid_limit` | 422 | `limit` вне допустимого диапазона. | Уменьшить `limit`. |
-| `invalid_priority` | 422 | Неизвестный приоритет. | `critical`, `high`, `medium`, `low`. |
-| `invalid_request` | 400 | Тело или параметры не соответствуют контракту API (ошибки pydantic, до 20 штук в `details.errors`). | Исправить запрос по `details.errors[].loc`. |
-| `invalid_sort` | 422 | Неизвестное значение `sort`. | Использовать поддерживаемый ключ сортировки. |
-| `invalid_status` | 422 | Неизвестное значение статуса в фильтре или теле. | Сверить со статусами типа задачи / сущности. |
-| `invalid_status_category` | 422 | Неизвестная категория статуса в фильтре. | `backlog`, `active`, `blocked`, `terminal_success`, `terminal_cancelled`. |
-| `method_not_allowed` | 405 | Метод не поддерживается маршрутом. | Сверить метод с OpenAPI (`/openapi.json`). |
-| `non_canonical_value` | 422 | В каноническом документе недопустимое значение (например, число с плавающей точкой). | Передавать целые числа или строки. |
-| `not_found` | 404 | Сущность не найдена или не видна вызывающему (в том числе чужой tenant). | Проверить id и tenant токена. |
-| `payload_too_deep` | 422 | JSON-документ вложен глубже предела. | Упростить структуру. |
-| `payload_too_large` | 422 | Строка или документ длиннее предела. | Сократить значение. |
-| `rate_limited` | 429 | Превышен лимит запросов. | Повторить с задержкой. |
-| `request_too_large` | 413 | Тело больше `CP_MAX_BODY_BYTES` (для снимков знаний — `CP_KNOWLEDGE_SNAPSHOT_MAX_BODY_BYTES`). | Уменьшить тело или поднять лимит. |
-| `secret_material_rejected` | 422 | В конфигурации или полях обнаружено значение, похожее на секрет. | Хранить секрет вне ядра, передавать непрозрачный `secretRef`. |
-| `unavailable` | 503 | Сервис временно не готов. | Повторить позже; проверить `/health/ready`. |
-| `version_conflict` | 409 | Версия в `If-Match` устарела: сущность изменил кто-то другой. | Перечитать сущность и повторить с новой версией. |
+| `custom_fields_invalid` | 422 | `customFields` do not pass the JSON Schema of the task type, template, or workspace. | Check the fields against the schema (`details`). |
+| `empty_update` | 422 | PATCH without fields. | Pass at least one field. |
+| `if_match_required` | 428 | The operation requires the `If-Match` header (optimistic locking). | Read the entity and pass its `ETag` of the form `"task-<version>"`. |
+| `internal_error` | 500 | Unhandled server error; the stack trace is only in the log. | Find the log entry by `requestId`. |
+| `invalid_document` | 422 | The field must be a JSON object. | Pass an object. |
+| `invalid_field` | 422 | The field is passed in an invalid form (for example, `null` where `{}` is required). | See `details.field`. |
+| `invalid_if_match` | 400 | `If-Match` is not in the `"<entity>-<version>"` format. | Pass the `ETag` value unchanged. |
+| `invalid_json_schema` | 422 | Invalid JSON Schema (for example, a `$ref` not into the same document). | Keep only local `$ref`s. |
+| `invalid_limit` | 422 | `limit` is out of the allowed range. | Reduce `limit`. |
+| `invalid_priority` | 422 | Unknown priority. | `critical`, `high`, `medium`, `low`. |
+| `invalid_request` | 400 | The body or parameters do not match the API contract (pydantic errors, up to 20 in `details.errors`). | Fix the request using `details.errors[].loc`. |
+| `invalid_sort` | 422 | Unknown `sort` value. | Use a supported sort key. |
+| `invalid_status` | 422 | Unknown status value in a filter or body. | Check against the statuses of the task type / entity. |
+| `invalid_status_category` | 422 | Unknown status category in a filter. | `backlog`, `active`, `blocked`, `terminal_success`, `terminal_cancelled`. |
+| `method_not_allowed` | 405 | The route does not support the method. | Check the method against OpenAPI (`/openapi.json`). |
+| `non_canonical_value` | 422 | An invalid value in a canonical document (for example, a floating-point number). | Pass integers or strings. |
+| `not_found` | 404 | The entity is not found or not visible to the caller (including another tenant). | Check the id and the token's tenant. |
+| `payload_too_deep` | 422 | The JSON document is nested deeper than the limit. | Simplify the structure. |
+| `payload_too_large` | 422 | A string or document is longer than the limit. | Shorten the value. |
+| `rate_limited` | 429 | Request limit exceeded. | Retry with a delay. |
+| `request_too_large` | 413 | The body is larger than `CP_MAX_BODY_BYTES` (for knowledge snapshots, `CP_KNOWLEDGE_SNAPSHOT_MAX_BODY_BYTES`). | Reduce the body or raise the limit. |
+| `secret_material_rejected` | 422 | A value that looks like a secret was found in the configuration or fields. | Keep the secret outside the core and pass an opaque `secretRef`. |
+| `unavailable` | 503 | The service is temporarily not ready. | Retry later; check `/health/ready`. |
+| `version_conflict` | 409 | The version in `If-Match` is stale: someone else changed the entity. | Reread the entity and retry with the new version. |
 
-### Аутентификация и авторизация
+### Authentication and authorization
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `already_bootstrapped` | 409 | Tenant уже инициализирован. | Повторный bootstrap не нужен. |
-| `authorization_unavailable` | 503 | Решение внешнего PDP получить не удалось (SDK). | Проверить доступность PDP. |
-| `bootstrap_disabled` | 403 | `CP_BOOTSTRAP_TOKEN` не задан — bootstrap выключен. | Задать токен и перезапустить API. |
-| `decision_unavailable` | 503 | Внешнее решение (PDP) недоступно; запрос не выполнен (fail closed). | Проверить PDP и `CP_POLICY_BASE_URL`; повторить. |
-| `delegation_required` | 403 | Нет активного делегирования, позволяющего действовать от имени этого principal. | Создать делегирование (`delegations.manage`). |
-| `entitlement_unavailable` | 503 | Сервис лицензий недоступен, кэш устарел. | Проверить сервис; повторить. |
-| `iam_identity_bound_elsewhere` | 409 | IAM identity уже связана с другим tenant. | Использовать отдельную identity на tenant. |
-| `insufficient_scope` | 403 | Scope токена не покрывает операцию (проверка SDK). | Обменять PAT с нужным scope. |
-| `invalid_credentials` | 401 | Нет credential или он недействителен: битый, истёкший, чужой issuer/audience, отозванный, нет или отключён binding. Причина пишется только в audit. | Перевыпустить токен обменом PAT; проверить binding и `CP_IAM_ISSUER`. |
-| `invalid_delegation` | 422 | Делегирование некорректно (например, `agentPrincipalId` — не агент). | Исправить стороны делегирования. |
-| `invalid_display_name` | 422 | Пустое `displayName`. | Задать имя. |
-| `invalid_kind` | 422 | Неизвестный вид principal. | `human`, `agent`, `service`. |
-| `invalid_permissions` | 422 | Неизвестные права или не-admin создаёт admin-ключ. | Сверить с перечнем прав. |
-| `invalid_requirement` | 422 | Некорректная ссылка в требованиях (skill `name` или `name@version`). | Исправить `requirements`. |
-| `not_eligible` | 403 | Principal не удовлетворяет требованиям задачи (роль/capability/skill) или не может решать этот approval. | Назначить нужную роль/capability или выбрать другого исполнителя. |
-| `not_entitled` | 403 | Продукт или feature не лицензированы (entitlement). | Выдать лицензию или отключить `CP_ENTITLEMENT_ENABLED`. |
-| `permission_denied` | 403 | Не хватает права (`details.required`), либо PDP отказал (`details.reasonCode`, `decisionId`). | Выдать право в binding или роль во внешнем PDP; проверить scope токена. |
-| `permission_escalation` | 403 | Попытка выдать права, которых нет у вызывающего credential. | Выдавать только свои права или действовать администратором. |
-| `permissions_not_allowed_for_kind` | 422 | `admin` или `approvals.decide` для principal вида `agent`/`service`. | Убрать human-only права. |
-| `principal_not_active` | 403, 422 | Principal не активен (403 при входе, 422 при привязке identity). | Активировать principal. |
-| `unknown_requirement` | 422 | Роль или capability из требований не найдена в scope задачи. | Создать роль в workspace задачи. |
-| `verification_unavailable` | 503 | Нечем проверить токен: JWKS недоступен дольше `CP_IAM_JWKS_STALE_AFTER_SECONDS` или источник отзыва недоступен. | Проверить доступность `iam-service` из контейнера. |
+| `already_bootstrapped` | 409 | The tenant is already initialized. | No repeated bootstrap is needed. |
+| `authorization_unavailable` | 503 | The decision of the external PDP could not be obtained (SDK). | Check that the PDP is available. |
+| `bootstrap_disabled` | 403 | `CP_BOOTSTRAP_TOKEN` is not set, so bootstrap is off. | Set the token and restart the API. |
+| `decision_unavailable` | 503 | The external decision (PDP) is unavailable; the request was not executed (fail closed). | Check the PDP and `CP_POLICY_BASE_URL`; retry. |
+| `delegation_required` | 403 | No active delegation allows acting on behalf of this principal. | Create a delegation (`delegations.manage`). |
+| `entitlement_unavailable` | 503 | The licensing service is unavailable and the cache is stale. | Check the service; retry. |
+| `iam_identity_bound_elsewhere` | 409 | The IAM identity is already linked to another tenant. | Use a separate identity per tenant. |
+| `insufficient_scope` | 403 | The token scope does not cover the operation (SDK check). | Exchange the PAT with the required scope. |
+| `invalid_credentials` | 401 | No credential, or it is invalid: malformed, expired, foreign issuer/audience, revoked, missing or disabled binding. The reason is written only to the audit trail. | Reissue the token by exchanging the PAT; check the binding and `CP_IAM_ISSUER`. |
+| `invalid_delegation` | 422 | The delegation is invalid (for example, `agentPrincipalId` is not an agent). | Fix the delegation parties. |
+| `invalid_display_name` | 422 | Empty `displayName`. | Set a name. |
+| `invalid_kind` | 422 | Unknown principal kind. | `human`, `agent`, `service`. |
+| `invalid_permissions` | 422 | Unknown permissions, or a non-admin creates an admin key. | Check against the list of permissions. |
+| `invalid_requirement` | 422 | Invalid reference in requirements (skill `name` or `name@version`). | Fix `requirements`. |
+| `not_eligible` | 403 | The principal does not meet the task requirements (role/capability/skill) or cannot decide this approval. | Assign the required role/capability or choose another executor. |
+| `not_entitled` | 403 | The product or feature is not licensed (entitlement). | Grant a license or disable `CP_ENTITLEMENT_ENABLED`. |
+| `permission_denied` | 403 | A permission is missing (`details.required`), or the PDP denied (`details.reasonCode`, `decisionId`). | Grant the permission in the binding or a role in the external PDP; check the token scope. |
+| `permission_escalation` | 403 | An attempt to grant permissions the calling credential does not have. | Grant only your own permissions, or act as an administrator. |
+| `permissions_not_allowed_for_kind` | 422 | `admin` or `approvals.decide` for a principal of kind `agent`/`service`. | Remove the human-only permissions. |
+| `principal_not_active` | 403, 422 | The principal is not active (403 on sign-in, 422 when binding an identity). | Activate the principal. |
+| `unknown_requirement` | 422 | A role or capability from the requirements is not found in the task scope. | Create the role in the task's workspace. |
+| `verification_unavailable` | 503 | Nothing to verify the token with: JWKS has been unavailable longer than `CP_IAM_JWKS_STALE_AFTER_SECONDS`, or the revocation source is unavailable. | Check that `iam-service` is reachable from the container. |
 
-### Идемпотентность
+### Idempotency
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `idempotency_in_flight` | 409 | Такой же запрос ещё выполняется, ожидание истекло (`CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS`). | Повторить с тем же ключом позже. |
-| `idempotency_key_required` | 400, 422 | Операция требует `Idempotency-Key` (1..200 символов). 400 — у вызовов skills, 422 — у runs и child handles. | Передавать уникальный ключ на каждую логическую операцию. |
-| `idempotency_key_reuse` | 409 | Ключ уже называет другой вызов skill. | Новый ключ для нового вызова. |
-| `idempotency_key_reused` | 409 | Ключ уже использован с другим телом или другим principal. | Сгенерировать новый ключ. |
-| `invalid_idempotency_key` | 422 | Ключ неверной длины. | 1..200 символов. |
+| `idempotency_in_flight` | 409 | The same request is still running and the wait timed out (`CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS`). | Retry later with the same key. |
+| `idempotency_key_required` | 400, 422 | The operation requires `Idempotency-Key` (1..200 characters). 400 for skill invocations, 422 for runs and child handles. | Pass a unique key for each logical operation. |
+| `idempotency_key_reuse` | 409 | The key already names another skill invocation. | Use a new key for a new invocation. |
+| `idempotency_key_reused` | 409 | The key was already used with a different body or a different principal. | Generate a new key. |
+| `invalid_idempotency_key` | 422 | The key has an invalid length. | 1..200 characters. |
 
-### Сессии и claims
+### Sessions and claims
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `claim_expired` | 409 | Аренда claim истекла. | Взять задачу заново. |
-| `claim_holder_mismatch` | 403 | Claim держит другой principal. | Не писать в чужую задачу; `claims.manage` — для администратора. |
-| `claim_not_active` | 409 | Claim не активен (освобождён или устарел). | Перечитать контекст; взять задачу заново. |
-| `claim_not_expired` | 409 | Reclaim живого claim. | Дождаться истечения или освободить claim. |
-| `invalid_harness` | 422 | `harness.type` не в формате идентификатора клиента. | Строчные буквы, цифры, `.`, `_`, `-`. |
-| `invalid_ttl` | 422 | TTL вне границ `CP_*_TTL_MIN/MAX_SECONDS`. | Запросить TTL в допустимом диапазоне. |
-| `session_expired` | 409 | Аренда сессии истекла. | Открыть новую сессию, затем заново взять задачу. |
-| `session_not_active` | 409 | Сессия claim больше не жива. | Открыть сессию и перечитать контекст. |
-| `session_owner_mismatch` | 403 | Сессия принадлежит другому principal. | Использовать свою сессию. |
-| `stale_claim` | 409 | Fencing отклонил операцию: процесс больше не владеет задачей (claim перехвачен, устарел, неверный `fencingToken`). | Прекратить запись, перечитать контекст (`/api/v1/harness/context`), при необходимости взять задачу заново. |
-| `task_already_claimed` | 409 | У задачи уже есть активный claim. | Выбрать другую задачу или дождаться освобождения. |
-| `task_claimed` | 409 | Изменение задачи с активным claim без `claimId` и `fencingToken`. | Передать `claimId` и `fencingToken` своего claim. |
-| `task_not_claimable` | 422 | Статус задачи не допускает claim. | Перевести задачу в рабочий статус. |
-| `task_not_ready` | 409 | Не завершены блокирующие зависимости (`blocks`/`depends_on`). | Завершить зависимости. |
-| `unsupported_protocol_version` | 422 | Версия харнесс-протокола не поддерживается. | Использовать `control-harness/2` (поддерживаются `1` и `2`). |
+| `claim_expired` | 409 | The claim lease has expired. | Claim the task again. |
+| `claim_holder_mismatch` | 403 | Another principal holds the claim. | Do not write to someone else's task; `claims.manage` is for an administrator. |
+| `claim_not_active` | 409 | The claim is not active (released or stale). | Reread the context; claim the task again. |
+| `claim_not_expired` | 409 | Reclaim of a live claim. | Wait for it to expire or release the claim. |
+| `invalid_harness` | 422 | `harness.type` is not in the client identifier format. | Lowercase letters, digits, `.`, `_`, `-`. |
+| `invalid_ttl` | 422 | TTL outside the `CP_*_TTL_MIN/MAX_SECONDS` bounds. | Request a TTL within the allowed range. |
+| `session_expired` | 409 | The session lease has expired. | Open a new session, then claim the task again. |
+| `session_not_active` | 409 | The claim's session is no longer alive. | Open a session and reread the context. |
+| `session_owner_mismatch` | 403 | The session belongs to another principal. | Use your own session. |
+| `stale_claim` | 409 | Fencing rejected the operation: the process no longer owns the task (the claim was taken over, is stale, or `fencingToken` is wrong). | Stop writing, reread the context (`/api/v1/harness/context`), and claim the task again if needed. |
+| `task_already_claimed` | 409 | The task already has an active claim. | Choose another task or wait for release. |
+| `task_claimed` | 409 | Changing a task with an active claim without `claimId` and `fencingToken`. | Pass the `claimId` and `fencingToken` of your claim. |
+| `task_not_claimable` | 422 | The task status does not allow a claim. | Move the task to a working status. |
+| `task_not_ready` | 409 | Blocking dependencies (`blocks`/`depends_on`) are not complete. | Complete the dependencies. |
+| `unsupported_protocol_version` | 422 | The harness protocol version is not supported. | Use `control-harness/2` (`1` and `2` are supported). |
 
-### Runs и исполнение
+### Runs and execution
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `action_already_finished` | 409 | Action уже завершён. | Не завершать повторно. |
-| `artifact_mismatch` | 422 | Run не принадлежит указанной задаче. | Сверить `taskId` и `runId`. |
-| `budget_exceeded` | 409 | Run превысил бюджет длительности. | Завершить run; увеличить `maxDurationSeconds` для нового. |
-| `invalid_action` | 422 | Пустое имя action. | Задать `action`. |
-| `invalid_budget` | 422 | Бюджет не положителен. | `maxDurationSeconds > 0`. |
-| `invalid_checkpoint` | 422 | Пустой `kind` checkpoint. | Задать `kind`. |
-| `invalid_handoff` | 422 | Handoff человеку требует `reason=human_harness_handoff` и `kind=handoff`. | Исправить поля handoff. |
-| `invalid_name` | 422 | Пустое имя артефакта. | Задать `name`. |
-| `invalid_type` | 422 | Пустой тип артефакта. | Задать `type`. |
-| `run_already_active` | 409 | У claim уже есть работающий run. | Завершить текущий run. |
-| `run_cancel_requested` | 409 | Run принял кооперативную отмену и не может начинать новые actions. | Завершить run. |
-| `run_holder_mismatch` | 403 | Операция требует держателя run (или `claims.manage`). | Выполнять от principal, держащего run. |
-| `run_id_required` | 403 | Вызывающий исполняет ограниченный child run и должен указать `runId`. | Передать `runId`. |
-| `run_in_progress` | 409 | У задачи активный run. | Завершить run через `:succeed`, `:fail` или `:cancel`. |
-| `run_not_active` | 409 | Run не в состоянии `running`. | Перечитать run; начать новый. |
-| `run_owner_mismatch` | 403 | Run принадлежит другому principal. | Действовать своим run. |
-| `run_version_conflict` | 409 | `expectedRunVersion` не совпадает. | Перечитать run. |
-| `task_not_runnable` | 422 | Статус задачи не позволяет начать run. | Перевести задачу в рабочий статус. |
-| `tool_not_authorized` | 403 | Skill или инструмент не разрешён для этого run. | Назначить skill principal или задаче. |
-| `unsafe_handoff_payload` | 422 | Checkpoint handoff содержит абсолютные локальные пути или чувствительные ключи. | Убрать пути и секреты. |
+| `action_already_finished` | 409 | The action is already finished. | Do not finish it again. |
+| `artifact_mismatch` | 422 | The run does not belong to the specified task. | Check `taskId` and `runId`. |
+| `budget_exceeded` | 409 | The run exceeded its duration budget. | Finish the run; increase `maxDurationSeconds` for a new one. |
+| `invalid_action` | 422 | Empty action name. | Set `action`. |
+| `invalid_budget` | 422 | The budget is not positive. | `maxDurationSeconds > 0`. |
+| `invalid_checkpoint` | 422 | Empty checkpoint `kind`. | Set `kind`. |
+| `invalid_handoff` | 422 | A handoff to a human requires `reason=human_harness_handoff` and `kind=handoff`. | Fix the handoff fields. |
+| `invalid_name` | 422 | Empty artifact name. | Set `name`. |
+| `invalid_type` | 422 | Empty artifact type. | Set `type`. |
+| `run_already_active` | 409 | The claim already has a running run. | Finish the current run. |
+| `run_cancel_requested` | 409 | The run accepted cooperative cancellation and cannot start new actions. | Finish the run. |
+| `run_holder_mismatch` | 403 | The operation requires the run holder (or `claims.manage`). | Act as the principal that holds the run. |
+| `run_id_required` | 403 | The caller executes a restricted child run and must specify `runId`. | Pass `runId`. |
+| `run_in_progress` | 409 | The task has an active run. | Finish the run with `:succeed`, `:fail`, or `:cancel`. |
+| `run_not_active` | 409 | The run is not in the `running` state. | Reread the run; start a new one. |
+| `run_owner_mismatch` | 403 | The run belongs to another principal. | Act with your own run. |
+| `run_version_conflict` | 409 | `expectedRunVersion` does not match. | Reread the run. |
+| `task_not_runnable` | 422 | The task status does not allow starting a run. | Move the task to a working status. |
+| `tool_not_authorized` | 403 | The skill or tool is not allowed for this run. | Assign the skill to the principal or the task. |
+| `unsafe_handoff_payload` | 422 | The handoff checkpoint contains absolute local paths or sensitive keys. | Remove the paths and secrets. |
 
-### Управление run (run controls)
+### Run controls
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `control_message_out_of_order` | 409 | Есть более раннее принятое управляющее сообщение без исхода. | Сначала подтвердить предыдущее. |
-| `control_message_terminal` | 409 | Сообщение уже разрешено. | Не подтверждать повторно. |
-| `control_message_version_conflict` | 409 | `expectedMessageVersion` не совпадает. | Перечитать сообщение. |
-| `invalid_control_message` | 422 | Поле недопустимо для операции (например, `directive` вместо `reason`). | Исправить тело. |
-| `invalid_control_operation` | 422 | Неизвестная операция. | `queue`, `steer`, `redirect`, `request_cancel`, `force_cancel`. |
-| `invalid_control_status` | 422 | Неизвестный статус подтверждения. | `applied`, `rejected`, `superseded`. |
-| `unsafe_control_payload` | 422 | Сообщение содержит абсолютные локальные пути. | Убрать пути. |
+| `control_message_out_of_order` | 409 | There is an earlier accepted control message without an outcome. | Acknowledge the previous one first. |
+| `control_message_terminal` | 409 | The message is already resolved. | Do not acknowledge it again. |
+| `control_message_version_conflict` | 409 | `expectedMessageVersion` does not match. | Reread the message. |
+| `invalid_control_message` | 422 | A field is not allowed for the operation (for example, `directive` instead of `reason`). | Fix the body. |
+| `invalid_control_operation` | 422 | Unknown operation. | `queue`, `steer`, `redirect`, `request_cancel`, `force_cancel`. |
+| `invalid_control_status` | 422 | Unknown acknowledgment status. | `applied`, `rejected`, `superseded`. |
+| `unsafe_control_payload` | 422 | The message contains absolute local paths. | Remove the paths. |
 
-### Дочерние runs (child handles)
+### Child runs (child handles)
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `child_depth_exceeded` | 422 | Превышена глубина вложенности child runs. | Упростить декомпозицию. |
-| `child_grant_exceeded` | 403 | Run ограничен child handle, который не даёт это право. | Расширить grant при выпуске handle (в пределах родителя). |
-| `child_grant_exceeds_parent` | 422 | Запрошенный grant больше потолка родителя. | Сузить grant. |
-| `child_handle_expired` | 409 | Child handle истёк. | Выпустить новый. |
-| `child_handle_revoked` | 409 | Child handle отозван. | Выпустить новый. |
-| `child_result_too_large` | 422 | У run слишком много артефактов для результата. | Перечислить нужные в `output.artifactRefs`. |
-| `child_run_already_bound` | 409 | У handle уже есть работающий run. | Дождаться завершения. |
-| `invalid_cancellation_policy` | 422 | Неизвестная политика отмены. | Сверить с API. |
-| `invalid_child_expiry` | 422 | `expiresInSeconds` больше предела. | Уменьшить срок. |
-| `invalid_child_grant` | 422 | В grant допустимы только permissions, capabilities, skills. | Исправить grant. |
-| `invalid_child_handle_ref` | 422 | Ожидался id handle или токен `ch1_…`. | Передать корректную ссылку. |
-| `invalid_child_handle_token` | 422 | Токен не в формате `ch1_<id>_<secret>`. | Передать токен без изменений. |
-| `invalid_child_result` | 422 | `artifactRefs` должны быть id артефактов. | Исправить результат. |
-| `invalid_correlation_id` | 422 | `correlationId` не соответствует `^[A-Za-z0-9._:-]{1,128}$`. | Исправить значение. |
+| `child_depth_exceeded` | 422 | The nesting depth of child runs is exceeded. | Simplify the decomposition. |
+| `child_grant_exceeded` | 403 | The run is limited by a child handle that does not grant this permission. | Widen the grant when issuing the handle (within the parent's limits). |
+| `child_grant_exceeds_parent` | 422 | The requested grant exceeds the parent's ceiling. | Narrow the grant. |
+| `child_handle_expired` | 409 | The child handle has expired. | Issue a new one. |
+| `child_handle_revoked` | 409 | The child handle was revoked. | Issue a new one. |
+| `child_result_too_large` | 422 | The run has too many artifacts for the result. | List the ones you need in `output.artifactRefs`. |
+| `child_run_already_bound` | 409 | The handle already has a running run. | Wait for it to finish. |
+| `invalid_cancellation_policy` | 422 | Unknown cancellation policy. | Check against the API. |
+| `invalid_child_expiry` | 422 | `expiresInSeconds` exceeds the limit. | Reduce the lifetime. |
+| `invalid_child_grant` | 422 | Only permissions, capabilities, skills are allowed in a grant. | Fix the grant. |
+| `invalid_child_handle_ref` | 422 | A handle id or a `ch1_…` token was expected. | Pass a valid reference. |
+| `invalid_child_handle_token` | 422 | The token is not in the `ch1_<id>_<secret>` format. | Pass the token unchanged. |
+| `invalid_child_result` | 422 | `artifactRefs` must be artifact ids. | Fix the result. |
+| `invalid_correlation_id` | 422 | `correlationId` does not match `^[A-Za-z0-9._:-]{1,128}$`. | Fix the value. |
 
-### Задачи, связи, комментарии, типы
+### Tasks, relations, comments, types
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `comment_mismatch` | 422 | Артефакт не принадлежит задаче комментария. | Сверить ссылки. |
-| `dependency_cycle` | 422 | Связь создала бы цикл зависимостей. | Пересмотреть граф зависимостей. |
-| `external_reference_conflict` | 409 | Внешний идентификатор уже связан с другой сущностью. | Проверить `externalSystem`/`externalId`. |
-| `invalid_comment_body` | 422 | Пустой текст комментария. | Задать текст. |
-| `invalid_entity_reference` | 422 | Недопустимый `entityId`. | Исправить значение. |
-| `invalid_entity_type` | 422 | Неизвестный тип сущности. | Сверить с API. |
-| `invalid_external_lookup` | 422 | Нужно либо `entityType`+`entityId`, либо `externalSystem`+`externalId`. | Исправить запрос. |
-| `invalid_external_reference` | 422 | Недопустимая длина поля внешней ссылки. | Сократить значение. |
-| `invalid_lifecycle_schema` | 422 | Жизненный цикл типа задачи некорректен. | См. `details.path`. |
-| `invalid_planned_dates` | 422 | `startDate` позже `dueDate`. | Исправить даты. |
-| `invalid_relation` | 422 | Связь задачи с самой собой. | Указать другую задачу. |
-| `invalid_relation_type` | 422 | Неизвестный тип связи. | `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`. |
-| `invalid_task_execution` | 422 | Описание `execution` задачи некорректно (skill, версия, пути входов). | См. `details`; закрепить версию skill. |
-| `invalid_template` | 422 | Шаблон проекта некорректен (например, слишком много представлений по умолчанию). | Исправить шаблон. |
-| `invalid_template_reference` | 422 | `templateVersion` без `templateKey`/`templateId`. | Указать шаблон. |
-| `invalid_title` | 422 | Пустой заголовок задачи. | Задать `title`. |
-| `invalid_transition` | 422 | Переход статуса не объявлен типом задачи. | Взять разрешённые переходы из `GET /tasks/{ref}/transitions`. |
-| `not_comment_author` | 403 | Редактировать комментарий может только автор. | — |
-| `relation_exists` | 409 | Такая связь уже есть. | — |
-| `status_not_in_lifecycle` | 422 | Статус не объявлен жизненным циклом типа. | Использовать статусы типа. |
-| `system_task_type_required` | 422 | Tenant должен сохранять активную версию системного типа задачи. | Не выводить системный тип из оборота. |
-| `task_already_completed` | 409 | Задача уже завершена. | — |
-| `task_cancelled` | 422 | Отменённую задачу нельзя завершить. | Создать новую задачу. |
-| `template_deprecated` | 422 | Устаревший шаблон нельзя использовать для нового проекта. | Взять активную версию. |
+| `comment_mismatch` | 422 | The artifact does not belong to the comment's task. | Check the references. |
+| `dependency_cycle` | 422 | The relation would create a dependency cycle. | Revise the dependency graph. |
+| `external_reference_conflict` | 409 | The external identifier is already linked to another entity. | Check `externalSystem`/`externalId`. |
+| `invalid_comment_body` | 422 | Empty comment text. | Provide text. |
+| `invalid_entity_reference` | 422 | Invalid `entityId`. | Fix the value. |
+| `invalid_entity_type` | 422 | Unknown entity type. | Check against the API. |
+| `invalid_external_lookup` | 422 | Either `entityType`+`entityId` or `externalSystem`+`externalId` is required. | Fix the request. |
+| `invalid_external_reference` | 422 | Invalid length of an external reference field. | Shorten the value. |
+| `invalid_lifecycle_schema` | 422 | The task type lifecycle is invalid. | See `details.path`. |
+| `invalid_planned_dates` | 422 | `startDate` is later than `dueDate`. | Fix the dates. |
+| `invalid_relation` | 422 | A relation of a task to itself. | Specify another task. |
+| `invalid_relation_type` | 422 | Unknown relation type. | `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`. |
+| `invalid_task_execution` | 422 | The task's `execution` description is invalid (skill, version, input paths). | See `details`; pin the skill version. |
+| `invalid_template` | 422 | The project template is invalid (for example, too many default views). | Fix the template. |
+| `invalid_template_reference` | 422 | `templateVersion` without `templateKey`/`templateId`. | Specify the template. |
+| `invalid_title` | 422 | Empty task title. | Set `title`. |
+| `invalid_transition` | 422 | The task type does not declare this status transition. | Take the allowed transitions from `GET /tasks/{ref}/transitions`. |
+| `not_comment_author` | 403 | Only the author can edit a comment. | — |
+| `relation_exists` | 409 | This relation already exists. | — |
+| `status_not_in_lifecycle` | 422 | The type's lifecycle does not declare the status. | Use the type's statuses. |
+| `system_task_type_required` | 422 | The tenant must keep an active version of the system task type. | Do not retire the system type. |
+| `task_already_completed` | 409 | The task is already completed. | — |
+| `task_cancelled` | 422 | A cancelled task cannot be completed. | Create a new task. |
+| `template_deprecated` | 422 | A deprecated template cannot be used for a new project. | Use the active version. |
 
-### Цели, приёмка и evidence (work graph)
+### Goals, acceptance, and evidence (work graph)
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `duplicate_check_key` | 422 | Повтор ключа проверки в acceptance. | Сделать ключи уникальными. |
-| `duplicate_evidence` | 422 | Повтор evidence. | Убрать дубль. |
-| `goal_abandoned` | 422 | Работу нельзя связать с оставленной целью. | Выбрать активную цель. |
-| `goal_cycle` | 422 | Новый родитель — потомок этой цели. | Выбрать другого родителя. |
-| `goal_too_deep` | 422 | Иерархия целей глубже предела. | Уменьшить вложенность. |
-| `goal_workspace_mismatch` | 422 | Цель задачи из другого workspace. | Перепривязать или отвязать цель. |
-| `invalid_acceptance` | 422 | Некорректные критерии приёмки. | См. `details.field`. |
-| `invalid_desired_state` | 422 | Некорректное желаемое состояние цели. | См. `details.field`. |
-| `invalid_evidence` | 422 | Некорректное evidence. | См. `details.field`. |
-| `invalid_goal_status` | 422 | Неизвестный статус цели. | Сверить с API. |
-| `invalid_origin` | 422 | Некорректный `origin`. | См. `details.field`. |
-| `unknown_acceptance_check` | 422 | Evidence ссылается на проверку, которой нет в acceptance. | Сверить ключи проверок. |
+| `duplicate_check_key` | 422 | A repeated check key in acceptance. | Make the keys unique. |
+| `duplicate_evidence` | 422 | Repeated evidence. | Remove the duplicate. |
+| `goal_abandoned` | 422 | Work cannot be linked to an abandoned goal. | Choose an active goal. |
+| `goal_cycle` | 422 | The new parent is a descendant of this goal. | Choose another parent. |
+| `goal_too_deep` | 422 | The goal hierarchy is deeper than the limit. | Reduce nesting. |
+| `goal_workspace_mismatch` | 422 | The task's goal is from another workspace. | Relink or unlink the goal. |
+| `invalid_acceptance` | 422 | Invalid acceptance criteria. | See `details.field`. |
+| `invalid_desired_state` | 422 | Invalid desired state of the goal. | See `details.field`. |
+| `invalid_evidence` | 422 | Invalid evidence. | See `details.field`. |
+| `invalid_goal_status` | 422 | Unknown goal status. | Check against the API. |
+| `invalid_origin` | 422 | Invalid `origin`. | See `details.field`. |
+| `unknown_acceptance_check` | 422 | Evidence refers to a check that is not in acceptance. | Check the check keys. |
 
-### Workspaces, проекты, конфигурация
+### Workspaces, projects, configuration
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `child_type_not_allowed` | 422 | Тип дочернего workspace не разрешён родителем. | Сверить `allowedChildTypes`. |
-| `governance_not_in_settings` | 422 | Governance задаётся только версионированной ревизией конфигурации. | Использовать ревизию. |
-| `governance_weakened` | 422 | Новая иерархия ослабляет governance предка. | — |
-| `invalid_config` | 422 | Некорректная конфигурация проекта. | См. `details`. |
-| `invalid_governance` | 422 | Некорректный раздел governance. | См. `details.path`. |
-| `invalid_project_request` | 422 | Нужен `workspaceId` или `workspaceSlug`. | Исправить запрос. |
-| `invalid_workspace_type` | 422 | Некорректный `allowedChildTypes`. | Ключи типов или `*`. |
-| `project_archived` | 422 | Архивный проект не активирует ревизии конфигурации. | — |
-| `project_exists` | 409 | У workspace уже есть project profile. | — |
-| `setting_locked` | 422 | Иерархия заблокирует настройки, которые проект уже переопределяет. | Снять переопределения. |
-| `system_type_immutable` | 422 | Системный тип workspace должен принимать любые дочерние типы. | — |
-| `unknown_config_section` | 422 | Неизвестный раздел конфигурации. | Убрать раздел. |
-| `unknown_governance_field` | 422 | Неизвестное поле governance. | Убрать поле. |
-| `workspace_archived` | 422 | Архивный workspace не принимает project profile. | Разархивировать или выбрать другой. |
-| `workspace_cycle` | 422 | Перемещение workspace под собственного потомка. | Выбрать другого родителя. |
-| `workspace_has_active_children` | 422 | У workspace есть активные дочерние. | Архивировать или перенести дочерние. |
-| `workspace_has_active_project` | 422 | На workspace активный проект. | Сначала архивировать проект. |
-| `workspace_slug_conflict` | 409 | Соседний workspace с таким slug уже есть. | Выбрать другой slug. |
-| `workspace_type_archived` | 422 | Тип workspace архивирован. | Выбрать активный тип. |
-| `workspace_type_exists` | 409 | Тип с таким ключом уже есть. | — |
-| `workspace_type_in_use` | 422 | Тип используют активные workspaces. | Перевести их на другой тип. |
+| `child_type_not_allowed` | 422 | The parent does not allow the child workspace type. | Check `allowedChildTypes`. |
+| `governance_not_in_settings` | 422 | Governance is set only through a versioned configuration revision. | Use a revision. |
+| `governance_weakened` | 422 | The new hierarchy weakens an ancestor's governance. | — |
+| `invalid_config` | 422 | Invalid project configuration. | See `details`. |
+| `invalid_governance` | 422 | Invalid governance section. | See `details.path`. |
+| `invalid_project_request` | 422 | `workspaceId` or `workspaceSlug` is required. | Fix the request. |
+| `invalid_workspace_type` | 422 | Invalid `allowedChildTypes`. | Type keys or `*`. |
+| `project_archived` | 422 | An archived project does not activate configuration revisions. | — |
+| `project_exists` | 409 | The workspace already has a project profile. | — |
+| `setting_locked` | 422 | The hierarchy would lock settings that the project already overrides. | Remove the overrides. |
+| `system_type_immutable` | 422 | The system workspace type must accept any child types. | — |
+| `unknown_config_section` | 422 | Unknown configuration section. | Remove the section. |
+| `unknown_governance_field` | 422 | Unknown governance field. | Remove the field. |
+| `workspace_archived` | 422 | An archived workspace does not accept a project profile. | Unarchive it or choose another. |
+| `workspace_cycle` | 422 | Moving a workspace under its own descendant. | Choose another parent. |
+| `workspace_has_active_children` | 422 | The workspace has active children. | Archive or move the children. |
+| `workspace_has_active_project` | 422 | The workspace has an active project. | Archive the project first. |
+| `workspace_slug_conflict` | 409 | A sibling workspace with this slug already exists. | Choose another slug. |
+| `workspace_type_archived` | 422 | The workspace type is archived. | Choose an active type. |
+| `workspace_type_exists` | 409 | A type with this key already exists. | — |
+| `workspace_type_in_use` | 422 | Active workspaces use the type. | Move them to another type. |
 
 ### Approvals
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `approval_already_decided` | 409 | Approval уже не в `pending`. | — |
-| `approval_already_used` | 409 | Approval уже авторизовал вызов этой версии skill. | Запросить новый approval. |
-| `approval_required` | 409 | Задача ждёт решения по gate approval. | Дождаться решения человека. |
-| `credential_inactive` | 403 | Credential, которым принято решение, больше не активен. | Принять решение заново. |
-| `invalid_action_input` | 422 | Вход действия исхода не проходит схему. | См. сообщение. |
-| `invalid_approval` | 422 | Нужно ровно одно из `requiredRoleId` и `assignedPrincipalId`. | Исправить запрос. |
-| `invalid_approval_schema` | 422 | Неподдерживаемое выражение в схеме исхода approval. | См. `details`. |
-| `outcome_not_replayable` | 409 | Повторить можно только провалившийся или зависший исход. | — |
+| `approval_already_decided` | 409 | The approval is no longer `pending`. | — |
+| `approval_already_used` | 409 | The approval already authorized an invocation of this skill version. | Request a new approval. |
+| `approval_required` | 409 | The task is waiting for a decision on a gate approval. | Wait for the human decision. |
+| `credential_inactive` | 403 | The credential used to make the decision is no longer active. | Make the decision again. |
+| `invalid_action_input` | 422 | The input of an outcome action does not pass the schema. | See the message. |
+| `invalid_approval` | 422 | Exactly one of `requiredRoleId` and `assignedPrincipalId` is required. | Fix the request. |
+| `invalid_approval_schema` | 422 | Unsupported expression in the approval outcome schema. | See `details`. |
+| `outcome_not_replayable` | 409 | Only a failed or stuck outcome can be replayed. | — |
 
-### Каталог, skills и вызовы
+### Catalog, skills, and invocations
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `capability_exists` | 409 | Capability с таким именем уже есть. | — |
-| `execution_already_invoked` | 409 | Run уже сделал свой вызов исполнения. | — |
-| `invalid_executor_endpoint` | 422 | Недопустимый endpoint исполнителя. | Сверить с разрешёнными origins. |
-| `invalid_protocol` | 422 | Неизвестный протокол skill или исполнитель объявил недопустимый. | `http`, `local`, `mcp`. |
-| `invalid_skill_contract` | 422 | Контракт skill некорректен. | См. `details.field`. |
-| `invalid_skill_inputs` | 400 | Входы не соответствуют input schema skill. | Исправить `inputs`. |
-| `invalid_status_transition` | 409 | Статус skill меняется только `active → deprecated → disabled`. | — |
-| `invocation_mismatch` | 422 | Run не принадлежит задаче вызова. | Сверить ссылки. |
-| `invocation_terminal` | 409 | Вызов уже завершён. | — |
-| `role_slug_conflict` | 409 | Роль с таким slug в этом scope уже есть. | Выбрать другой slug. |
-| `skill_disabled` | 422 | Нельзя назначить отключённый skill. | — |
-| `skill_exists` | 409 | Skill с таким именем и версией уже есть. | Опубликовать новую версию. |
-| `skill_not_invocable` | 409 | Эту версию skill ядро вызвать не может (протокол не `http`/`local`/`mcp`). | Опубликовать версию с поддерживаемым протоколом. |
-| `skill_permission_denied` | 403 | У вызывающего нет прав, которых требует skill. | Выдать `requiredPermissions` skill. |
-| `skill_side_effect_not_authorized` | 403 | Skill с `external_write` требует одобренного gate на задаче. | Получить approval. |
-| `skill_version_immutable` | 409 | Опубликованную версию skill менять нельзя. | Опубликовать новую версию. |
-| `stale_invocation_lease` | 409 | Исполнитель больше не держит аренду вызова. | Прекратить работу над вызовом. |
-| `task_terminal` | 409 | Skill с `external_write` не может действовать для закрытой задачи. | — |
-| `unsupported_skill_condition` | 422 | Условия skill этого вида пока не поддерживаются. | Убрать условие. |
+| `capability_exists` | 409 | A capability with this name already exists. | — |
+| `execution_already_invoked` | 409 | The run has already made its execution invocation. | — |
+| `invalid_executor_endpoint` | 422 | Invalid executor endpoint. | Check against the allowed origins. |
+| `invalid_protocol` | 422 | Unknown skill protocol, or the executor declared an invalid one. | `http`, `local`, `mcp`. |
+| `invalid_skill_contract` | 422 | The skill contract is invalid. | See `details.field`. |
+| `invalid_skill_inputs` | 400 | The inputs do not match the skill's input schema. | Fix `inputs`. |
+| `invalid_status_transition` | 409 | A skill status changes only `active → deprecated → disabled`. | — |
+| `invocation_mismatch` | 422 | The run does not belong to the invocation's task. | Check the references. |
+| `invocation_terminal` | 409 | The invocation is already finished. | — |
+| `role_slug_conflict` | 409 | A role with this slug already exists in this scope. | Choose another slug. |
+| `skill_disabled` | 422 | A disabled skill cannot be assigned. | — |
+| `skill_exists` | 409 | A skill with this name and version already exists. | Publish a new version. |
+| `skill_not_invocable` | 409 | The core cannot invoke this skill version (the protocol is not `http`/`local`/`mcp`). | Publish a version with a supported protocol. |
+| `skill_permission_denied` | 403 | The caller lacks the permissions the skill requires. | Grant the skill's `requiredPermissions`. |
+| `skill_side_effect_not_authorized` | 403 | A skill with `external_write` requires an approved gate on the task. | Get an approval. |
+| `skill_version_immutable` | 409 | A published skill version cannot be changed. | Publish a new version. |
+| `stale_invocation_lease` | 409 | The executor no longer holds the invocation lease. | Stop working on the invocation. |
+| `task_terminal` | 409 | A skill with `external_write` cannot act for a closed task. | — |
+| `unsupported_skill_condition` | 422 | Skill conditions of this kind are not supported yet. | Remove the condition. |
 
-### Харнесс-манифест и поиск инструментов
+### Harness manifest and tool search
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `invalid_compile_reason` | 422 | `run_started` зарезервирован за автоматической компиляцией. | Указать другую причину. |
-| `invalid_declaration` | 422 | Объявленные разделы манифеста должны быть объектом. | Исправить манифест. |
-| `invalid_ephemeral_kind` | 422 | Недопустимый `kind` эфемерной записи. | См. сообщение. |
-| `invalid_ephemeral_summary` | 422 | Пустой или слишком длинный `summary`. | Сократить. |
-| `invalid_fallback_attempt` | 422 | Fallback провайдера должен объявлять `model.attempt` больше активного. | Увеличить `attempt`. |
-| `invalid_model_attempt` | 422 | `model.attempt` не положительное целое. | Исправить. |
-| `invalid_tool_query` | 422 | Слишком длинный запрос поиска инструментов. | Сократить. |
-| `invalid_tool_schema` | 422 | Input schema инструмента должна быть объектом. | Исправить схему. |
-| `server_authoritative_section` | 422 | Разделы, вычисляемые сервером, нельзя объявлять. | Убрать раздел. |
-| `unknown_manifest_section` | 422 | Неизвестный раздел манифеста. | Убрать раздел. |
-| `unsafe_manifest_payload` | 422 | Ссылка на память содержит локальные пути или чувствительные ключи. | Убрать их. |
+| `invalid_compile_reason` | 422 | `run_started` is reserved for automatic compilation. | Specify another reason. |
+| `invalid_declaration` | 422 | Declared manifest sections must be an object. | Fix the manifest. |
+| `invalid_ephemeral_kind` | 422 | Invalid `kind` of an ephemeral record. | See the message. |
+| `invalid_ephemeral_summary` | 422 | Empty or too long `summary`. | Shorten it. |
+| `invalid_fallback_attempt` | 422 | A provider fallback must declare a `model.attempt` greater than the active one. | Increase `attempt`. |
+| `invalid_model_attempt` | 422 | `model.attempt` is not a positive integer. | Fix it. |
+| `invalid_tool_query` | 422 | The tool search query is too long. | Shorten it. |
+| `invalid_tool_schema` | 422 | A tool's input schema must be an object. | Fix the schema. |
+| `server_authoritative_section` | 422 | Sections computed by the server cannot be declared. | Remove the section. |
+| `unknown_manifest_section` | 422 | Unknown manifest section. | Remove the section. |
+| `unsafe_manifest_payload` | 422 | A memory reference contains local paths or sensitive keys. | Remove them. |
 
-### События и операции
+### Events and operations
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `cursor_below_journal_floor` | 422 | Курсор старше сохранённой части журнала. | Перестроить состояние с начала доступного журнала. |
-| `cursor_must_not_advance` | 422 | Rebuild может только сдвигать курсор назад. | — |
-| `invalid_cursor` | 422 | Некорректный курсор событий или страницы. | Передавать курсор без изменений. |
-| `retention_blocked_by_consumer` | 409 | Нет курсора потребителя: доставка не подтверждена, чистить журнал нельзя. | Дождаться потребителей. |
-| `unsupported_cursor_version` | 422 | Версия курсора не поддерживается сервером. | Начать чтение заново. |
+| `cursor_below_journal_floor` | 422 | The cursor is older than the retained part of the log. | Rebuild the state from the start of the available log. |
+| `cursor_must_not_advance` | 422 | A rebuild can only move the cursor backward. | — |
+| `invalid_cursor` | 422 | Invalid event or page cursor. | Pass the cursor unchanged. |
+| `retention_blocked_by_consumer` | 409 | No consumer cursor: delivery is not confirmed, so the log cannot be pruned. | Wait for the consumers. |
+| `unsupported_cursor_version` | 422 | The server does not support the cursor version. | Start reading again. |
 
-### Память и знания
+### Memory and knowledge
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `invalid_context_request` | 422 | Некорректный запрос контекста (например, `maxTokens ≤ 0`). | Исправить запрос. |
-| `memory_disabled` | 503 | Провайдер памяти не настроен (`CP_CONTEXT_PROVIDER=none`). | Включить `http`-провайдер. |
-| `memory_unavailable` | 502 | memory-service не обработал запрос (5xx, транспорт, 401/403 для identity ядра); `details.memoryStatus`, `details.retryable`. | Проверить память и credential ядра (`CP_CONTEXT_AUTH`). |
-| `observation_invalid` | 422 | Наблюдение некорректно (например, `source` не по шаблону). | См. сообщение. |
-| `pack_invalid` | 422 | Память отвергла манифест knowledge pack. | Исправить манифест. |
-| `pack_version_conflict` | 409 | Эта версия pack уже зарегистрирована с другим содержимым. | Опубликовать новую версию. |
-| `pack_version_required` | 422 | Knowledge packs включаются закреплённой ссылкой `name@version`. | Указать версию. |
-| `snapshot_invalid` | 422 | Память отвергла снимок источника. | Исправить снимок. |
-| `snapshot_stale` | 409 | В памяти уже более новый снимок этого источника. | Отправить актуальный снимок. |
-| `workspace_not_root` | 422 | Knowledge packs задаются на корневом workspace дерева. | Указать корневой workspace. |
-### Коды клиентской библиотеки и CLI
+| `invalid_context_request` | 422 | Invalid context request (for example, `maxTokens ≤ 0`). | Fix the request. |
+| `memory_disabled` | 503 | The memory provider is not configured (`CP_CONTEXT_PROVIDER=none`). | Enable the `http` provider. |
+| `memory_unavailable` | 502 | memory-service did not process the request (5xx, transport, 401/403 for the core identity); `details.memoryStatus`, `details.retryable`. | Check memory and the core credential (`CP_CONTEXT_AUTH`). |
+| `observation_invalid` | 422 | The observation is invalid (for example, `source` does not match the pattern). | See the message. |
+| `pack_invalid` | 422 | Memory rejected the knowledge pack manifest. | Fix the manifest. |
+| `pack_version_conflict` | 409 | This pack version is already registered with different content. | Publish a new version. |
+| `pack_version_required` | 422 | Knowledge packs are enabled with a pinned `name@version` reference. | Specify the version. |
+| `snapshot_invalid` | 422 | Memory rejected the source snapshot. | Fix the snapshot. |
+| `snapshot_stale` | 409 | Memory already has a newer snapshot of this source. | Send the current snapshot. |
+| `workspace_not_root` | 422 | Knowledge packs are set on the root workspace of the tree. | Specify the root workspace. |
+### Client library and CLI codes
 
-Эти коды порождает не сервер, а `control_plane_client` (его используют
-runner, CLI, MCP-сервер, коннекторы) до или вместо обращения к серверу.
-Они приходят как `ControlPlaneError.code`.
+These codes come not from the server but from `control_plane_client` (used by
+the runner, the CLI, the MCP server, connectors) before or instead of calling
+the server. They arrive as `ControlPlaneError.code`.
 
-| Код | Причина | Что делать |
+| Code | Cause | What to do |
 |---|---|---|
-| `transport_error` | Сетевая ошибка: запрос мог выполниться, а мог и нет. | Повторять только с тем же `Idempotency-Key` (клиент делает это сам для идемпотентных команд). |
-| `iam_url_required` | Не задан `CONTROL_PLANE_IAM_URL` при явном создании IAM-credential. | Задать адрес IAM. |
-| `iam_tenant_required` | Задан `CONTROL_PLANE_IAM_URL`, но не `CONTROL_PLANE_IAM_TENANT`. | Задать tenant. |
-| `iam_unreachable` | IAM недоступен при обмене PAT. | Проверить сеть и адрес IAM. |
-| `iam_invalid_token` | IAM отверг PAT (401): отозван, истёк, неизвестен. | Перевыпустить PAT (`iam auth login` или выпуск администратором). |
-| `iam_audience_not_allowed` | IAM ответил 403 на обмен: audience или scope вне потолка PAT. | Сверить audiences и `scopeCeiling` PAT с `CONTROL_PLANE_IAM_AUDIENCE`/`…_SCOPES`. |
-| `iam_exchange_failed` | Иной отказ IAM при обмене (≥ 400). | Смотреть лог IAM. |
-| `iam_exchange_malformed` | Ответ обмена без `accessToken`/`expiresIn` или с пустым токеном. | Проверить версию IAM. |
-| `iam_not_authenticated` | На машине нет PAT для этой пары IAM URL + tenant (или явно переданный PAT пуст). | Выполнить вход или положить PAT в хранилище. |
-| `iam_credential_ambiguous` | В хранилище несколько credential для одной пары IAM URL + tenant, а процесс не объявил себя. | Задать `IAM_PRINCIPAL=<principal-id>` для процесса. |
-| `iam_environment_mode_required` | `IAM_PLATFORM_ACCESS_TOKEN` задан без `IAM_CREDENTIAL_MODE=environment` (или `ci`). | Добавить режим — унаследованная переменная не должна молча подменять учётку. |
-| `iam_credentials_file_permissions` | `~/.config/iam/credentials.json` доступен не только владельцу. | `chmod 600`. |
-| `iam_credentials_file_unreadable` | Файл credentials не читается или не JSON. | Восстановить файл. |
-| `not_configured` | MCP-сервер: нет `CONTROL_PLANE_SERVER` и `.control-plane/config.json`. | Задать сервер. |
-| `not_authenticated` | MCP-сервер: нет ни IAM-identity, ни legacy-ключа. | Настроить IAM (`iam auth login`). |
-| `invalid_harness_configuration` | `CONTROL_PLANE_HARNESS_TYPE` не в формате идентификатора. | Исправить значение. |
+| `transport_error` | Network error: the request may or may not have been executed. | Retry only with the same `Idempotency-Key` (the client does this itself for idempotent commands). |
+| `iam_url_required` | `CONTROL_PLANE_IAM_URL` is not set when an IAM credential is created explicitly. | Set the IAM address. |
+| `iam_tenant_required` | `CONTROL_PLANE_IAM_URL` is set, but `CONTROL_PLANE_IAM_TENANT` is not. | Set the tenant. |
+| `iam_unreachable` | IAM is unavailable during PAT exchange. | Check the network and the IAM address. |
+| `iam_invalid_token` | IAM rejected the PAT (401): revoked, expired, unknown. | Reissue the PAT (`iam auth login` or issuance by an administrator). |
+| `iam_audience_not_allowed` | IAM returned 403 on exchange: the audience or scope is outside the PAT ceiling. | Check the PAT's audiences and `scopeCeiling` against `CONTROL_PLANE_IAM_AUDIENCE`/`…_SCOPES`. |
+| `iam_exchange_failed` | Another IAM denial during exchange (≥ 400). | See the IAM log. |
+| `iam_exchange_malformed` | The exchange response lacks `accessToken`/`expiresIn` or has an empty token. | Check the IAM version. |
+| `iam_not_authenticated` | The machine has no PAT for this IAM URL + tenant pair (or an explicitly passed PAT is empty). | Sign in or put the PAT into the store. |
+| `iam_credential_ambiguous` | The store has several credentials for one IAM URL + tenant pair, and the process has not declared itself. | Set `IAM_PRINCIPAL=<principal-id>` for the process. |
+| `iam_environment_mode_required` | `IAM_PLATFORM_ACCESS_TOKEN` is set without `IAM_CREDENTIAL_MODE=environment` (or `ci`). | Add the mode: an inherited variable must not silently replace the account. |
+| `iam_credentials_file_permissions` | `~/.config/iam/credentials.json` is accessible to users other than the owner. | `chmod 600`. |
+| `iam_credentials_file_unreadable` | The credentials file cannot be read or is not JSON. | Restore the file. |
+| `not_configured` | MCP server: no `CONTROL_PLANE_SERVER` and no `.control-plane/config.json`. | Set the server. |
+| `not_authenticated` | MCP server: neither an IAM identity nor a legacy key. | Configure IAM (`iam auth login`). |
+| `invalid_harness_configuration` | `CONTROL_PLANE_HARNESS_TYPE` is not in the identifier format. | Fix the value. |
 
-Клиент отображает коды сервера на типизированные исключения:
+The client maps server codes to typed exceptions:
 `stale_claim` → `StaleClaimError`; `task_already_claimed`, `task_claimed`,
 `claim_not_expired` → `ClaimConflictError`; `task_not_ready` →
 `TaskNotReadyError`; `approval_required` → `ApprovalRequiredError`;
@@ -387,149 +388,151 @@ runner, CLI, MCP-сервер, коннекторы) до или вместо о
 `run_not_active` → `RunNotActiveError`; `task_cancelled` →
 `CancelledError`; `invalid_credentials` → `AuthenticationError`;
 `permission_denied` → `PermissionDeniedError`; `not_found` →
-`NotFoundError`. Остальные — по HTTP-статусу.
+`NotFoundError`. The rest map by HTTP status.
 
 ## iam-service
 
-Ответ — `{"detail": "<code>"}`.
+The response is `{"detail": "<code>"}`.
 
-### Токены и обмен
+### Tokens and exchange
 
-| Код | HTTP | Эндпоинт | Причина | Что делать |
+| Code | HTTP | Endpoint | Cause | What to do |
 |---|---|---|---|---|
-| `invalid_token` | 401 | PAT: `…:exchange`, introspect, self-revoke | PAT неизвестен, неверный секрет, отозван, истёк; неактивны tenant, membership или principal. Точная причина — в audit. | Перевыпустить PAT; проверить статус principal. |
-| `audience_not_allowed` | 403 | обмен PAT, client credentials, федерация | Audience нет в списке credential или он не активен в tenant. | Выпустить PAT на нужный audience; завести audience в IAM. |
-| `scope_not_allowed` | 403 | обмен | Запрошенные scopes вне потолка credential или `allowedScopes` audience. Частая причина — scope без префикса (`read` вместо `control-plane:read`). | Запрашивать scopes с префиксом audience в пределах потолка. |
-| `invalid_client` | 401 | `POST /api/v1/tokens/exchange` | Неизвестный или отозванный client, неверный секрет, неактивны membership/principal. | Перевыпустить service account. |
-| `human_principal_required` | 422 | федерация, authentication context, выпуск PAT человеком | Операция доступна только principal вида `human`. | — |
+| `invalid_token` | 401 | PAT: `…:exchange`, introspect, self-revoke | The PAT is unknown, has a wrong secret, is revoked or expired; the tenant, membership, or principal is inactive. The exact reason is in the audit trail. | Reissue the PAT; check the principal status. |
+| `audience_not_allowed` | 403 | PAT exchange, client credentials, federation | The audience is not in the credential's list or is not active in the tenant. | Issue a PAT for the required audience; register the audience in IAM. |
+| `scope_not_allowed` | 403 | exchange | The requested scopes are outside the credential ceiling or the audience's `allowedScopes`. A common cause is a scope without the prefix (`read` instead of `control-plane:read`). | Request scopes with the audience prefix within the ceiling. |
+| `invalid_client` | 401 | `POST /api/v1/tokens/exchange` | Unknown or revoked client, wrong secret, inactive membership/principal. | Reissue the service account. |
+| `human_principal_required` | 422 | federation, authentication context, PAT issuance for a human | The operation is available only to a principal of kind `human`. | — |
 
-### Выпуск и управление PAT
+### PAT issuance and management
 
-| Код | HTTP | Причина | Что делать |
+| Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `idempotency_key_required` | 400 | Выпуск PAT без заголовка `Idempotency-Key`. | Передать уникальный ключ. |
-| `authentication_context_required` | 403 | Для человека нет authentication context. | Создать контекст (`POST …/principals/{id}/authentication-contexts`) и сразу выпускать. |
-| `authentication_context_expired` | 403 | Контекст старше `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` (300 с). | Создать свежий контекст. |
-| `principal_kind_not_allowed` | 422 | PAT выпускается только `human` и `agent`; `service_account` — нет. | Для сервисов использовать client credentials; сервисный агент заводить видом `agent`. |
-| `invalid_scope_ceiling` | 422 | Потолок PAT шире `allowedScopes` его audiences. | Сузить `scopeCeiling`. |
-| `expiry_too_long` | 422 | Срок больше `IAM_PAT_MAX_TTL_SECONDS` (365 дней). | Уменьшить `expiresInSeconds`. |
-| `unknown_audience` | 422 | Audience PAT (или service account) не зарегистрирован и не активен в tenant. | Завести audience. |
-| `principal_not_found` | 404 | Нет такого principal. | — |
-| `principal_not_active` | 409 | Principal не активен. | Активировать. |
-| `credential_not_found` | 404 | Нет credential для ротации/отзыва. | — |
-| `credential_not_active` | 409 | Ротация отозванного или истёкшего PAT. | Выпустить новый — ротация срок не продлевает. |
-| `credential_conflict` | 409 | Параллельная запись того же credential. | Повторить с тем же `Idempotency-Key`. |
-| `credential_exists` | 409 | Перенос legacy-ключа, который уже перенесён. | — |
-| `invalid_credential_material` | 422 | Перенос legacy-ключа: неверный префикс или хэш. | — |
-| `compatibility_window_too_long` | 422 | Окно перенесённого legacy-ключа больше `IAM_LEGACY_CREDENTIAL_MAX_TTL_SECONDS`. | Уменьшить срок. |
+| `idempotency_key_required` | 400 | PAT issuance without the `Idempotency-Key` header. | Pass a unique key. |
+| `authentication_context_required` | 403 | There is no authentication context for the human. | Create a context (`POST …/principals/{id}/authentication-contexts`) and issue right away. |
+| `authentication_context_expired` | 403 | The context is older than `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` (300 s). | Create a fresh context. |
+| `principal_kind_not_allowed` | 422 | A PAT is issued only to `human` and `agent`, not to `service_account`. | Use client credentials for services; set up a service agent with kind `agent`. |
+| `invalid_scope_ceiling` | 422 | The PAT ceiling is wider than the `allowedScopes` of its audiences. | Narrow `scopeCeiling`. |
+| `expiry_too_long` | 422 | The lifetime exceeds `IAM_PAT_MAX_TTL_SECONDS` (365 days). | Reduce `expiresInSeconds`. |
+| `unknown_audience` | 422 | The audience of the PAT (or service account) is not registered or not active in the tenant. | Register the audience. |
+| `principal_not_found` | 404 | No such principal. | — |
+| `principal_not_active` | 409 | The principal is not active. | Activate it. |
+| `credential_not_found` | 404 | No credential to rotate/revoke. | — |
+| `credential_not_active` | 409 | Rotation of a revoked or expired PAT. | Issue a new one: rotation does not extend the lifetime. |
+| `credential_conflict` | 409 | A concurrent write of the same credential. | Retry with the same `Idempotency-Key`. |
+| `credential_exists` | 409 | Migrating a legacy key that has already been migrated. | — |
+| `invalid_credential_material` | 422 | Legacy key migration: wrong prefix or hash. | — |
+| `compatibility_window_too_long` | 422 | The window of a migrated legacy key exceeds `IAM_LEGACY_CREDENTIAL_MAX_TTL_SECONDS`. | Reduce the lifetime. |
 
-### Администрирование tenant
+### Tenant administration
 
-| Код | HTTP | Причина |
+| Code | HTTP | Cause |
 |---|---|---|
-| `unauthorized` | 401 | Bootstrap-эндпоинт без верного `X-IAM-Bootstrap-Token` (заголовок `Authorization: Bearer` не подходит). |
-| `tenant_not_found` | 404 | Нет tenant. |
-| `tenant_id_exists` | 409 | Tenant с переданным `id` уже есть. |
-| `tenant_slug_exists` | 409 | Tenant с таким slug уже есть. |
-| `audience_exists` | 409 | Audience уже заведён. |
-| `audience_not_found` | 404 | Нет audience (PATCH). |
-| `invalid_scope` | 422 | Пустой scope или длиннее 120 символов в `allowedScopes` audience. |
-| `service_account_not_found` | 404 | Нет service account. |
-| `group_not_found`, `group_exists`, `group_membership_exists` | 404, 409, 409 | Группы. |
-| `group_is_federated` | 409 | Группа управляется федерацией. |
+| `unauthorized` | 401 | A bootstrap endpoint without a valid `X-IAM-Bootstrap-Token` (the `Authorization: Bearer` header does not work). |
+| `tenant_not_found` | 404 | No tenant. |
+| `tenant_id_exists` | 409 | A tenant with the given `id` already exists. |
+| `tenant_slug_exists` | 409 | A tenant with this slug already exists. |
+| `audience_exists` | 409 | The audience is already registered. |
+| `audience_not_found` | 404 | No audience (PATCH). |
+| `invalid_scope` | 422 | An empty scope or one longer than 120 characters in the audience's `allowedScopes`. |
+| `service_account_not_found` | 404 | No service account. |
+| `group_not_found`, `group_exists`, `group_membership_exists` | 404, 409, 409 | Groups. |
+| `group_is_federated` | 409 | The group is managed by federation. |
 | `identity_provider_not_found`, `identity_provider_exists` | 404, 409 | Identity provider. |
-| `identity_provider_managed` | 409 | Внешнюю identity нельзя привязать вручную: её issuer обслуживает активный provider с профилем `read_only`. |
-| `invalid_issuer` | 422 | Недопустимый issuer provider. |
-| `external_identity_exists` | 409 | Внешняя identity уже привязана. |
-| `service_account_required`, `service_principal_required` | 422 | SCIM-источник должен быть service account. |
-| `provisioning_source_exists` | 409 | SCIM-источник уже заведён. |
-| `population_managed_by_directory` | 409 | Популяцией principals управляет каталог (SCIM). |
+| `identity_provider_managed` | 409 | The external identity cannot be linked manually: its issuer is served by an active provider with the `read_only` profile. |
+| `invalid_issuer` | 422 | Invalid provider issuer. |
+| `external_identity_exists` | 409 | The external identity is already linked. |
+| `service_account_required`, `service_principal_required` | 422 | The SCIM source must be a service account. |
+| `provisioning_source_exists` | 409 | The SCIM source is already registered. |
+| `population_managed_by_directory` | 409 | The principal population is managed by the directory (SCIM). |
 
-### Федерация identity
+### Identity federation
 
-| Код | HTTP | Причина |
+| Code | HTTP | Cause |
 |---|---|---|
-| `invalid_token`, `invalid_signature`, `token_expired`, `invalid_issuer`, `invalid_audience`, `unknown_signing_key`, `unsupported_algorithm`, `missing_subject_claim` | 401 | Токен upstream-провайдера (внешнего IdP) не прошёл проверку. |
-| `step_up_required` | 403 | Требуется более сильная аутентификация (`acr`/`amr`). |
-| `identity_disabled`, `principal_disabled`, `principal_not_in_tenant` | 403 | Внешняя identity или principal отключены либо не в tenant. |
-| `external_identity_conflict` | 409 | Конфликт привязки внешней identity. |
-| `identity_provider_unavailable` | 503 | JWKS провайдера недоступен. |
+| `invalid_token`, `invalid_signature`, `token_expired`, `invalid_issuer`, `invalid_audience`, `unknown_signing_key`, `unsupported_algorithm`, `missing_subject_claim` | 401 | The upstream provider's token (external IdP) failed verification. |
+| `step_up_required` | 403 | Stronger authentication is required (`acr`/`amr`). |
+| `identity_disabled`, `principal_disabled`, `principal_not_in_tenant` | 403 | The external identity or principal is disabled or not in the tenant. |
+| `external_identity_conflict` | 409 | Conflict when linking an external identity. |
+| `identity_provider_unavailable` | 503 | The provider's JWKS is unavailable. |
 
 ### SCIM
 
-SCIM-эндпоинты отвечают в формате SCIM (`scimType`): `invalidFilter`,
-`invalidValue`, `invalidSyntax`, `uniqueness` (400/404/409), 412 при
-несовпадении `If-Match`, 401 без токена или с токеном не для
-`IAM_SCIM_AUDIENCE`, 403 без scope `IAM_SCIM_SCOPE` или без активного
-источника provisioning, 502/503 при недоступности upstream-провайдера.
+SCIM endpoints respond in the SCIM format (`scimType`): `invalidFilter`,
+`invalidValue`, `invalidSyntax`, `uniqueness` (400/404/409), 412 on an
+`If-Match` mismatch, 401 without a token or with a token not for
+`IAM_SCIM_AUDIENCE`, 403 without the `IAM_SCIM_SCOPE` scope or without an
+active provisioning source, 502/503 when the upstream provider is
+unavailable.
 
-## Коды platform-auth-sdk (resource services)
+## platform-auth-sdk codes (resource services)
 
-Общий deny-контракт всех resource services, использующих SDK. Клиенту
-уходит только код; Control Plane переносит коды SDK в свой конверт как
-есть (кроме `invalid_token`, который становится `invalid_credentials`).
+The common deny contract of all resource services that use the SDK. The
+client receives only the code; Control Plane carries SDK codes into its own
+envelope as is (except `invalid_token`, which becomes `invalid_credentials`).
 
-| Код | HTTP | Причина |
+| Code | HTTP | Cause |
 |---|---|---|
-| `invalid_token` | 401 | Любой дефект токена (включая отзыв). |
-| `insufficient_scope` | 403 | Scope токена не покрывает операцию. |
-| `not_entitled` | 403 | Нет лицензии на продукт или feature. |
-| `permission_denied` | 403 | Доменная политика не даёт операцию. |
-| `verification_unavailable` | 503 | Нечем проверить токен (нет ключей, JWKS устарел, источник отзыва недоступен). |
-| `entitlement_unavailable` | 503 | Нет решения entitlement, кэш устарел. |
-| `authorization_unavailable` | 503 | Нет решения внешнего PDP. |
-| `denied` | 403 | Базовый отказ без уточнения. |
+| `invalid_token` | 401 | Any token defect (including revocation). |
+| `insufficient_scope` | 403 | The token scope does not cover the operation. |
+| `not_entitled` | 403 | No license for the product or feature. |
+| `permission_denied` | 403 | The domain policy does not allow the operation. |
+| `verification_unavailable` | 503 | Nothing to verify the token with (no keys, JWKS stale, revocation source unavailable). |
+| `entitlement_unavailable` | 503 | No entitlement decision, the cache is stale. |
+| `authorization_unavailable` | 503 | No decision from the external PDP. |
+| `denied` | 403 | A base denial without details. |
 
-### Причины в audit {#audit-reasons}
+### Audit reasons {#audit-reasons}
 
-Эти строки клиенту не отдаются — их видно в audit и логе resource
-service. По ним разбирается `401 invalid_credentials` / `invalid_token`.
+These strings are not returned to the client: they are visible in the audit
+trail and the log of the resource service. Use them to investigate
+`401 invalid_credentials` / `invalid_token`.
 
-| Причина | Откуда | Значение |
+| Reason | Source | Meaning |
 |---|---|---|
-| `missing_authorization`, `malformed_authorization`, `missing_token` | SDK | Нет заголовка `Authorization: Bearer …` или он битый. |
-| `malformed_token`, `unsupported_algorithm`, `invalid_token` | SDK | Токен не разбирается или подпись неверна. |
-| `expired` | SDK | Истёк `exp`. |
-| `issuer_mismatch` | SDK | `iss` не равен ожидаемому issuer (например, после смены `TAIMEN_PUBLIC_URL`). |
-| `audience_mismatch`, `audience_not_exact` | SDK | Токен выпущен на другой audience или `aud` — список. |
-| `missing_required_claim`, `missing_exp`, `missing_credential_id` | SDK | Нет обязательного claim. |
-| `unknown_key_id` | SDK | `kid` не найден в JWKS (ротация ключа IAM). |
-| `jwks_stale`, `public_key_not_configured`, `verifier_not_configured` | SDK | Нечем проверять (→ `verification_unavailable`). |
-| `revocation_source_unavailable` | SDK | Источник отзыва недоступен вне stale-окна. |
-| `credential_revoked` | SDK, IAM | Credential отозван. |
-| `token_ttl_exceeds_revocation_window` | SDK | Токен живёт дольше допустимого окна отзыва. |
-| `service_credentials_not_configured`, `service_token_exchange_failed`, `service_token_malformed` | SDK | Собственный service account сервиса не настроен или обмен не удался. |
-| `quota_reserve_unavailable` | SDK | Резерв квоты entitlement недоступен. |
-| `binding_not_found` | Control Plane | Нет строки `iam_principal_bindings` для пары (issuer, IAM principal). |
-| `binding_disabled` | Control Plane | Binding отключён или отозван. |
-| `credential_expired`, `tenant_not_active`, `membership_not_active`, `principal_not_active` | IAM | Причины отказа обмена PAT. |
+| `missing_authorization`, `malformed_authorization`, `missing_token` | SDK | No `Authorization: Bearer …` header, or it is malformed. |
+| `malformed_token`, `unsupported_algorithm`, `invalid_token` | SDK | The token cannot be parsed or the signature is invalid. |
+| `expired` | SDK | `exp` has passed. |
+| `issuer_mismatch` | SDK | `iss` does not equal the expected issuer (for example, after changing `TAIMEN_PUBLIC_URL`). |
+| `audience_mismatch`, `audience_not_exact` | SDK | The token was issued for another audience, or `aud` is a list. |
+| `missing_required_claim`, `missing_exp`, `missing_credential_id` | SDK | A required claim is missing. |
+| `unknown_key_id` | SDK | `kid` is not found in JWKS (IAM key rotation). |
+| `jwks_stale`, `public_key_not_configured`, `verifier_not_configured` | SDK | Nothing to verify with (→ `verification_unavailable`). |
+| `revocation_source_unavailable` | SDK | The revocation source is unavailable beyond the stale window. |
+| `credential_revoked` | SDK, IAM | The credential is revoked. |
+| `token_ttl_exceeds_revocation_window` | SDK | The token lives longer than the allowed revocation window. |
+| `service_credentials_not_configured`, `service_token_exchange_failed`, `service_token_malformed` | SDK | The service's own service account is not configured, or the exchange failed. |
+| `quota_reserve_unavailable` | SDK | The entitlement quota reserve is unavailable. |
+| `binding_not_found` | Control Plane | No `iam_principal_bindings` row for the pair (issuer, IAM principal). |
+| `binding_disabled` | Control Plane | The binding is disabled or revoked. |
+| `credential_expired`, `tenant_not_active`, `membership_not_active`, `principal_not_active` | IAM | Reasons for a PAT exchange denial. |
 
 ## memory-service
 
-Ответы — `{"detail": "<текст на русском>"}`; машинных кодов нет,
-ориентируйтесь на статус.
+Responses are `{"detail": "<text in Russian>"}`; there are no machine codes,
+so rely on the status.
 
-| HTTP | Когда |
+| HTTP | When |
 |---|---|
-| 400 | Некорректный запрос: namespace в query и в теле различаются, `namespace` и `scope.namespace` задают разные базы, неверный фильтр; база знаний не разрешена в Console. |
-| 401 | Нет или неверный Bearer (`Требуется корректный Authorization: Bearer <key>`). |
-| 403 | Нет прав на namespace (чтение/запись); нет прав на глобальную статистику; нужен service scope (`memory:service`) для пакетов видов; маршрут доступен только identity ядра (`CB_CORE_ONLY`/`CB_CORE_IDENTITIES`); namespace вне видимости principal (policy); cross-origin запрос в Console. |
-| 404 | Узел, источник, наблюдение или трейс не найдены. |
-| 409 | Конфликт (например, снимок источника старее сохранённого). |
-| 413 | Пачка наблюдений больше `CB_OBSERVATIONS_MAX_BATCH`. |
-| 429 | Лимит запросов демо-витрины. |
-| 500 | Внутренняя ошибка движка. |
-| 503 | БД недоступна; проверка IAM-токена недоступна (JWKS/конфигурация IAM); внешний PDP видимости (если включён) недоступен — видимость не определена. |
+| 400 | Invalid request: the namespace in the query and in the body differ, `namespace` and `scope.namespace` point to different bases, an invalid filter; the knowledge base is not allowed in Console. |
+| 401 | Missing or invalid Bearer (`Требуется корректный Authorization: Bearer <key>`, "a valid Authorization: Bearer <key> is required"). |
+| 403 | No permissions on the namespace (read/write); no permissions on global statistics; the service scope (`memory:service`) is required for kind packages; the route is available only to the core identity (`CB_CORE_ONLY`/`CB_CORE_IDENTITIES`); the namespace is outside the principal's visibility (policy); a cross-origin request in Console. |
+| 404 | Node, source, observation, or trace not found. |
+| 409 | Conflict (for example, the source snapshot is older than the stored one). |
+| 413 | The observation batch is larger than `CB_OBSERVATIONS_MAX_BATCH`. |
+| 429 | Demo showcase request limit. |
+| 500 | Internal engine error. |
+| 503 | The database is unavailable; IAM token verification is unavailable (JWKS/IAM configuration); the external visibility PDP (if enabled) is unavailable, so visibility is undetermined. |
 
-Control Plane переводит ответы памяти в свои коды: `memory_unavailable`
-(502), `snapshot_invalid`, `snapshot_stale`, `pack_invalid`,
-`pack_version_conflict`.
+Control Plane translates memory responses into its own codes:
+`memory_unavailable` (502), `snapshot_invalid`, `snapshot_stale`,
+`pack_invalid`, `pack_version_conflict`.
 
-## См. также
+## See also
 
-- [Аутентификация и доступ — диагностика](../troubleshooting/auth.md)
-- [Исполнение и runner — диагностика](../troubleshooting/runner.md)
-- [Исполнение — claims и runs](../control-plane/execution.md)
-- [Права и scopes](permissions.md)
-- [Credentials и PAT](../iam/credentials.md)
-- [API Control Plane](../control-plane/api.md)
+- [Authentication and access: troubleshooting](../troubleshooting/auth.md)
+- [Execution and runner: troubleshooting](../troubleshooting/runner.md)
+- [Execution: claims and runs](../control-plane/execution.md)
+- [Permissions and scopes](permissions.md)
+- [Credentials and PAT](../iam/credentials.md)
+- [Control Plane API](../control-plane/api.md)

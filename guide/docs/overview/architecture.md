@@ -1,34 +1,35 @@
-# Архитектура
 
-Статья описывает, из каких процессов состоит развёрнутая платформа Taimen, как
-они связаны, по каким путям идут запросы и события и где живёт авторитетное
-состояние. Она нужна, чтобы правильно выбрать компонент для новой функции,
-понимать поведение при сбоях и читать логи.
+# Architecture
 
-## Архитектурные принципы
+This page describes the processes that make up a deployed Taimen platform, how
+they connect, which paths requests and events follow, and where the
+authoritative state lives. Use it to choose the right component for a new
+feature, to understand behavior during failures, and to read the logs.
 
-1. **Один факт — один авторитетный дом.** Одно и то же состояние не
-   редактируется одновременно в Git, Control Plane и памяти.
-2. **Компоненты независимы.** Между сервисами — версионируемые HTTP- и
-   event-контракты, а не общие базы данных и не импорты кода. Общая только
-   библиотека проверки токенов `platform-auth-sdk`.
-3. **Память не управляет работой.** Извлечённый контекст никогда не заменяет
-   проверку в Control Plane.
-4. **Identity ≠ лицензия ≠ доменное право.** IAM подтверждает субъекта,
-   Entitlement (если включён) — право на продукт, сервис-владелец ресурса —
-   конкретное действие.
-5. **Сбои деградируют локально.** Память недоступна — операции Control Plane
-   продолжаются, события копятся и доставляются позже.
+## Architectural principles
 
-## Компоненты развёрнутого стека
+1. **One fact, one authoritative home.** The same state is never edited in Git,
+   Control Plane, and memory at the same time.
+2. **Components are independent.** Services talk through versioned HTTP and
+   event contracts, not shared databases or code imports. The only shared piece
+   is the token verification library `platform-auth-sdk`.
+3. **Memory does not manage work.** Retrieved context never replaces a check in
+   Control Plane.
+4. **Identity ≠ license ≠ domain permission.** IAM confirms the subject,
+   Entitlement (if enabled) confirms the right to use the product, and the
+   service that owns the resource authorizes the specific action.
+5. **Failures degrade locally.** If memory is unavailable, Control Plane
+   operations continue, and events accumulate and are delivered later.
+
+## Components of the deployed stack
 
 ```mermaid
 flowchart TB
-    subgraph edge["профиль edge"]
+    subgraph edge["edge profile"]
         CADDY[caddy<br/>:80 / :443]
     end
 
-    subgraph core["профиль core"]
+    subgraph core["core profile"]
         IAM[iam-service<br/>:8010]
         IAMDB[(iam-db<br/>PostgreSQL 16)]
         CPAPI[control-plane-api<br/>:8000]
@@ -37,13 +38,13 @@ flowchart TB
         CPDB[(control-plane-db<br/>PostgreSQL 16)]
         MEM[memory-service<br/>:8077]
         MEMDB[(memory-db<br/>PostgreSQL 16 + AGE + pgvector)]
-        MINIO[(minio<br/>содержимое артефактов)]
+        MINIO[(minio<br/>artifact content)]
     end
 
-    subgraph ext["вне compose"]
+    subgraph ext["outside compose"]
         RUNNER[runner<br/>control-plane-agent]
-        HARNESS[MCP-клиент / CLI]
-        LLM[OpenAI-совместимый<br/>LLM endpoint]
+        HARNESS[MCP client / CLI]
+        LLM[OpenAI-compatible<br/>LLM endpoint]
     end
 
     CADDY -->|/iam/*| IAM
@@ -57,84 +58,84 @@ flowchart TB
     CPAPI -->|S3| MINIO
 
     CPAPI -->|JWKS| IAM
-    CPAPI -->|сборка контекста| MEM
+    CPAPI -->|context assembly| MEM
     CTX -->|observations:batch| MEM
     MEM -->|JWKS| IAM
-    MEM -.->|эмбеддинги, реранк| LLM
+    MEM -.->|"embeddings, reranking"| LLM
 
-    RUNNER -->|PAT → токен| IAM
+    RUNNER -->|PAT → token| IAM
     RUNNER -->|claims, runs| CPAPI
-    HARNESS -->|PAT → токен| IAM
-    HARNESS -->|MCP-команды| CPAPI
+    HARNESS -->|PAT → token| IAM
+    HARNESS -->|MCP commands| CPAPI
 ```
 
-| Процесс | Команда запуска | Роль |
+| Process | Start command | Role |
 |---|---|---|
-| `iam-service` | `alembic upgrade head && uvicorn iam_service.app:app` | Tenants, principals, audiences, PAT, service accounts, федерация, выпуск токенов, JWKS |
-| `control-plane-api` | `alembic upgrade head && uvicorn control_plane.main:app` | HTTP API `/api/v1/*`, WebSocket `/api/v1/events/ws`, health, метрики |
-| `control-plane-worker` | `python -m control_plane.worker` | Доставка outbox, истечение lease claims и сессий, GC ключей идемпотентности, исполнение исходов approval |
-| `context-adapter` | `python -m control_plane.worker.context_adapter` | Переигрывает журнал событий в память: at-least-once, по tenant, с durable-курсорами |
-| `memory-service` | образ `memory-service` | Граф знаний, документы, гибридный поиск, Context Compiler |
-| `caddy` | `caddy:2-alpine` | Единственная точка входа снаружи, раскладка путей по сервисам |
+| `iam-service` | `alembic upgrade head && uvicorn iam_service.app:app` | Tenants, principals, audiences, PAT, service accounts, federation, token issuance, JWKS |
+| `control-plane-api` | `alembic upgrade head && uvicorn control_plane.main:app` | HTTP API `/api/v1/*`, WebSocket `/api/v1/events/ws`, health, metrics |
+| `control-plane-worker` | `python -m control_plane.worker` | Outbox delivery, expiry of claim and session leases, GC of idempotency keys, execution of approval outcomes |
+| `context-adapter` | `python -m control_plane.worker.context_adapter` | Replays the event log into memory: at-least-once, per tenant, with durable cursors |
+| `memory-service` | `memory-service` image | Knowledge graph, documents, hybrid search, Context Compiler |
+| `caddy` | `caddy:2-alpine` | The only external entry point; routes paths to services |
 
-Все три процесса Control Plane используют **один образ** `control-plane` с
-разными командами. Схема БД применяется миграциями Alembic при старте
-`control-plane-api` и `iam-service`.
+All three Control Plane processes use **one image**, `control-plane`, with
+different commands. The database schema is applied by Alembic migrations when
+`control-plane-api` and `iam-service` start.
 
-!!! note "Runner вне compose"
-    Демон автономного исполнителя `control-plane-agent` не входит в
-    `compose.yml`: он ставится на отдельный хост (или машину разработчика) и
-    ходит в Control Plane и IAM по сети, как любой другой клиент. См.
-    [Агенты и runner](../runner/index.md).
+!!! note "The runner is outside compose"
+    The autonomous executor daemon `control-plane-agent` is not part of
+    `compose.yml`: you install it on a separate host (or a developer machine),
+    and it reaches Control Plane and IAM over the network like any other
+    client. See [Agents and runner](../runner/index.md).
 
-## Раскладка путей на периметре
+## Path routing at the edge
 
-Снаружи виден только Caddy. Локальный `deploy/caddy/Caddyfile.local` и
-промышленный Caddyfile используют одинаковую раскладку путей, различаются TLS и
-именем хоста.
+Only Caddy is visible from outside. The local `deploy/caddy/Caddyfile.local`
+and the production Caddyfile use the same path layout; they differ in TLS and
+host name.
 
-| Путь | Сервис | Примечание |
+| Path | Service | Note |
 |---|---|---|
-| `/iam/*` | `iam-service:8010` | префикс срезается; issuer IAM = `${TAIMEN_PUBLIC_URL}/iam` |
-| `/api/v1/*`, `/health/*`, `/docs`, `/redoc`, `/openapi.json` | `control-plane-api:8000` | `/metrics` наружу не выводится |
-| `/notify/*` | `notification-service:8000` | профиль `notify` |
-| `/guide/*` | `guide:8080` | профиль `edge`; это руководство |
-| `/memory/*` | `memory-service:8077` | **только в локальном Caddyfile**; в промышленной раскладке память наружу не публикуется |
-| `/` (всё остальное) | — | веб-интерфейса в поставке нет: клиенты работают через API, CLI и MCP |
+| `/iam/*` | `iam-service:8010` | the prefix is stripped; the IAM issuer is `${TAIMEN_PUBLIC_URL}/iam` |
+| `/api/v1/*`, `/health/*`, `/docs`, `/redoc`, `/openapi.json` | `control-plane-api:8000` | `/metrics` is not exposed externally |
+| `/notify/*` | `notification-service:8000` | `notify` profile |
+| `/guide/*` | `guide:8080` | `edge` profile; this guide |
+| `/memory/*` | `memory-service:8077` | **local Caddyfile only**; in the production layout memory is not exposed |
+| `/` (everything else) | — | the delivery has no web interface: clients work through the API, CLI, and MCP |
 
-Кроме того, каждый сервис публикует порт на `127.0.0.1` хоста (например,
-Control Plane — `18000`, IAM — `18010`, память — `18001`) для локальной работы,
-bootstrap и `make smoke`. Полная таблица — в
-[Сервисах и портах](../reference/services-and-ports.md).
+In addition, each service publishes a port on the host's `127.0.0.1` (for
+example, Control Plane on `18000`, IAM on `18010`, memory on `18001`) for local
+work, bootstrap, and `make smoke`. The full table is in
+[Services and ports](../reference/services-and-ports.md).
 
-## Источники истины
+## Sources of truth
 
-| Данные | Авторитетный дом |
+| Data | Authoritative home |
 |---|---|
-| Tasks (Work Items), их типы, статусы, связи, поля, комментарии | Control Plane |
+| Tasks (Work Items), their types, statuses, relations, fields, comments | Control Plane |
 | Claims, fencing tokens, sessions, runs, checkpoints, run actions | Control Plane |
-| Approvals и их исходы, artifacts, goals, observations journal | Control Plane |
-| Workspaces, Project Profiles, роли, capabilities, skills, делегации | Control Plane |
-| Локальные principals и их права (bindings к IAM) | Control Plane |
-| Tenants, principals identity, credentials (PAT, service accounts), audiences | IAM Service |
-| Наблюдения, факты, документы, provenance, граф знаний | Memory Service |
-| Лицензии, планы, квоты (если подключена внешняя проверка лицензии) | внешний сервис лицензирования |
-| Код, конфигурация стенда, пакеты каталога, ADR | Git |
-| Секреты | `.env`, `secrets/` или внешний Secret Manager |
+| Approvals and their outcomes, artifacts, goals, the observations journal | Control Plane |
+| Workspaces, Project Profiles, roles, capabilities, skills, delegations | Control Plane |
+| Local principals and their permissions (bindings to IAM) | Control Plane |
+| Tenants, identity principals, credentials (PAT, service accounts), audiences | IAM Service |
+| Observations, facts, documents, provenance, knowledge graph | Memory Service |
+| Licenses, plans, quotas (if an external license check is connected) | external licensing service |
+| Code, deployment configuration, catalog packages, ADRs | Git |
+| Secrets | `.env`, `secrets/`, or an external Secret Manager |
 
-Производные представления — очередь оператора, лента событий в рабочем месте,
-Context Pack для агента — не являются источниками истины и пересобираются.
+Derived views, such as the operator queue, the event feed at a workstation, or
+an agent's Context Pack, are not sources of truth and are rebuilt.
 
-## Поток: аутентифицированный запрос
+## Flow: an authenticated request
 
-Любой клиент — человек через MCP, runner, сервис — идёт в Control Plane по
-одной схеме: долгоживущий секрет предъявляется **только IAM**, Control Plane
-видит лишь короткоживущий токен своего audience.
+Every client (a human through MCP, a runner, a service) calls Control Plane the
+same way: the long-lived secret is presented **only to IAM**, and Control Plane
+sees only a short-lived token for its own audience.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Клиент (MCP / runner / сервис)
+    participant C as Client (MCP / runner / service)
     participant IAM as iam-service
     participant CP as control-plane-api
     participant DB as control-plane-db
@@ -142,114 +143,115 @@ sequenceDiagram
     C->>IAM: POST /api/v1/platform-access-tokens:exchange<br/>{token: PAT, audience: "control-plane", scopes}
     IAM-->>C: {accessToken, expiresIn: 300, scope, sessionId}
     C->>CP: POST /api/v1/tasks<br/>Authorization: Bearer <accessToken>
-    CP->>CP: проверка подписи по JWKS IAM,<br/>iss, aud = control-plane, exp
-    CP->>DB: iam_principal_bindings по (issuer, sub)
-    DB-->>CP: локальный Principal и его permissions
-    CP->>CP: permissions ∩ scope токена,<br/>доменная авторизация (CP_AUTHZ_MODE)
-    CP->>DB: команда + событие в журнал + outbox<br/>(одна транзакция)
+    CP->>CP: verify signature against IAM JWKS,<br/>iss, aud = control-plane, exp
+    CP->>DB: iam_principal_bindings by (issuer, sub)
+    DB-->>CP: local Principal and its permissions
+    CP->>CP: permissions ∩ token scope,<br/>domain authorization (CP_AUTHZ_MODE)
+    CP->>DB: command + event in the log + outbox<br/>(one transaction)
     CP-->>C: 201 Task
 ```
 
-Service account (без человека и без PAT) вместо шага 1 вызывает
-`POST /api/v1/tokens/exchange` с `clientId`/`clientSecret`. Детали — в
-[Модели безопасности](security-model.md).
+A service account (no human and no PAT) replaces step 1 with a call to
+`POST /api/v1/tokens/exchange` using `clientId`/`clientSecret`. For details, see
+the [Security model](security-model.md).
 
-## Поток: события и память
+## Flow: events and memory
 
-Control Plane пишет каждое изменение в append-only журнал событий в той же
-транзакции, что и саму команду. Дальше события расходятся по независимым
-потребителям:
+Control Plane writes every change to an append-only event log in the same
+transaction as the command itself. From there, events fan out to independent
+consumers:
 
 ```mermaid
 flowchart LR
-    CMD[Команда API] -->|одна транзакция| J[(events<br/>+ outbox)]
-    J -->|FOR UPDATE SKIP LOCKED| W[control-plane-worker<br/>доставка outbox]
-    J -->|курсор на tenant| CA[context-adapter]
+    CMD[API command] -->|one transaction| J[(events<br/>+ outbox)]
+    J -->|FOR UPDATE SKIP LOCKED| W[control-plane-worker<br/>outbox delivery]
+    J -->|per-tenant cursor| CA[context-adapter]
     CA -->|POST /api/memory/observations:batch<br/>namespace tenant:&lt;id&gt;| MEM[memory-service]
-    J -->|GET /api/v1/events<br/>курсор| CL[Клиенты:<br/>коннекторы,<br/>notification-service]
-    J -->|WS /api/v1/events/ws| RT[Realtime-клиенты]
+    J -->|GET /api/v1/events<br/>cursor| CL["Clients:<br/>connectors,<br/>notification-service"]
+    J -->|WS /api/v1/events/ws| RT[Realtime clients]
 ```
 
-Свойства доставки в память:
+Properties of delivery to memory:
 
-- **at-least-once, без потерь, по tenant.** Курсор tenant сдвигается только после
-  подтверждения памятью; повтор после сбоя дедуплицируется по идентичности
-  наблюдения.
-- **Изоляция сбоев.** Постоянный отказ памяти на одном tenant паркует только его
-  курсор с нарастающим backoff; остальные tenant продолжают течь. Снятие с паузы —
-  явное действие оператора (`POST /api/v1/operations/context-adapter/{tenant_id}:redrive`).
-- **Singleton.** Один потребитель на кластер (advisory lock PostgreSQL); вторая
-  реплика ждёт, а не читает дважды.
-- **Namespace памяти** tenant — `tenant:<tenant_id>`, поддерево workspace —
-  `tenant:<tenant_id>:ws:<workspace_id>`.
+- **At-least-once, lossless, per tenant.** A tenant's cursor advances only after
+  memory confirms receipt; a retry after a failure is deduplicated by the
+  observation's identity.
+- **Failure isolation.** A persistent memory failure for one tenant parks only
+  that tenant's cursor, with increasing backoff; other tenants keep flowing.
+  Resuming is an explicit operator action
+  (`POST /api/v1/operations/context-adapter/{tenant_id}:redrive`).
+- **Singleton.** There is one consumer per cluster (a PostgreSQL advisory lock);
+  a second replica waits instead of reading twice.
+- **Memory namespace.** A tenant's namespace is `tenant:<tenant_id>`; a
+  workspace subtree is `tenant:<tenant_id>:ws:<workspace_id>`.
 
-## Поток: сборка контекста
+## Flow: context assembly
 
-Контекст для человека или агента собирается через Control Plane, а не прямым
-походом в память: Control Plane сначала авторизует и разрешает scope внутри
-tenant вызывающего, потом спрашивает память.
+Context for a human or an agent is assembled through Control Plane, not by
+going to memory directly: Control Plane first authorizes the call and resolves
+the scope within the caller's tenant, and only then queries memory.
 
 ```mermaid
 sequenceDiagram
-    participant H as Харнесс / агент
+    participant H as Harness / agent
     participant CP as control-plane-api
     participant M as memory-service
     H->>CP: POST /api/v1/context<br/>{task, query, maxTokens, strategy}
-    CP->>CP: авторизация, разрешение workspace/project,<br/>namespaces tenant
-    CP->>M: POST /api/memory/context<br/>(service account или ключ памяти)
-    M-->>CP: ContextPack с provenance
-    CP-->>H: операционный снимок + recalled-часть<br/>(маркированы раздельно)
+    CP->>CP: authorization, workspace/project resolution,<br/>tenant namespaces
+    CP->>M: POST /api/memory/context<br/>(service account or memory key)
+    M-->>CP: ContextPack with provenance
+    CP-->>H: operational snapshot + recalled part<br/>(labeled separately)
 ```
 
-Если память недоступна, операционная часть ответа всё равно формируется —
-деградация видна вызывающему. Подробнее — [Контекст задачи и
-память](../control-plane/context.md).
+If memory is unavailable, the operational part of the response is still
+produced, and the degradation is visible to the caller. For more, see
+[Task context and memory](../control-plane/context.md).
 
-## Поток: исполнение задачи агентом
+## Flow: an agent executes a task
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant R as runner (control-plane-agent)
     participant CP as Control Plane
-    participant X as Адаптер (Claude Code / Codex)
+    participant X as Adapter (Claude Code / Codex)
     R->>CP: GET /api/v1/work/available
     R->>CP: POST /api/v1/sessions
     R->>CP: POST /api/v1/tasks/{ref}:claim → claimId, fencingToken
     R->>CP: POST /api/v1/tasks/{ref}:start-run
-    R->>X: рабочая копия + prompt + контекст задачи
-    loop пока идёт работа
-        X-->>R: вызовы инструментов
-        R->>CP: run actions, checkpoints, heartbeat claim
+    R->>X: working copy + prompt + task context
+    loop while work is in progress
+        X-->>R: tool calls
+        R->>CP: run actions, checkpoints, claim heartbeat
     end
     R->>CP: POST /api/v1/artifacts (commit, transcript)
     R->>CP: POST /api/v1/runs/{id}:succeed
 ```
 
-Claim — эксклюзивная аренда задачи с TTL и монотонным fencing token: если
-исполнитель потерял lease, его последующие записи отвергаются как
-`stale_claim`. См. [Исполнение — claims и runs](../control-plane/execution.md).
+A claim is an exclusive lease on a task with a TTL and a monotonic fencing
+token: if an executor loses its lease, its subsequent writes are rejected as
+`stale_claim`. See [Execution — claims and runs](../control-plane/execution.md).
 
 
-## Инварианты интеграции
+## Integration invariants
 
-- Control Plane не вызывает память внутри доменной транзакции.
-- Ни один сервис не читает базы IAM или других сервисов напрямую.
-- Каждый audience получает отдельный короткоживущий токен (по умолчанию TTL
-  300 с, `IAM_TOKEN_TTL_SECONDS`).
-- Токен IAM не несёт доменных прав: права Control Plane — в его собственной
-  таблице `iam_principal_bindings`.
-- События доставляются в память как минимум один раз и дедуплицируются.
-- В ответе контекста операционная и recalled-части не смешиваются без
-  маркировки.
-- Секреты, полные payload инструментов и рассуждения модели не попадают в
-  события и память: транскрипт прогона публикуется артефактом с редакцией, без
+- Control Plane does not call memory inside a domain transaction.
+- No service reads the databases of IAM or other services directly.
+- Each audience gets its own short-lived token (default TTL 300 s,
+  `IAM_TOKEN_TTL_SECONDS`).
+- An IAM token carries no domain permissions: Control Plane permissions live in
+  its own `iam_principal_bindings` table.
+- Events are delivered to memory at least once and are deduplicated.
+- In a context response, the operational and recalled parts are never mixed
+  without labels.
+- Secrets, full tool payloads, and model reasoning do not reach events or
+  memory: the run transcript is published as a redacted artifact, without
   thinking.
 
-## См. также
+## See also
 
-- [Ключевые понятия](concepts.md)
-- [Состав поставки](components.md)
-- [Модель безопасности](security-model.md)
-- [События](../control-plane/events.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
+- [Key concepts](concepts.md)
+- [Delivery contents](components.md)
+- [Security model](security-model.md)
+- [Events](../control-plane/events.md)
+- [Services and ports](../reference/services-and-ports.md)

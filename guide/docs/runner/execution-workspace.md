@@ -1,56 +1,58 @@
-# Рабочие копии
 
-Как runner готовит каждой задаче изолированную рабочую копию репозитория, раскладывает рядом
-соседние репозитории на закреплённых ревизиях, превращает результат в evidence (коммит) и
-публикует ветку задачи в forge. Статья для инженера, настраивающего runner, и для оператора,
-который принимает результат.
+# Working copies
 
-## Зачем отдельная копия на задачу
+How the runner prepares an isolated working copy of the repository for every task, lays out
+neighbouring repositories next to it at pinned revisions, turns the result into evidence (a
+commit), and publishes the task branch to the forge. The article is for engineers who
+configure the runner and for operators who accept the result.
 
-Адаптер, работающий в текущем каталоге процесса, сериализует исполнителя на одну задачу и
-смешивает изменения разных задач — коммит перестаёт быть доказательством. Поэтому каждая
-задача получает собственный git worktree на детерминированной ветке `task/<publicId>`, а
-результат фиксируется коммитом, на который Control Plane хранит **ссылку**, а не копию.
+## Why a separate copy per task
 
-Пул рабочих копий включается, когда заданы обе переменные:
+An adapter that works in the current process directory serializes the executor to one task
+and mixes changes from different tasks — the commit stops being proof. Therefore every task
+gets its own git worktree on the deterministic branch `task/<publicId>`, and the result is
+recorded as a commit to which Control Plane stores a **reference**, not a copy.
+
+The working copy pool is turned on when both variables are set:
 
 ```bash
-CONTROL_PLANE_AGENT_REPO=/opt/runner/<repo>.git        # источник копий (bare-зеркало)
-CONTROL_PLANE_AGENT_WORKTREE_ROOT=/opt/runner/worktrees # где живут копии
+CONTROL_PLANE_AGENT_REPO=/opt/runner/<repo>.git        # source of copies (bare mirror)
+CONTROL_PLANE_AGENT_WORKTREE_ROOT=/opt/runner/worktrees # where the copies live
 ```
 
-Без них адаптер получает `workspace=None` и работает в каталоге процесса — так удобно
-проверять протокол, но не выполнять реальные задачи.
+Without them the adapter gets `workspace=None` and works in the process directory — this is
+convenient for checking the protocol, but not for executing real tasks.
 
-!!! note "Не путайте две похожие переменные"
-    `CONTROL_PLANE_AGENT_WORKSPACE` — это **Workspace в Control Plane**, из которого берутся
-    задачи. `CONTROL_PLANE_AGENT_WORKTREE_ROOT` — **каталог на диске** для рабочих копий.
+!!! note "Do not confuse two similar variables"
+    `CONTROL_PLANE_AGENT_WORKSPACE` is the **Workspace in Control Plane** from which tasks are
+    taken. `CONTROL_PLANE_AGENT_WORKTREE_ROOT` is the **directory on disk** for working
+    copies.
 
-## Раскладка: контейнер задачи
+## Layout: the task container
 
-Рабочая копия — не один каталог, а небольшой контейнер: сама копия и рядом соседи, от
-которых она собирается.
+A working copy is not a single directory but a small container: the copy itself and, next to
+it, the neighbours it is built against.
 
 ```text
 <WORKTREE_ROOT>/
 ├── .locks/
-│   └── <publicId>.lock              эксклюзивная блокировка копии (flock)
-└── <publicId>/                      контейнер задачи
-    ├── <REPO_DIR>/                  рабочая копия, ветка task/<publicId>
-    ├── platform-auth-sdk/           сосед на ревизии, закреплённой суперпроектом
-    └── memory-service/              ещё один сосед (например сервис-контракт)
+│   └── <publicId>.lock              exclusive lock of the copy (flock)
+└── <publicId>/                      task container
+    ├── <REPO_DIR>/                  working copy, branch task/<publicId>
+    ├── platform-auth-sdk/           neighbour at the revision pinned by the superproject
+    └── memory-service/              another neighbour (for example a contract service)
 ```
 
-Зачем соседи. Репозиторий, который собирается против соседа path-зависимостью
-(`../platform-auth-sdk`), не соберётся из копии самого себя. А сосед должен стоять **на той
-ревизии, которую закрепляет суперпроект**, а не на вершине своей ветки: иначе зелёный прогон
-тестов проверил комбинацию ревизий, которой нет ни в одном коммите.
+Why neighbours. A repository that is built against a neighbour through a path dependency
+(`../platform-auth-sdk`) does not build from a copy of itself alone. And the neighbour must be
+**at the revision pinned by the superproject**, not at the tip of its branch: otherwise a
+green test run checks a combination of revisions that exists in no commit.
 
-Имя каталога соседа совпадает с путём сабмодуля в суперпроекте — ровно то, что называет
-path-зависимость `../<neighbour>`. Поэтому плоская раскладка сабмодулей суперпроекта
-обязательна.
+The neighbour directory name matches the submodule path in the superproject — exactly what
+the path dependency `../<neighbour>` names. That is why a flat submodule layout in the
+superproject is mandatory.
 
-## Настройка соседей
+## Configuring neighbours
 
 ```bash
 CONTROL_PLANE_AGENT_REPO_DIR=control-plane
@@ -60,82 +62,84 @@ CONTROL_PLANE_AGENT_SUPERPROJECT_REF=HEAD
 CONTROL_PLANE_AGENT_SUPERPROJECT_REMOTE=origin
 ```
 
-| Переменная | Смысл |
+| Variable | Meaning |
 |---|---|
-| `CONTROL_PLANE_AGENT_REPO_DIR` | имя каталога рабочей копии внутри контейнера; по умолчанию — имя репозитория без `.git`. Важно, когда соседи ссылаются на него относительным путём |
-| `CONTROL_PLANE_AGENT_NEIGHBOURS` | пары `имя=путь-к-зеркалу` через запятую или пробел; имя — путь сабмодуля в суперпроекте |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT` | зеркало суперпроекта: ревизии соседей читаются из его дерева (`git ls-tree`, gitlink `160000`) |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT_REF` | ref суперпроекта, из которого берутся ревизии; по умолчанию `HEAD` |
-| `CONTROL_PLANE_AGENT_SUPERPROJECT_REMOTE` | remote, из которого суперпроект обновляется перед раскладкой; пусто — используется то, что лежит на диске |
+| `CONTROL_PLANE_AGENT_REPO_DIR` | name of the working copy directory inside the container; defaults to the repository name without `.git`. Matters when neighbours refer to it by a relative path |
+| `CONTROL_PLANE_AGENT_NEIGHBOURS` | `name=mirror-path` pairs separated by commas or spaces; the name is the submodule path in the superproject |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT` | superproject mirror: neighbour revisions are read from its tree (`git ls-tree`, gitlink `160000`) |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT_REF` | superproject ref from which revisions are taken; default `HEAD` |
+| `CONTROL_PLANE_AGENT_SUPERPROJECT_REMOTE` | remote from which the superproject is updated before the layout; empty — whatever is on disk is used |
 
-Правила, которые проверяются при старте и на каждой задаче:
+Rules checked at startup and on every task:
 
-- соседи без суперпроекта — ошибка конструкции пула (`neighbours require a superproject that
-  pins their revisions`): раскладывать соседей «на то, что сейчас в main» запрещено;
-- некорректная пара в `NEIGHBOURS` — ошибка, а не молчаливый пропуск: пропущенный сосед
-  вернулся бы сборочной ошибкой внутри копии агента, где причины уже не видно;
-- сосед, которого нет среди сабмодулей суперпроекта на заданном ref, — ошибка
+- neighbours without a superproject are a pool construction error (`neighbours require a
+  superproject that pins their revisions`): laying out neighbours "at whatever is in main
+  now" is forbidden;
+- an invalid pair in `NEIGHBOURS` is an error, not a silent skip: a skipped neighbour would
+  come back as a build error inside the agent's copy, where the cause is no longer visible;
+- a neighbour that is not among the superproject's submodules at the given ref is the error
   `<name> is not a submodule of the superproject`;
-- если в зеркале соседа нет закреплённого коммита, демон делает `fetch` зеркала сам
-  (best-effort); без доступа к forge задача упадёт с понятной ошибкой `invalid reference`.
+- if the neighbour's mirror does not have the pinned commit, the daemon runs `fetch` on the
+  mirror itself (best-effort); without access to the forge the task fails with a clear
+  `invalid reference` error.
 
-Соседи — рабочие копии только для чтения по смыслу: агенту в файле соглашений стоит прямо
-сказать, что правки вне своего репозитория он не делает, а контракты сервисов-соседей берёт
-из их кода, а не придумывает.
+Neighbours are read-only working copies by intent: tell the agent explicitly in the
+conventions file that it does not make edits outside its own repository and that it takes
+the contracts of neighbouring services from their code instead of inventing them.
 
-!!! tip "Сервис-контракт как сосед"
-    Если репозиторий вызывает API другого сервиса, добавьте этот сервис соседом. Агент без
-    него склонен выдумать контракт и написать тесты под собственный фейк — такое ловит
-    только ревью. С соседом он читает настоящие схемы запросов и может закрепить их
-    contract-тестом.
+!!! tip "A contract service as a neighbour"
+    If the repository calls the API of another service, add that service as a neighbour.
+    Without it the agent tends to invent the contract and write tests against its own fake —
+    only a review catches that. With the neighbour it reads the real request schemas and can
+    pin them with a contract test.
 
-## Жизненный цикл копии
+## Copy lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> acquire: задача взята
-    acquire --> working: lock, prune, fetch базы,<br/>worktree add / reuse, соседи
-    working --> committed: адаптер закончил
+    [*] --> acquire: task claimed
+    acquire --> working: lock, prune, fetch base,<br/>worktree add / reuse, neighbours
+    working --> committed: adapter finished
     committed --> published: push task/<publicId>
-    committed --> kept_local: push не удался / remote не задан
+    committed --> kept_local: push failed / remote not set
     published --> released
     kept_local --> released
-    working --> released_failed: ошибка / потеря аренды
-    released --> removed: успех и не KEEP_WORKSPACES
-    released --> kept: есть незакоммиченное
-    released_failed --> kept: копия сохраняется как есть
+    working --> released_failed: error / lease lost
+    released --> removed: success and not KEEP_WORKSPACES
+    released --> kept: uncommitted changes present
+    released_failed --> kept: copy kept as is
     removed --> [*]
     kept --> [*]
 ```
 
 ### acquire
 
-1. Проверка ключа: `publicId` должен соответствовать `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` —
-   он становится именем каталога и ветки.
-2. Эксклюзивная блокировка `<root>/.locks/<publicId>.lock`. Занята другим процессом —
-   `WorkspaceBusyError`, run проваливается с `failure_reason=workspace_busy`.
-3. `git worktree prune` в зеркале — снять записи о копиях, удалённых мимо git.
-4. Обновление базы: если задан `CONTROL_PLANE_AGENT_PUSH_REMOTE`, демон делает `git fetch
-   <remote> <base-branch>` и ветвится от `FETCH_HEAD`. Базовая ветка —
-   `CONTROL_PLANE_AGENT_BASE_REF`, а при `HEAD` — ветка, на которую указывает HEAD зеркала.
-   Без remote или при недоступном forge — ветвление от `BASE_REF` как есть.
-5. Копия:
-    - уже есть (повторная попытка) — проверяется, что это worktree на ветке
-      `task/<publicId>`, и она переиспользуется **вместе с незакоммиченными изменениями**;
-    - ветка есть, копии нет (копию убрали после прошлого успеха) — `worktree add` на
-      существующую ветку: вторая попытка продолжает работу, а не начинает с нуля и **не
-      перебазируется** на свежую базу;
-    - ничего нет — `worktree add -b task/<publicId> <base>`.
-6. Раскладка соседей на ревизиях суперпроекта. Сосед с локальными изменениями не
-   переключается — такие правки не уничтожаются молча.
-7. Checkpoint `execution.workspace` в run.
+1. Key check: `publicId` must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` — it becomes the
+   directory and branch name.
+2. Exclusive lock `<root>/.locks/<publicId>.lock`. Held by another process —
+   `WorkspaceBusyError`, the run fails with `failure_reason=workspace_busy`.
+3. `git worktree prune` in the mirror — removes records of copies deleted bypassing git.
+4. Base update: if `CONTROL_PLANE_AGENT_PUSH_REMOTE` is set, the daemon runs `git fetch
+   <remote> <base-branch>` and branches from `FETCH_HEAD`. The base branch is
+   `CONTROL_PLANE_AGENT_BASE_REF`, and with `HEAD` it is the branch the mirror's HEAD points
+   to. Without a remote or with an unreachable forge — branching from `BASE_REF` as is.
+5. The copy:
+    - already exists (a repeated attempt) — the daemon checks that it is a worktree on the
+      `task/<publicId>` branch and reuses it **together with uncommitted changes**;
+    - the branch exists, the copy does not (the copy was removed after a previous success) —
+      `worktree add` on the existing branch: the second attempt continues the work instead of
+      starting from scratch and is **not rebased** onto a fresh base;
+    - nothing exists — `worktree add -b task/<publicId> <base>`.
+6. Neighbours are laid out at superproject revisions. A neighbour with local changes is not
+   switched — such edits are not destroyed silently.
+7. `execution.workspace` checkpoint in the run.
 
-Копия на ветке, отличной от ожидаемой, — ошибка: молча переключить значило бы смешать две
-задачи в одной копии.
+A copy on a branch other than the expected one is an error: switching silently would mix two
+tasks in one copy.
 
 ### Checkpoint `execution.workspace`
 
-Что уходит в Control Plane — только переносимое состояние, без путей хоста:
+Only portable state goes to Control Plane, without host paths:
 
 ```json
 {
@@ -150,45 +154,46 @@ stateDiagram-v2
 }
 ```
 
-После коммита пишется второй checkpoint того же вида с `head` и `published`.
-`neighbours` — часть evidence: зелёный прогон осмыслен только вместе с ревизиями, против
-которых он шёл.
+After the commit, a second checkpoint of the same kind is written with `head` and
+`published`. `neighbours` is part of the evidence: a green run is meaningful only together
+with the revisions it ran against.
 
 ### commit — evidence
 
-После успешного хода демон:
+After a successful turn the daemon:
 
-1. `git add -A`;
-2. если дерево чистое — сравнивает HEAD с `baseCommit`. Агент мог закоммитить сам: ветка
-   ушла вперёд, и это тоже evidence, его надо опубликовать. Если HEAD не сдвинулся —
-   «изменений нет», артефакта `commit` не будет;
-3. иначе — коммит от имени `control-plane-agent <agent@control-plane.local>` с `--no-verify`;
-   сообщение — `<publicId>: <title>`, и публичный id задачи в сообщении есть всегда.
+1. runs `git add -A`;
+2. if the tree is clean, compares HEAD with `baseCommit`. The agent may have committed on its
+   own: the branch moved forward, and that is evidence too, which must be published. If HEAD
+   did not move, there are "no changes", and there is no `commit` artifact;
+3. otherwise commits as `control-plane-agent <agent@control-plane.local>` with `--no-verify`;
+   the message is `<publicId>: <title>`, so the public task id is always in the message.
 
-### publish — ветка в forge
+### publish — branch to the forge
 
-Если задан `CONTROL_PLANE_AGENT_PUSH_REMOTE`, демон публикует ветку:
+If `CONTROL_PLANE_AGENT_PUSH_REMOTE` is set, the daemon publishes the branch:
 
 ```text
 git push <remote> refs/heads/task/<publicId>:refs/heads/task/<publicId>
 ```
 
-Три сознательных ограничения:
+Three deliberate restrictions:
 
-- **пушится только ветка задачи**, обе стороны названы явно — runner предлагает работу к
-  рассмотрению и не двигает ветку, на которой строят остальные;
-- **push никогда не форсируется** — разошедшаяся ветка в forge разбирается человеком;
-  перезапись уничтожила бы историю ревью;
-- **неудача push не валит run** — коммит уже является evidence, недоступный forge не должен
-  превращать сделанную работу в проваленную.
+- **only the task branch is pushed**, with both sides named explicitly — the runner offers
+  work for review and does not move the branch others build on;
+- **the push is never forced** — a diverged branch in the forge is sorted out by a human;
+  overwriting would destroy the review history;
+- **a failed push does not fail the run** — the commit is already evidence, and an
+  unreachable forge must not turn completed work into a failure.
 
-Публикует именно **демон**, а не агент внутри: claim и fencing token держит демон, поэтому
-опубликованное атрибутируется run'у, который это произвёл. Агенту прямо сказано не пушить.
+It is the **daemon** that publishes, not the agent inside: the daemon holds the claim and the
+fencing token, so what is published is attributed to the run that produced it. The agent is
+told explicitly not to push.
 
-stderr неудачного push остаётся в журнале runner'а и в Control Plane не уходит: в нём бывают
-URL remote и локальные пути.
+The stderr of a failed push stays in the runner log and does not go to Control Plane: it can
+contain remote URLs and local paths.
 
-### Артефакт `commit`
+### The `commit` artifact
 
 ```json
 {
@@ -206,69 +211,71 @@ URL remote и локальные пути.
 }
 ```
 
-`published: false` означает, что ветки в forge нет, коммит существует только на runner'е, и
-ревьюеру смотреть нечего: критерии ревью и вливания типа `coding-task` такой коммит
-пропускают. `repository` и `targetBranch` пишутся, когда задан remote публикации:
-адрес remote и ветка, от которой отведена копия (поле задачи `baseBranch`, иначе ветка
-по умолчанию), — туда скилл вливания вольёт одобренный коммит (см. [Приёмка
-типа](../control-plane/task-types.md#type-acceptance)).
+`published: false` means there is no branch in the forge, the commit exists only on the
+runner, and the reviewer has nothing to look at: the review and merge criteria of the
+`coding-task` type skip such a commit. `repository` and `targetBranch` are written when a
+publishing remote is set: the remote address and the branch the copy was cut from (the task
+field `baseBranch`, otherwise the default branch) — this is where the merge skill merges the
+approved commit (see [Type acceptance](../control-plane/task-types.md#type-acceptance)).
 
-Задача, вернувшаяся после проваленной проверки, продолжает ту же ветку `task/<publicId>`:
-демон берёт локальную ветку зеркала, иначе опубликованную в forge, и только если нет ни
-той, ни другой — отводит новую от базы. Следующая публикация проходит без `--force`.
+A task returned after a failed verification continues the same `task/<publicId>` branch: the
+daemon takes the local branch of the mirror, otherwise the one published in the forge, and
+only if neither exists does it cut a new one from the base. The next publication goes
+through without `--force`.
 
 ### release
 
-| Исход run | Что с копией |
+| Run outcome | What happens to the copy |
 |---|---|
-| успех | копия удаляется (`worktree remove --force`), если в ней нет незакоммиченных изменений и не задан `CONTROL_PLANE_AGENT_KEEP_WORKSPACES=1`; соседи удаляются вместе с ней; **ветка остаётся всегда** |
-| провал, потеря аренды, исключение | копия сохраняется как есть — это состояние, с которого продолжит следующая попытка |
+| success | the copy is removed (`worktree remove --force`) if it has no uncommitted changes and `CONTROL_PLANE_AGENT_KEEP_WORKSPACES=1` is not set; the neighbours are removed with it; **the branch always stays** |
+| failure, lease loss, exception | the copy is kept as is — this is the state the next attempt continues from |
 
-`--force` при удалении ничего ценного не уничтожает: пустой `git status --porcelain` уже
-доказал, что в копии нет работы, остались только игнорируемые файлы (`.venv`, кэши).
+`--force` on removal destroys nothing valuable: an empty `git status --porcelain` has already
+proven that the copy holds no work, only ignored files remain (`.venv`, caches).
 
-### Бюджет диска
+### Disk budget
 
-После каждого release демон держит не больше `CONTROL_PLANE_AGENT_MAX_WORKSPACES` (по
-умолчанию 8) простаивающих контейнеров: самые старые по времени изменения удаляются. Не
-трогаются:
+After every release the daemon keeps no more than `CONTROL_PLANE_AGENT_MAX_WORKSPACES`
+(default 8) idle containers: the oldest by modification time are removed. The following are
+not touched:
 
-- копия текущей задачи;
-- копии с незакоммиченными изменениями;
-- копии, чья блокировка занята (в них сейчас работают);
-- каталоги, не похожие на контейнер пула.
+- the copy of the current task;
+- copies with uncommitted changes;
+- copies whose lock is held (someone is working in them now);
+- directories that do not look like a pool container.
 
-Ветки при чистке не удаляются никогда.
+Branches are never deleted during cleanup.
 
-## Переносимость: что не покидает хост
+## Portability: what does not leave the host
 
-Всё, что уходит в Control Plane (checkpoints, артефакты, `failure_reason`), проходит проверку
-`assert_portable`. Отклоняются:
+Everything that goes to Control Plane (checkpoints, artifacts, `failure_reason`) passes the
+`assert_portable` check. The following are rejected:
 
-- строки с корнями путей хоста (`/Users/`, `/home/`, `/root/`, `/private/`, `/var/`, `/tmp/`,
-  `/opt/`, `/mnt/`), `file://`, `~/`, пути Windows, строки целиком вида абсолютного пути;
-- значения по ключам вида `token`, `secret`, `password`, `authorization`, `apikey`,
+- strings with host path roots (`/Users/`, `/home/`, `/root/`, `/private/`, `/var/`, `/tmp/`,
+  `/opt/`, `/mnt/`), `file://`, `~/`, Windows paths, strings that are entirely an absolute
+  path;
+- values under keys like `token`, `secret`, `password`, `authorization`, `apikey`,
   `credential`;
-- строки с префиксами `cp_`, `sk-`, `ghp_`, `github_pat_`, `xox`, `-----BEGIN`.
+- strings with the prefixes `cp_`, `sk-`, `ghp_`, `github_pat_`, `xox`, `-----BEGIN`.
 
-Нарушение в артефакте, который демон собирается записать, проваливает run — поэтому
-адаптеры заранее редактируют summary (`<path>` вместо абсолютного пути), а тексты ошибок
-перед записью в `failure_reason` проходят ту же редакцию.
+A violation in an artifact the daemon is about to write fails the run — that is why adapters
+redact the summary in advance (`<path>` instead of an absolute path), and error texts pass
+the same redaction before being written to `failure_reason`.
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина |
+| Symptom | Cause |
 |---|---|
-| `failed: workspace_busy` | копию держит другой процесс (второй экземпляр runner'а на тех же каталогах) |
-| `<dir> is on branch X, expected task/<id>` | в копии кто-то переключил ветку руками |
-| `invalid reference` при создании соседа | в зеркале соседа нет закреплённого коммита, а `fetch` не удался |
-| `<name> is not a submodule of the superproject` | опечатка в имени соседа или сабмодуль переименован |
-| диф ветки выглядит как откат чужих коммитов | ветка отведена от старой базы; ревьюер должен смотреть диф от merge-base с `targetBranch` |
-| агент «чинит код, которого уже нет» | зеркало не обновляется: не задан `CONTROL_PLANE_AGENT_PUSH_REMOTE` и базу никто не подтягивает |
-| на диске копятся копии | много проваленных задач (их копии не удаляются) или копии с незакоммиченными файлами; разберите и удалите вручную через `git worktree remove` |
+| `failed: workspace_busy` | another process holds the copy (a second runner instance on the same directories) |
+| `<dir> is on branch X, expected task/<id>` | someone switched the branch in the copy by hand |
+| `invalid reference` when creating a neighbour | the neighbour's mirror does not have the pinned commit, and `fetch` failed |
+| `<name> is not a submodule of the superproject` | a typo in the neighbour name or the submodule was renamed |
+| the branch diff looks like a revert of other people's commits | the branch was cut from an old base; the reviewer should look at the diff from the merge-base with `targetBranch` |
+| the agent "fixes code that no longer exists" | the mirror is not updated: `CONTROL_PLANE_AGENT_PUSH_REMOTE` is not set and nobody pulls the base |
+| copies pile up on disk | many failed tasks (their copies are not removed) or copies with uncommitted files; sort them out and remove them manually with `git worktree remove` |
 
-## См. также
+## See also
 
-- [Адаптеры исполнителей](adapters.md)
-- [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)
-- [Артефакты и комментарии](../control-plane/artifacts.md)
+- [Executor adapters](adapters.md)
+- [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)
+- [Artifacts and comments](../control-plane/artifacts.md)

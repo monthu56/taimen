@@ -1,42 +1,41 @@
-# Вертикальные пакеты
 
-Вертикальный пакет — способ добавить в платформу предметную область
-(закупки, поддержка, юридическая проверка и т. п.), **не меняя ядро**:
-доменный сервис со своей базой, каталог типов задач, ролей и скиллов,
-агенты-исполнители и оркестратор. Статья описывает
-архитектурные правила пакета, его составные части и порядок сборки поверх
-ядра. Для архитекторов и разработчиков интеграций.
+# Vertical packages
 
-## Главное правило: пакет, а не расширение ядра
+A vertical package is a way to add a subject area to the platform (procurement, support,
+legal review, and so on) **without changing the core**: a domain service with its own
+database, a catalog of task types, roles, and skills, executor agents, and an orchestrator.
+The article describes the architectural rules of a package, its parts, and the order of
+building it on top of the core. For architects and integration developers.
 
-Если функциональность имеет смысл без предметной области — она кандидат в
-ядро и оформляется отдельным решением. Если она существует **потому, что**
-есть предметная область, — это пакет. В ядро Control Plane не добавляется
-ни таблиц, ни эндпоинтов, ни событий со словами домена (обоснование —
-TAI-ADR-0026, TAI-ADR-0030).
+## The main rule: a package, not a core extension
 
-| Где живёт | Что |
+If functionality makes sense without a subject area, it is a candidate for the core and is
+handled by a separate decision. If it exists **because** there is a subject area, it is a
+package. No tables, endpoints, or events with domain words are added to the Control Plane
+core (Rationale: TAI-ADR-0026, TAI-ADR-0030).
+
+| Where it lives | What |
 |---|---|
-| **Ядро** (Control Plane, IAM, память) | задачи, claims, runs, approvals, артефакты, события, роли, identity, знания |
-| **Пакет** | доменные сущности и их правила, state machine домена, доменные гейты, интеграции с внешними источниками, UI домена |
+| **Core** (Control Plane, IAM, memory) | tasks, claims, runs, approvals, artifacts, events, roles, identity, knowledge |
+| **Package** | domain entities and their rules, the domain state machine, domain gates, integrations with external sources, domain UI |
 
-Связь пакета с ядром — **только идентификаторами** (`task_id`, `run_id`,
-`artifact_id`, `approval_id`, `principal_id`, `workspace_id`) и external
-references ядра. Внешних ключей в чужие базы нет; двоичные документы —
-артефакты ядра (содержимое — в хранилище артефактов ядра, см.
-[Артефакты и комментарии](../control-plane/artifacts.md)).
+A package is connected to the core **only by identifiers** (`task_id`, `run_id`,
+`artifact_id`, `approval_id`, `principal_id`, `workspace_id`) and core external references.
+There are no foreign keys into other databases; binary documents are core artifacts (the
+content lives in the core artifact storage, see
+[Artifacts and comments](../control-plane/artifacts.md)).
 
-## Анатомия пакета
+## Package anatomy
 
 ```mermaid
 flowchart TB
-    subgraph Пакет
-      API["Доменный сервис<br/>(своя БД, свой audience IAM)"]
-      ORC["Оркестратор<br/>(reconciliation по журналу ядра)"]
-      RUN["Исполнители<br/>(principal + PAT на агента)"]
-      CAT["Пакет каталога<br/>(task types, роли, capabilities, skills)"]
+    subgraph Package
+      API["Domain service<br/>(own DB, own IAM audience)"]
+      ORC["Orchestrator<br/>(reconciliation over the core log)"]
+      RUN["Executors<br/>(principal + PAT per agent)"]
+      CAT["Catalog package<br/>(task types, roles, capabilities, skills)"]
     end
-    subgraph Ядро
+    subgraph Core
       CP[Control Plane]
       IAM[iam-service]
       MEM[memory-service]
@@ -44,42 +43,42 @@ flowchart TB
     CAT -->|make bootstrap| CP
     ORC -->|"GET /events, POST /tasks, approvals"| CP
     RUN -->|"claim → run → artifacts"| CP
-    RUN -->|"доменные записи"| API
+    RUN -->|"domain writes"| API
     ORC --> API
     API -->|TokenVerifier| IAM
-    RUN -->|"обмен PAT ×2 audience"| IAM
-    API -.->|"знания домена"| MEM
+    RUN -->|"PAT exchange ×2 audiences"| IAM
+    API -.->|"domain knowledge"| MEM
 ```
 
-| Часть | Назначение | На чём строится |
+| Part | Purpose | Built on |
 |---|---|---|
-| Доменный сервис | сущности домена, инварианты, state machine, API для UI и агентов | FastAPI + своя PostgreSQL + [platform-auth-sdk](platform-auth-sdk.md) |
-| Пакет каталога | типы задач домена, роли, capabilities, скиллы — как данные | YAML в `packages/<пакет>/`, [skill-sdk](skill-sdk.md) для скиллов |
-| Исполнители | агенты, которые берут назначенные им задачи домена | [control-plane-client](clients.md), [platform-llm](platform-llm.md) или runner-адаптеры |
-| Оркестратор | «что дальше» для доменного объекта: заводит задачи и approvals в ядре по событиям | журнал событий ядра, `control-plane-client` |
-| Знания | справочники и история домена | namespace в memory-service |
+| Domain service | domain entities, invariants, state machine, API for the UI and agents | FastAPI + its own PostgreSQL + [platform-auth-sdk](platform-auth-sdk.md) |
+| Catalog package | domain task types, roles, capabilities, skills — as data | YAML in `packages/<package>/`, [skill-sdk](skill-sdk.md) for skills |
+| Executors | agents that take domain tasks assigned to them | [control-plane-client](clients.md), [platform-llm](platform-llm.md), or runner adapters |
+| Orchestrator | "what next" for a domain object: creates tasks and approvals in the core based on events | the core event log, `control-plane-client` |
+| Knowledge | domain reference data and history | a namespace in memory-service |
 
-## Шаг 1. Доменный сервис
+## Step 1. Domain service
 
-Сервис — обычный resource service платформы:
+The service is an ordinary platform resource service:
 
-- принимает **только** access token IAM своего audience (например
-  `acme-pack`); токен ядра (`control-plane`) он не принимает — `401
-  invalid_token`, даже для того же principal'а;
-- проверяет токен через `platform-auth-sdk` (`TokenVerifier` + `JwksCache` +
-  `PolicyEnforcementPoint`), отвечает кодами SDK;
-- различает читателей и писателей по scopes (`acme-pack:read`,
-  `acme-pack:write`, `acme-pack:admin`);
-- tenant и principal берёт из токена, каждую запись помечает principal'ом
-  из токена;
-- изолирует данные по tenant'у и workspace;
-- делает записи идемпотентными по естественным ключам (внешний id источника,
-  хеш документа, `run_id` решения) — агенты и оркестратор повторяют команды;
-- отдаёт ошибки единым конвертом `{"error": {"code", "message", "details"}}`,
-  как ядро.
+- it accepts **only** an IAM access token for its own audience (for example `acme-pack`); it
+  does not accept a core token (`control-plane`) — `401 invalid_token`, even for the same
+  principal;
+- it verifies the token through `platform-auth-sdk` (`TokenVerifier` + `JwksCache` +
+  `PolicyEnforcementPoint`) and responds with SDK codes;
+- it distinguishes readers and writers by scopes (`acme-pack:read`, `acme-pack:write`,
+  `acme-pack:admin`);
+- it takes the tenant and principal from the token and marks every record with the principal
+  from the token;
+- it isolates data by tenant and workspace;
+- it makes writes idempotent by natural keys (the source's external id, a document hash, the
+  `run_id` of a decision) — agents and the orchestrator retry commands;
+- it returns errors in a single envelope `{"error": {"code", "message", "details"}}`, like the
+  core.
 
-Сборка образа — с контекстом корня суперпроекта (path-зависимости, см.
-[SDK и интеграции](index.md#connect)):
+The image is built with the superproject root as the context (path dependencies, see
+[SDK and integrations](index.md#connect)):
 
 ```yaml
 acme-pack-db:
@@ -106,9 +105,9 @@ acme-pack-api:
   networks: [taimen]
 ```
 
-## Шаг 2. Audience в IAM
+## Step 2. Audience in IAM
 
-Audience пакета заводится в tenant'е IAM со списком разрешённых scopes:
+The package audience is created in the IAM tenant with a list of allowed scopes:
 
 ```bash
 curl -s -X POST https://platform.example.com/iam/api/v1/tenants/$IAM_TENANT_ID/audiences \
@@ -116,14 +115,14 @@ curl -s -X POST https://platform.example.com/iam/api/v1/tenants/$IAM_TENANT_ID/a
   -d '{"key": "acme-pack", "allowedScopes": ["acme-pack:read", "acme-pack:write", "acme-pack:admin"]}'
 ```
 
-Для audiences, перечисленных в реестре `AUDIENCES` файла
-`deploy/bootstrap.py`, это делает `make bootstrap` (идемпотентно приводит
-`allowedScopes` к реестру). Подробнее — [Токены, audiences, scopes](../iam/tokens.md).
+For audiences listed in the `AUDIENCES` registry of `deploy/bootstrap.py`, `make bootstrap`
+does this (it idempotently brings `allowedScopes` in line with the registry). Details:
+[Tokens, audiences, scopes](../iam/tokens.md).
 
-## Шаг 3. Пакет каталога
+## Step 3. Catalog package
 
-Типы задач, роли, capabilities и скиллы домена описываются данными в
-`packages/<пакет>/` (формат — [Пакеты каталога](../control-plane/catalog-packages.md)):
+The domain's task types, roles, capabilities, and skills are described as data in
+`packages/<package>/` (format: [Catalog packages](../control-plane/catalog-packages.md)):
 
 ```yaml
 # packages/acme/package.yaml
@@ -132,43 +131,42 @@ key: acme
 spec:
   version: 0.1.0
   displayName: Acme
-  description: Типы задач и скиллы предметной области Acme
+  description: Task types and skills for the Acme subject area
   requires: []
 ```
 
-| Объект | Что даёт пакету |
+| Object | What it gives the package |
 |---|---|
-| `TaskType` | типы задач домена со своими статусами, `fieldSchema` для `customFields`, исходами approval |
-| `Role` | роли домена (кто решает, кто согласует) |
-| `Capability` | что умеют исполнители; задачи требуют capability |
-| `Skill` | действия домена с контрактом; YAML генерирует `skill-sdk export` |
+| `TaskType` | domain task types with their own statuses, `fieldSchema` for `customFields`, approval outcomes |
+| `Role` | domain roles (who decides, who approves) |
+| `Capability` | what executors can do; tasks require a capability |
+| `Skill` | domain actions with a contract; the YAML is generated by `skill-sdk export` |
 
-Ключи типов задач — с префиксом пакета (`acme_document_parse`), чтобы не
-пересекаться с другими пакетами. Установка пакета — его ключ в файле
-установки окружения (`deploy/packages.yaml` или свой, передаётся
-`bootstrap.py --packages <файл>`), затем `make bootstrap`.
+Task type keys carry the package prefix (`acme_document_parse`) so as not to overlap with
+other packages. To install the package, add its key to the environment's installation file
+(`deploy/packages.yaml` or your own, passed as `bootstrap.py --packages <file>`), then run
+`make bootstrap`.
 
-!!! warning "Контракт ядра — из кода, а не из памяти"
-    Типичная ошибка пакета — «придуманный» контракт API ядра, под который
-    написаны и код, и тесты с фейковым сервером. Берите схемы из
-    `control-plane` (OpenAPI `/openapi.json`, канонический клиент) и держите
-    contract-тесты против снимка `openapi.json` и снимка реестра типов
-    задач (`GET /api/v1/task-types`): ключи `typeKey` и `customFields`,
-    которые шлёт пакет, должны существовать в реестре.
+!!! warning "The core contract comes from code, not from memory"
+    A typical package mistake is an "invented" core API contract against which both the code
+    and the tests with a fake server are written. Take the schemas from `control-plane`
+    (OpenAPI `/openapi.json`, the canonical client) and keep contract tests against a snapshot
+    of `openapi.json` and a snapshot of the task type registry (`GET /api/v1/task-types`): the
+    `typeKey` and `customFields` keys the package sends must exist in the registry.
 
-## Шаг 4. Агенты-исполнители
+## Step 4. Executor agents
 
-**Один агент — один principal — один PAT.** Иначе в audit работа разных
-агентов неразличима.
+**One agent — one principal — one PAT.** Otherwise the work of different agents is
+indistinguishable in audit.
 
-| Что | Где | Как |
+| What | Where | How |
 |---|---|---|
-| principal агента | Control Plane (`kind: agent` или `service`) | `POST /api/v1/principals` |
-| principal агента | IAM (`kind: agent` — PAT выпускается только `human` и `agent`) | `POST /api/v1/tenants/{t}/principals` |
-| binding | Control Plane | `POST /api/v1/principals/{id}/iam-bindings` с правами; `admin` и `approvals.decide` агентам не выдаются |
-| PAT | IAM | `POST /api/v1/tenants/{t}/principals/{id}/platform-access-tokens` с `audiences` и `scopeCeiling` |
+| agent principal | Control Plane (`kind: agent` or `service`) | `POST /api/v1/principals` |
+| agent principal | IAM (`kind: agent` — PATs are issued only to `human` and `agent`) | `POST /api/v1/tenants/{t}/principals` |
+| binding | Control Plane | `POST /api/v1/principals/{id}/iam-bindings` with permissions; `admin` and `approvals.decide` are not granted to agents |
+| PAT | IAM | `POST /api/v1/tenants/{t}/principals/{id}/platform-access-tokens` with `audiences` and `scopeCeiling` |
 
-PAT агента пакета выпускается сразу на **два audience** — ядра и пакета:
+A package agent's PAT is issued for **two audiences** at once — the core and the package:
 
 ```bash
 curl -s -X POST "$IAM/api/v1/tenants/$IAM_TENANT_ID/principals/$AGENT/platform-access-tokens" \
@@ -180,8 +178,8 @@ curl -s -X POST "$IAM/api/v1/tenants/$IAM_TENANT_ID/principals/$AGENT/platform-a
        "expiresInSeconds": 15552000}'
 ```
 
-Исполнитель делает **два обмена** одного PAT — по одному на audience — с
-независимыми кэшами:
+The executor performs **two exchanges** of one PAT — one per audience — with independent
+caches:
 
 ```python
 pat = lambda: Path("/run/secrets/acme-document-analyst.pat").read_text()
@@ -194,108 +192,107 @@ pack_cred = IamCredential(iam_url, "", audience="acme-pack",
 ```
 
 
-Для своего пакета выпускайте PAT через API IAM, как выше.
+For your own package, issue the PAT through the IAM API as shown above.
 
-Как исполнители берут работу:
+How executors take work:
 
-| Вариант | Когда |
+| Option | When |
 |---|---|
-| контейнер на агента с демоном, который берёт **только назначенные ему** задачи | детерминированные скиллы домена, LLM-скиллы через `platform-llm` |
-| runner-хост с адаптером кодового агента | задачи, требующие работы в репозитории (см. [Адаптеры исполнителей](../runner/adapters.md)) |
-| скилл, хостящийся через `skill-sdk` | действие, которое исполнитель ядра вызывает по контракту |
+| a container per agent with a daemon that takes **only the tasks assigned to it** | deterministic domain skills, LLM skills through `platform-llm` |
+| a runner host with a coding agent adapter | tasks that require work in a repository (see [Executor adapters](../runner/adapters.md)) |
+| a skill hosted through `skill-sdk` | an action the core executor calls by contract |
 
-Если исполнитель берёт только назначенные задачи, каждую AI-стадию нужно
-назначать агенту **при создании** — иначе конвейер встанет: держите одну
-таблицу «тип задачи → скилл → principal» и вычисляйте assignee из неё.
+If an executor takes only assigned tasks, every AI stage must be assigned to an agent **at
+creation time** — otherwise the pipeline stalls: keep one "task type → skill → principal"
+table and compute the assignee from it.
 
-Секреты агентов — файлы `<slug>.pat` с правами `0600`, смонтированные только
-для чтения; контейнеры работают под непривилегированным uid (на Linux —
-`chown` на этот uid).
+Agent secrets are `<slug>.pat` files with permissions `0600`, mounted read-only; containers
+run under an unprivileged uid (on Linux — `chown` to that uid).
 
-## Шаг 5. Оркестратор
+## Step 5. Orchestrator
 
-Оркестратор отвечает на вопрос «что дальше» для доменного объекта и
-реализуется как **детерминированный reconciliation-loop**:
+The orchestrator answers the question "what next" for a domain object and is implemented as
+a **deterministic reconciliation loop**:
 
 ```mermaid
 sequenceDiagram
-    participant O as Оркестратор
+    participant O as Orchestrator
     participant CP as Control Plane
-    participant D as БД пакета
-    O->>CP: GET /api/v1/events?cursor=… (durable cursor в своей БД)
+    participant D as Package DB
+    O->>CP: GET /api/v1/events?cursor=… (durable cursor in its own DB)
     CP-->>O: task.completed, approval.approved, artifact.created, …
-    O->>D: найти «свой» объект по id задачи/approval (ledger)
-    O->>O: пересчитать состояние объекта
-    O->>CP: POST /tasks, POST /approvals (ключ идемпотентности = объект + стадия)
-    O->>D: записать стадию в ledger, сдвинуть курсор
+    O->>D: find "its own" object by task/approval id (ledger)
+    O->>O: recompute the object state
+    O->>CP: POST /tasks, POST /approvals (idempotency key = object + stage)
+    O->>D: write the stage to the ledger, advance the cursor
 ```
 
-Правила оркестратора:
+Orchestrator rules:
 
-- **Durable cursor** в базе пакета; событие, которое не удалось
-  обработать, повторяется, а не пропускается.
-- **Фильтрация — на стороне пакета.** Журнал ядра не фильтруется по
-  workspace или типу события; «свои» задачи и approvals находятся по
-  таблице-ledger (`core_ref_id` → доменный объект), чужие пропускаются.
-- **Идемпотентность** по ключу `(объект, стадия)`: повтор события не создаёт
-  дубликатов задач, approvals и решений.
-- **Результат стадии** читается из артефактов задачи (`GET /artifacts?taskId=`),
-  а непонятный или пустой результат безопасно сводится к эскалации
-  человеку, а не к случайному решению.
-- **Решение человека** — approval ядра с ролью домена; исход approval
-  объявляется типом задачи (TAI-ADR-0041), а не кодом пакета.
-- **Статусы** сравниваются по категориям (`terminal_success`,
-  `terminal_cancelled`), а не по ключам — ключи объявляет тип задачи.
+- **A durable cursor** in the package database; an event that could not be processed is
+  retried, not skipped.
+- **Filtering happens on the package side.** The core log is not filtered by workspace or
+  event type; "own" tasks and approvals are found through a ledger table (`core_ref_id` →
+  domain object), and others are skipped.
+- **Idempotency** by the key `(object, stage)`: a repeated event does not create duplicate
+  tasks, approvals, or decisions.
+- **The stage result** is read from the task's artifacts (`GET /artifacts?taskId=`), and an
+  unclear or empty result safely resolves to escalation to a human rather than to a random
+  decision.
+- **A human decision** is a core approval with a domain role; the approval outcome is
+  declared by the task type (TAI-ADR-0041), not by package code.
+- **Statuses** are compared by category (`terminal_success`, `terminal_cancelled`), not by
+  key — keys are declared by the task type.
 
-## Шаг 6. Интерфейс человека
+## Step 6. Human interface
 
 
-Веб-консоли с модулями пакетов в поставке нет. Человек видит задачи и approvals
-пакета там же, где любые задачи ядра: в [MCP-плагине](../operator/mcp-plugin.md),
-CLI и [уведомлениях](../notifications/index.md). Решения по approvals принимаются в
-ядре, поэтому отдельный интерфейс для них пакету не нужен.
+The delivery has no web console with package modules. A human sees a package's tasks and
+approvals in the same places as any core tasks: in the [MCP plugin](../operator/mcp-plugin.md),
+the CLI, and [notifications](../notifications/index.md). Approval decisions are made in the
+core, so the package does not need a separate interface for them.
 
-Если домену нужен собственный UI, он — часть пакета и ходит в доменный сервис с
-access token IAM его audience, как любой другой клиент.
+If the domain needs its own UI, the UI is part of the package and calls the domain service
+with an IAM access token for its audience, like any other client.
 
-## Шаг 7. Знания
+## Step 7. Knowledge
 
-Справочники, регламенты и история домена загружаются в собственный
-namespace memory-service (см. [Загрузка знаний](../memory/ingestion.md)).
-Исполнители получают релевантные знания через контекст задачи ядра, а
-сервис пакета — через [platform-memory-client](clients.md#memory-client) со
-своим грантом.
+Domain reference data, regulations, and history are loaded into a dedicated memory-service
+namespace (see [Knowledge ingestion](../memory/ingestion.md)). Executors get relevant
+knowledge through the core task context, and the package service — through
+[platform-memory-client](clients.md#memory-client) with its own grant.
 
-## Шаг 8. Профили compose
+## Step 8. Compose profiles
 
-Пакет поднимается отдельными профилями, чтобы ядро работало без него:
+The package is started with separate profiles so that the core works without it:
 
-| Профиль | Содержимое |
+| Profile | Contents |
 |---|---|
-| `<пакет>` | доменный сервис и его БД (оркестратор — внутри сервиса, включается флагом) |
-| `<пакет>-runners` | контейнеры исполнителей, по одному на агента |
+| `<package>` | the domain service and its DB (the orchestrator is inside the service, turned on by a flag) |
+| `<package>-runners` | executor containers, one per agent |
 
 ```bash
-make up PROFILES="core <пакет> <пакет>-runners edge"
+make up PROFILES="core <package> <package>-runners edge"
 ```
 
-## Чек-лист готовности пакета
+## Package readiness checklist
 
-- [ ] Ни одного изменения в ядре ради домена.
-- [ ] Собственный audience, токены ядра сервисом не принимаются.
-- [ ] Все записи идемпотентны и помечены principal'ом из токена.
-- [ ] Каталог пакета — YAML в `packages/<пакет>/`, скиллы сгенерированы из кода.
-- [ ] Один principal и один PAT на агента, PAT в файлах `0600`.
-- [ ] AI-стадии назначаются исполнителю при создании задачи.
-- [ ] Оркестратор с durable cursor и ключом идемпотентности `(объект, стадия)`.
-- [ ] Contract-тесты против снимка `openapi.json` ядра.
-- [ ] Задачи и approvals пакета видны в рабочем месте и MCP-плагине без доработок.
+- [ ] Not a single change in the core for the sake of the domain.
+- [ ] Its own audience; the service does not accept core tokens.
+- [ ] All writes are idempotent and marked with the principal from the token.
+- [ ] The package catalog is YAML in `packages/<package>/`, skills are generated from code.
+- [ ] One principal and one PAT per agent, PATs in `0600` files.
+- [ ] AI stages are assigned to an executor when the task is created.
+- [ ] An orchestrator with a durable cursor and the idempotency key `(object, stage)`.
+- [ ] Contract tests against a snapshot of the core `openapi.json`.
+- [ ] The package's tasks and approvals are visible in the workplace and the MCP plugin
+      without extra work.
 
-## См. также
+## See also
 
-- [SDK и интеграции](index.md)
-- [Пакеты каталога](../control-plane/catalog-packages.md)
-- [Типы задач и статусы](../control-plane/task-types.md)
+- [SDK and integrations](index.md)
+- [Catalog packages](../control-plane/catalog-packages.md)
+- [Task types and statuses](../control-plane/task-types.md)
 - [Approvals](../control-plane/approvals.md)
-- [События Control Plane](../control-plane/events.md)
-- [Identity агента](../runner/agent-identity.md)
+- [Control Plane events](../control-plane/events.md)
+- [Agent identity](../runner/agent-identity.md)

@@ -1,117 +1,126 @@
-# Namespaces и доступ
 
-Статья описывает, как memory-service изолирует базы знаний (namespaces), как
-аутентифицирует вызывающих (статические ключи и access token IAM), как выводит права
-на namespaces и как ограничивает видимость внутри namespace. Она для интеграторов и
-администраторов, которые выдают доступ к памяти.
+# Namespaces and access
 
-## Namespace — граница базы знаний
+This article describes how memory-service isolates knowledge bases
+(namespaces), how it authenticates callers (static keys and IAM access
+tokens), how it derives permissions on namespaces, and how it restricts
+visibility inside a namespace. It is for integrators and administrators who
+grant access to memory.
 
-Namespace — опаковая строка, которая отделяет одну базу знаний от другой. Движок
-проверяет формат и фильтрует по **точному совпадению** на каждом шаге: поиск чанков,
-обход графа (предикат стоит на обоих концах пути), наблюдения, факты, аудит. Сегменты
-имени движок не интерпретирует — иерархия существует для потребителей: для префиксных
-грантов и для договорённостей об именах.
+## A namespace is a knowledge base boundary
 
-| Правило | Значение |
+A namespace is an opaque string that separates one knowledge base from
+another. The engine validates the format and filters by **exact match** at
+every step: chunk search, graph traversal (the predicate is applied at both
+ends of the path), observations, facts, audit. The engine does not interpret
+the name's segments; the hierarchy exists for consumers, for prefix grants and
+naming conventions.
+
+| Rule | Value |
 |---|---|
-| Формат | `^[a-z0-9][a-z0-9._:-]{0,199}$` — строчные латинские буквы, цифры и `._:-`, до 200 символов |
-| Запись | Ровно один namespace на запрос |
-| Чтение | Один или несколько namespaces (до 50 в одном запросе) |
-| Создание | Не нужно: namespace появляется с первой записью |
-| Без `scope` | Запрос работает в namespace по умолчанию (`CB_DEFAULT_NAMESPACE`) |
+| Format | `^[a-z0-9][a-z0-9._:-]{0,199}$`: lowercase Latin letters, digits, and `._:-`, up to 200 characters |
+| Write | Exactly one namespace per request |
+| Read | One or more namespaces (up to 50 in one request) |
+| Creation | Not needed: a namespace appears with the first write |
+| Without `scope` | The request works in the default namespace (`CB_DEFAULT_NAMESPACE`) |
 
-Некорректное имя или слишком длинный список → `400`.
+An invalid name or a list that is too long → `400`.
 
-!!! tip "Всегда передавайте scope явно"
-    Запрос без `scope` работает в namespace по умолчанию сервиса. Если токену этот
-    namespace не выдан, будет `403`. В интеграциях указывайте базу знаний в каждом
-    запросе.
+!!! tip "Always pass the scope explicitly"
+    A request without `scope` works in the service's default namespace. If the
+    token was not granted that namespace, you get `403`. In integrations,
+    specify the knowledge base in every request.
 
-### Как передать namespace
+### How to pass the namespace
 
-| Маршруты | Способ |
+| Routes | Method |
 |---|---|
-| Чтение `/api/brain/{query,recall,search}`, `/api/memory/context`, `/api/memory/context/typed` | Тело: `"scope": {"namespace": "support"}` или `"scope": {"namespaces": ["support", "shared"]}` |
-| Запись `/api/brain/{retain,facts,audit}`, `/api/memory/observations[:batch]` | Тело: `"scope": {"namespace": "support"}` |
-| `/api/brain/documents` | `"namespace": "support"` или `"scope": {"namespace": "support"}` (если заданы оба — они должны совпадать, иначе `400`) |
-| `/api/memory/reconcile` | Поле `namespace` в теле или `?namespace=` (оба — только одинаковые) |
-| `GET/DELETE` по ключу, трейсы, наблюдения | Query-параметр `?namespace=support` |
+| Read `/api/brain/{query,recall,search}`, `/api/memory/context`, `/api/memory/context/typed` | Body: `"scope": {"namespace": "support"}` or `"scope": {"namespaces": ["support", "shared"]}` |
+| Write `/api/brain/{retain,facts,audit}`, `/api/memory/observations[:batch]` | Body: `"scope": {"namespace": "support"}` |
+| `/api/brain/documents` | `"namespace": "support"` or `"scope": {"namespace": "support"}` (if both are set, they must match, otherwise `400`) |
+| `/api/memory/reconcile` | The `namespace` field in the body or `?namespace=` (if both, they must be identical) |
+| `GET/DELETE` by key, traces, observations | Query parameter `?namespace=support` |
 
-### Схема имён в платформе
+### Naming scheme in the platform
 
-Платформа строит имена namespaces от идентификаторов, а не от отображаемых названий:
+The platform builds namespace names from identifiers, not from display names:
 
-| Namespace | Кто пишет | Что лежит |
+| Namespace | Who writes | What it holds |
 |---|---|---|
-| `tenant:<tenant-id>` | `context-adapter` Control Plane | Доменные события ядра (наблюдения): задачи, прогоны, approvals |
-| `tenant:<tenant-id>:ws:<root-workspace-id>` | Control Plane (`/api/v1/knowledge/*`) | Знания дерева воркспейсов: снимки источников, доменные пакеты |
-| `tenant:<tenant-id>:principal:<principal-id>` | — | Приватный namespace principal (используется в модели видимости) |
+| `tenant:<tenant-id>` | Control Plane `context-adapter` | Core domain events (observations): tasks, runs, approvals |
+| `tenant:<tenant-id>:ws:<root-workspace-id>` | Control Plane (`/api/v1/knowledge/*`) | Knowledge of the workspace tree: source snapshots, domain packs |
+| `tenant:<tenant-id>:principal:<principal-id>` | — | A principal's private namespace (used in the visibility model) |
 
-При сборке контекста Control Plane читает namespace tenant'а и namespace корневого
-воркспейса задачи. Префикс `tenant:` — настройка ядра `CP_CONTEXT_NAMESPACE_PREFIX`.
-Для самостоятельных приложений (бот поддержки, демо) имя выбирает администратор,
-например `support` или `sales`.
+When assembling context, Control Plane reads the tenant's namespace and the
+namespace of the task's root workspace. The `tenant:` prefix is the core
+setting `CP_CONTEXT_NAMESPACE_PREFIX`. For standalone applications (a support
+bot, a demo), the administrator chooses the name, for example `support` or
+`sales`.
 
-!!! note "Логическая изоляция"
-    Namespaces одного инстанса делят одну БД. Если контуру нужна физическая изоляция
-    данных, поднимайте отдельный инстанс memory-service с отдельной БД.
+!!! note "Logical isolation"
+    The namespaces of one instance share one database. If a deployment needs
+    physical data isolation, run a separate memory-service instance with a
+    separate database.
 
-## Способы аутентификации
+## Authentication methods
 
-Заголовок один — `Authorization: Bearer <token>`. Токен проверяется по порядку:
+There is one header, `Authorization: Bearer <token>`. The token is checked in
+this order:
 
 ```mermaid
 flowchart TD
-    A[Запрос] --> B{Настроен хоть один ключ<br/>или CB_IAM_ENABLED?}
-    B -- нет --> L[Локальный режим:<br/>без авторизации, полный доступ]
-    B -- да --> C{Совпал с CB_SERVER_API_KEYS_PII?}
-    C -- да --> P1[Полный доступ ко всем namespaces,<br/>полный допуск к ПДн]
-    C -- нет --> D{Совпал с CB_SERVER_API_KEY?}
-    D -- да --> P2[Полный доступ ко всем namespaces;<br/>ПДн маскируются, если CB_PII_PROTECTION]
-    D -- нет --> E{Совпал с ключом реестра CB_API_KEYS?}
-    E -- да --> P3[Гранты ключа по префиксам]
-    E -- нет --> F{CB_IAM_ENABLED и токен похож на JWT?}
-    F -- да --> G{Подпись, iss, aud, срок}
-    G -- ок --> P4[Гранты из tenant_id и scopes токена]
-    G -- дефект --> X401[401]
-    G -- JWKS недоступен --> X503[503]
-    F -- нет --> X401
+    A[Request] --> B{At least one key configured<br/>or CB_IAM_ENABLED?}
+    B -- no --> L[Local mode:<br/>no authorization, full access]
+    B -- yes --> C{Matches CB_SERVER_API_KEYS_PII?}
+    C -- yes --> P1[Full access to all namespaces,<br/>full clearance for personal data]
+    C -- no --> D{Matches CB_SERVER_API_KEY?}
+    D -- yes --> P2[Full access to all namespaces;<br/>personal data masked if CB_PII_PROTECTION]
+    D -- no --> E{Matches a key in the CB_API_KEYS registry?}
+    E -- yes --> P3[Key grants by prefix]
+    E -- no --> F{CB_IAM_ENABLED and the token looks like a JWT?}
+    F -- yes --> G{Signature, iss, aud, lifetime}
+    G -- ok --> P4[Grants from the token's tenant_id and scopes]
+    G -- defect --> X401[401]
+    G -- JWKS unavailable --> X503[503]
+    F -- no --> X401
 ```
 
-Все сравнения ключей выполняются в постоянном времени. Любой дефект IAM-токена
-(истёк, чужой `aud`/`iss`, неизвестный ключ подписи) даёт **тот же `401`**, что и
-неверный ключ, — сервис не подсказывает, какой способ «почти» подошёл.
+All key comparisons are done in constant time. Any IAM token defect (expired,
+foreign `aud`/`iss`, unknown signing key) yields **the same `401`** as a wrong
+key: the service does not hint at which method "almost" worked.
 
-!!! danger "Локальный режим"
-    Если не задан ни `CB_SERVER_API_KEY`, ни `CB_SERVER_API_KEYS_PII`, ни `CB_API_KEYS`,
-    и `CB_IAM_ENABLED=false`, сервис работает **без авторизации**. Такой режим
-    допустим только для разработки на изолированной машине.
+!!! danger "Local mode"
+    If none of `CB_SERVER_API_KEY`, `CB_SERVER_API_KEYS_PII`, or `CB_API_KEYS`
+    is set, and `CB_IAM_ENABLED=false`, the service works **without
+    authorization**. This mode is acceptable only for development on an
+    isolated machine.
 
-### Статические ключи без грантов
+### Static keys without grants
 
-`CB_SERVER_API_KEY` и ключи из `CB_SERVER_API_KEYS_PII` (через запятую) дают доступ ко
-**всем** namespaces на чтение и запись. Разница — в допуске к ПДн:
+`CB_SERVER_API_KEY` and the keys from `CB_SERVER_API_KEYS_PII` (comma-separated)
+grant read and write access to **all** namespaces. The difference is personal
+data clearance:
 
-| Ключ | ПДн при `CB_PII_PROTECTION=true` |
+| Key | Personal data with `CB_PII_PROTECTION=true` |
 |---|---|
-| `CB_SERVER_API_KEYS_PII` | Полный допуск, каждая выдача ПДн журналируется `pii_access` |
-| `CB_SERVER_API_KEY` | Маскированная выдача (`[ПДн:phone]` и т. п.) |
+| `CB_SERVER_API_KEYS_PII` | Full clearance; every release of personal data is logged as `pii_access` |
+| `CB_SERVER_API_KEY` | Masked results (`[ПДн:phone]` and so on) |
 
-В корневом `compose.yml` платформы `CB_SERVER_API_KEY` равен `MEMORY_API_KEY`,
-`CB_SERVER_API_KEYS_PII` пуст, а `CB_PII_PROTECTION=true` — то есть статический ключ
-платформы получает маскированную выдачу.
+In the platform's root `compose.yml`, `CB_SERVER_API_KEY` equals
+`MEMORY_API_KEY`, `CB_SERVER_API_KEYS_PII` is empty, and
+`CB_PII_PROTECTION=true`, so the platform's static key gets masked results.
 
-### Реестр ключей с грантами (`CB_API_KEYS`)
+### Key registry with grants (`CB_API_KEYS`)
 
-`CB_API_KEYS` — JSON-массив ключей, у каждого — список грантов на префиксы namespaces.
-Так один инстанс обслуживает несколько потребителей с разными правами.
+`CB_API_KEYS` is a JSON array of keys, each with a list of grants on namespace
+prefixes. This way one instance serves several consumers with different
+permissions.
 
 ```json
 [
   {
     "name": "answer-bot",
-    "key": "<случайный-ключ-1>",
+    "key": "<random-key-1>",
     "grants": [
       {"prefix": "support", "read": true, "write": true},
       {"prefix": "shared",  "read": true, "write": false}
@@ -119,184 +128,199 @@ flowchart TD
   },
   {
     "name": "kb-admin",
-    "key": "<случайный-ключ-2>",
+    "key": "<random-key-2>",
     "pii": true,
     "grants": [{"prefix": "", "read": true, "write": true}]
   },
   {
     "name": "orchestrator",
-    "key": "<случайный-ключ-3>",
+    "key": "<random-key-3>",
     "service": true,
     "grants": [{"prefix": "tenant:", "read": true, "write": true}]
   }
 ]
 ```
 
-| Поле | Обязательно | Смысл |
+| Field | Required | Meaning |
 |---|---|---|
-| `key` | да | Значение Bearer-токена |
-| `name` | нет | Метка вызывающего в аудите и в `CB_CORE_IDENTITIES` (по умолчанию `key-<i>`) |
-| `grants` | да, непустой | `{prefix, read, write}`; `read` по умолчанию `true`, `write` — `false` |
-| `pii` | нет | Полный допуск к ПДн (иначе при включённой защите — маска) |
-| `service` | нет | Service scope: регистрация доменных пакетов и доступ к маршрутам ядра |
+| `key` | yes | Bearer token value |
+| `name` | no | Caller label in audit and in `CB_CORE_IDENTITIES` (`key-<i>` by default) |
+| `grants` | yes, non-empty | `{prefix, read, write}`; `read` defaults to `true`, `write` to `false` |
+| `pii` | no | Full personal data clearance (otherwise masking when protection is on) |
+| `service` | no | Service scope: domain pack registration and access to core routes |
 
-Правила грантов:
+Grant rules:
 
-- грант покрывает namespace, если имя **начинается** с `prefix`; пустой префикс
-  покрывает все namespaces;
-- запрос авторизуется, только если **все** его namespaces покрыты грантом с нужным
-  флагом; иначе `403` с именем первого непокрытого namespace в `detail` — данные не
-  читаются и не пишутся даже частично;
-- `GET /api/brain/stats` (статистика всего инстанса) доступна только ключам с грантом
-  на пустой префикс.
+- a grant covers a namespace if the name **starts with** `prefix`; an empty
+  prefix covers all namespaces;
+- a request is authorized only if **all** of its namespaces are covered by a
+  grant with the required flag; otherwise `403` with the name of the first
+  uncovered namespace in `detail`, and no data is read or written, not even
+  partially;
+- `GET /api/brain/stats` (statistics for the whole instance) is available only
+  to keys with a grant on the empty prefix.
 
-!!! warning "Префикс — это просто начало строки"
-    Грант `support` покроет и `support-archive`, и `supporters`. Если нужно
-    ограничение ровно поддеревом, заканчивайте префикс разделителем: `support:`.
+!!! warning "A prefix is just the start of a string"
+    The grant `support` also covers `support-archive` and `supporters`. If you
+    need a restriction to exactly a subtree, end the prefix with a separator:
+    `support:`.
 
-Некорректный JSON в `CB_API_KEYS` не валит старт, но каждый запрос с авторизацией
-будет получать `500` с описанием ошибки конфигурации.
+Invalid JSON in `CB_API_KEYS` does not break startup, but every authorized
+request gets `500` with a description of the configuration error.
 
-### Access token IAM
+### IAM access token
 
-При `CB_IAM_ENABLED=true` Bearer, не совпавший ни с одним статическим ключом и похожий
-на JWT (три непустые части через точку), проверяется общим `platform-auth-sdk`:
-подпись по JWKS (`CB_IAM_JWKS_URL`), точный `iss` (`CB_IAM_ISSUER`), точный `aud`
-(`CB_IAM_AUDIENCE`, по умолчанию `memory-service`; списки audience отвергаются) и
-временные claims с допуском `CB_IAM_LEEWAY_SECONDS`.
+With `CB_IAM_ENABLED=true`, a Bearer that matches no static key and looks like
+a JWT (three non-empty dot-separated parts) is verified by the shared
+`platform-auth-sdk`: signature against JWKS (`CB_IAM_JWKS_URL`), exact `iss`
+(`CB_IAM_ISSUER`), exact `aud` (`CB_IAM_AUDIENCE`, `memory-service` by default;
+audience lists are rejected), and time claims with a tolerance of
+`CB_IAM_LEEWAY_SECONDS`.
 
-Потребитель получает такой токен обменом своего Platform Access Token на audience
-`memory-service` (см. [Токены IAM](../iam/tokens.md)). Права выводятся из токена:
+A consumer gets such a token by exchanging its Platform Access Token for
+audience `memory-service` (see [IAM tokens](../iam/tokens.md)). Permissions
+are derived from the token:
 
-| Что в токене | Что даёт |
+| What is in the token | What it grants |
 |---|---|
-| `tenant_id` | Namespace `tenant:<tenant_id>` (ровно он) и поддерево `tenant:<tenant_id>:*` |
-| claim `memory_namespaces` (список) | Каждый namespace из списка — ровно он и поддерево `<ns>:*` |
-| scope `memory:read` | Флаг чтения всех грантов токена |
-| scope `memory:write` | Флаг записи всех грантов токена |
-| scope `memory:pii` | Полный допуск к ПДн |
-| scope `memory:tenants` | Всё поддерево `tenant:*`, независимо от `tenant_id` токена |
-| scope `memory:service` | Service scope: identity ядра (доменные пакеты, маршруты ядра); namespaces не расширяет |
-| scope `memory:on-behalf` | Чтение от имени другого principal с переданной видимостью (см. ниже) |
+| `tenant_id` | Namespace `tenant:<tenant_id>` (exactly) and the subtree `tenant:<tenant_id>:*` |
+| claim `memory_namespaces` (list) | Each namespace from the list, exactly, and the subtree `<ns>:*` |
+| scope `memory:read` | Read flag on all of the token's grants |
+| scope `memory:write` | Write flag on all of the token's grants |
+| scope `memory:pii` | Full personal data clearance |
+| scope `memory:tenants` | The whole `tenant:*` subtree, regardless of the token's `tenant_id` |
+| scope `memory:service` | Service scope: core identity (domain packs, core routes); does not extend namespaces |
+| scope `memory:on-behalf` | Reading on behalf of another principal with the passed visibility (see below) |
 
-Scope действует, только если он есть и в токене, и в потолке scope клиента (проверяет
-SDK). Валидный токен без `memory:read`/`memory:write` не покрывает ни одного
-namespace — любой запрос к данным получит `403`. Гранты IAM строгие: `tenant:<id>`
-покрывается точным совпадением, поэтому `tenant:<id>0` чужому токену недоступен.
+A scope takes effect only if it is present both in the token and in the
+client's scope ceiling (the SDK checks this). A valid token without
+`memory:read`/`memory:write` covers no namespace, and any data request gets
+`403`. IAM grants are strict: `tenant:<id>` is covered by exact match, so
+`tenant:<id>0` is not available to someone else's token.
 
-| Ситуация | Ответ |
+| Situation | Response |
 |---|---|
-| Токен с дефектом | `401` |
-| JWKS недоступен или не настроен | `503` (fail closed; статические ключи продолжают работать) |
-| Токен без прав на namespace запроса | `403` |
-| `GET /api/brain/stats` с IAM-токеном | `403` |
+| Defective token | `401` |
+| JWKS unavailable or not configured | `503` (fail closed; static keys keep working) |
+| Token without permissions on the request's namespace | `403` |
+| `GET /api/brain/stats` with an IAM token | `403` |
 
-!!! tip "JWKS — по внутреннему адресу"
-    Указывайте `CB_IAM_JWKS_URL` на внутренний адрес IAM в сети контура
-    (`http://iam-service:8010/.well-known/jwks.json` в `compose.yml`), а не на внешний
-    прокси: проверка подписи не должна зависеть от внешнего TLS. Ключи кэшируются с
-    учётом ротации.
+!!! tip "JWKS at the internal address"
+    Point `CB_IAM_JWKS_URL` at the internal IAM address in the deployment's
+    network (`http://iam-service:8010/.well-known/jwks.json` in `compose.yml`),
+    not at the external proxy: signature verification must not depend on
+    external TLS. Keys are cached with rotation in mind.
 
-### Scopes памяти в IAM
+### Memory scopes in IAM
 
-Audience `memory-service` и его потолок scope заводит `deploy/bootstrap.py`:
+The `memory-service` audience and its scope ceiling are created by
+`deploy/bootstrap.py`:
 
-| Scope | Кому выдавать |
+| Scope | Whom to grant it to |
 |---|---|
-| `memory:read`, `memory:write` | Приложениям и агентам, которые работают со своей памятью |
-| `memory:pii` | Только тем, кому нужен немаскированный текст с ПДн |
-| `memory:tenants` | Только service account Control Plane |
-| `memory:service` | Только service account Control Plane |
-| `memory:on-behalf` | Только service account Control Plane (режим видимости по principal) |
+| `memory:read`, `memory:write` | Applications and agents working with their own memory |
+| `memory:pii` | Only those who need unmasked text with personal data |
+| `memory:tenants` | Only the Control Plane service account |
+| `memory:service` | Only the Control Plane service account |
+| `memory:on-behalf` | Only the Control Plane service account (principal-based visibility mode) |
 
-## Service account ядра
+## The core service account
 
-Control Plane ходит в память **service account'ом IAM** «Taimen Control Plane»
-(создаётся `deploy/bootstrap.py`, секрет — `secrets/control-plane-iam.env`).
-Его потолок включает `memory:read`, `memory:write`, `memory:tenants`,
-`memory:on-behalf` и `memory:service`:
+Control Plane calls memory as the **IAM service account** "Taimen Control
+Plane" (created by `deploy/bootstrap.py`; the secret is in
+`secrets/control-plane-iam.env`). Its ceiling includes `memory:read`,
+`memory:write`, `memory:tenants`, `memory:on-behalf`, and `memory:service`:
 
-- `memory:tenants` нужен, потому что `context-adapter` пишет и читает память **всех**
-  tenant'ов инсталляции, а tenant IAM у service account один;
-- `memory:service` даёт право регистрировать доменные пакеты и сверять снимки знаний,
-  которые клиенты публикуют через `POST /api/v1/knowledge/*` ядра;
-- `memory:on-behalf` используется, когда ядро работает в режиме авторизации `policy`
-  и читает память от имени конечного principal.
+- `memory:tenants` is needed because `context-adapter` writes and reads the
+  memory of **all** tenants of the installation, while the service account
+  has a single IAM tenant;
+- `memory:service` grants the right to register domain packs and reconcile
+  knowledge snapshots that clients publish through the core's
+  `POST /api/v1/knowledge/*`;
+- `memory:on-behalf` is used when the core works in the `policy`
+  authorization mode and reads memory on behalf of the end principal.
 
-Пока файла `secrets/control-plane-iam.env` нет (до bootstrap), ядро в режиме
-`CP_CONTEXT_AUTH=auto` использует статический `MEMORY_API_KEY`; после bootstrap и
-перезапуска процессов ядра — IAM. См. [Конфигурацию Control Plane](../control-plane/configuration.md).
+As long as the `secrets/control-plane-iam.env` file does not exist (before
+bootstrap), the core in `CP_CONTEXT_AUTH=auto` mode uses the static
+`MEMORY_API_KEY`; after bootstrap and a restart of the core processes, it uses
+IAM. See [Control Plane configuration](../control-plane/configuration.md).
 
-## Маршруты ядра {#core-routes}
+## Core routes {#core-routes}
 
-Управление схемой знаний можно закрепить за доверенным оркестратором. Если задан
-`CB_CORE_ONLY=true` или непустой `CB_CORE_IDENTITIES`, маршруты
+You can reserve knowledge schema management for a trusted orchestrator. If
+`CB_CORE_ONLY=true` is set or `CB_CORE_IDENTITIES` is non-empty, the routes
 
 - `POST/GET /api/memory/packages`, `GET /api/memory/packages/{name}`,
 - `GET/PUT /api/memory/namespaces/{ns}/kinds`,
 - `POST /api/memory/reconcile`
 
-отвечают `403` всем, кроме вызывающих со service scope (IAM `memory:service`, ключ
-реестра с `"service": true`) и меток из `CB_CORE_IDENTITIES`, — даже если у токена
-есть права на namespace. Метки: `name` ключа реестра, `base` (для
-`CB_SERVER_API_KEY`), `pii-full` (для ключей `CB_SERVER_API_KEYS_PII`),
-`iam:<principal_type>:<principal_id>` для IAM-токена. Локальный режим без
-аутентификации ядро не опознаёт (fail closed), если метка `default` не перечислена
-явно. Доверенному вызывающему права на namespace всё равно нужны.
+return `403` to everyone except callers with the service scope (IAM
+`memory:service`, a registry key with `"service": true`) and the labels from
+`CB_CORE_IDENTITIES`, even if the token has permissions on the namespace.
+Labels: the registry key's `name`, `base` (for `CB_SERVER_API_KEY`),
+`pii-full` (for `CB_SERVER_API_KEYS_PII` keys),
+`iam:<principal_type>:<principal_id>` for an IAM token. Local mode without
+authentication is not recognized as the core (fail closed) unless the
+`default` label is listed explicitly. A trusted caller still needs
+permissions on the namespace.
 
-Без ограничения регистрация пакета (`POST /api/memory/packages`) всё равно требует
-service scope: ключ с `"service": true`, IAM `memory:service`, ключ с грантом записи
-на пустой префикс или legacy-ключ без грантов.
+Without the restriction, pack registration (`POST /api/memory/packages`)
+still requires the service scope: a key with `"service": true`, IAM
+`memory:service`, a key with a write grant on the empty prefix, or a legacy
+key without grants.
 
-## Видимость внутри namespace {#visibility}
+## Visibility inside a namespace {#visibility}
 
-Namespace — граница хранения. Внутри него элемент может нести scopes видимости:
+A namespace is a storage boundary. Inside it, an element can carry visibility
+scopes:
 
-- `workspace:<id>` — элемент принадлежит воркспейсу;
-- `principal:<id>` — приватный элемент principal.
+- `workspace:<id>`: the element belongs to a workspace;
+- `principal:<id>`: a principal's private element.
 
-Элемент с такими scopes виден, только если они пересекаются с **разрешёнными scopes**
-вызывающего. Элементы без scopes (или только со scopes релевантности вроде `task:…`)
-видны всем, кто читает namespace.
+An element with such scopes is visible only if they intersect with the
+caller's **allowed scopes**. Elements without scopes (or only with relevance
+scopes such as `task:…`) are visible to everyone who reads the namespace.
 
-Разрешённые namespaces и scopes определяет сервер:
+The server determines the allowed namespaces and scopes:
 
 
-| Вызывающий | Видимость |
+| Caller | Visibility |
 |---|---|
-| Статический ключ, локальный режим | Без ограничений |
-| IAM-токен при `CB_POLICY_ENABLED=false` | Без ограничений (только гранты) |
-| IAM-токен человека или агента при `CB_POLICY_ENABLED=true` | Из внешнего PDP: `list_objects(memory.read, memory_namespace)` → namespaces, `list_objects(memory.read, workspace)` → `workspace:<id>`, плюс собственный `principal:<id>` и приватный namespace principal |
-| Service account с `memory:on-behalf` при `CB_POLICY_ENABLED=true` | Из тела запроса: `allowedNamespaces` и `allowedScopes` обязательны, иначе `403` |
+| Static key, local mode | Unrestricted |
+| IAM token with `CB_POLICY_ENABLED=false` | Unrestricted (grants only) |
+| IAM token of a human or agent with `CB_POLICY_ENABLED=true` | From the external PDP: `list_objects(memory.read, memory_namespace)` → namespaces, `list_objects(memory.read, workspace)` → `workspace:<id>`, plus the caller's own `principal:<id>` and the principal's private namespace |
+| Service account with `memory:on-behalf` and `CB_POLICY_ENABLED=true` | From the request body: `allowedNamespaces` and `allowedScopes` are required, otherwise `403` |
 
-Ответ PDP кэшируется на `CB_POLICY_CACHE_TTL_SECONDS` (по умолчанию 5 с)
-по паре tenant/principal. Недоступность PDP → `503`, не «разрешить».
-Запрос к namespace вне видимости → `403`. Для вызова PDP память использует
-свою service identity (`CB_IAM_CLIENT_ID`/`CB_IAM_CLIENT_SECRET`, файл
-`secrets/memory-service-iam.env` создаёт bootstrap).
+The PDP response is cached for `CB_POLICY_CACHE_TTL_SECONDS` (5 s by default)
+per tenant/principal pair. PDP unavailability → `503`, not "allow". A request
+to a namespace outside visibility → `403`. To call the PDP, memory uses its own
+service identity (`CB_IAM_CLIENT_ID`/`CB_IAM_CLIENT_SECRET`; bootstrap creates
+the `secrets/memory-service-iam.env` file).
 
 
-!!! warning "Экспериментальный режим"
-    Видимость по principal опирается на внешний PDP и относится к
-    экспериментальным возможностям. По умолчанию `MEMORY_POLICY_ENABLED=false`.
+!!! warning "Experimental mode"
+    Principal-based visibility relies on an external PDP and is an
+    experimental capability. By default, `MEMORY_POLICY_ENABLED=false`.
 
-### Сужение видимости в запросе
+### Narrowing visibility in a request
 
-Любой вызывающий может сузить свою видимость на один запрос полями тела
-`allowedNamespaces` и/или `allowedScopes` (принимаются `/api/memory/context`,
-`/api/memory/context/typed`, `/api/brain/query`, `/api/brain/recall`,
-`/api/brain/search`):
+Any caller can narrow their visibility for a single request with the body
+fields `allowedNamespaces` and/or `allowedScopes` (accepted by
+`/api/memory/context`, `/api/memory/context/typed`, `/api/brain/query`,
+`/api/brain/recall`, `/api/brain/search`):
 
-- берётся **пересечение** с серверной видимостью — сужение не расширяет права;
-- поле отсутствует или `null` — видимость без изменений;
-- пустой список — **ничего**: `"allowedScopes": []` скрывает все элементы с
-  `workspace:`/`principal:`, `"allowedNamespaces": []` запрещает чтение любого
-  namespace (`403`);
-- namespace запроса вне суженного `allowedNamespaces` → `403`;
-- не список строк или некорректное имя → `400`; `allowedScopes` — до 500 элементов.
+- the **intersection** with server-side visibility is used; narrowing does not
+  extend permissions;
+- a missing field or `null` leaves visibility unchanged;
+- an empty list means **nothing**: `"allowedScopes": []` hides all elements
+  with `workspace:`/`principal:`, and `"allowedNamespaces": []` forbids reading
+  any namespace (`403`);
+- a request namespace outside the narrowed `allowedNamespaces` → `403`;
+- not a list of strings, or an invalid name → `400`; `allowedScopes` takes up
+  to 500 elements.
 
-Пример: читать память воркспейса `backend` и его предка `org`, но не соседнего
-`finance` в той же базе знаний:
+Example: read the memory of the `backend` workspace and its ancestor `org`,
+but not the sibling `finance` in the same knowledge base:
 
 ```json
 {
@@ -306,29 +330,29 @@ Namespace — граница хранения. Внутри него элеме�
 }
 ```
 
-!!! note "Где фильтр видимости не применяется"
-    Структурный режим `/api/brain/search` (с `filters.type`) scope-фильтра видимости
-    не применяет, `GET /api/brain/nodes` отсекает узлы по scopes уже после выборки
-    (ответ может содержать меньше `limit` записей); `GET /api/brain/nodes/{key}` и
-    `GET /api/brain/sources/{key}` проверяют только гранты на namespace. Не
-    полагайтесь на scopes видимости как на единственную защиту для точечного чтения
-    по ключу.
+!!! note "Where the visibility filter does not apply"
+    The structural mode of `/api/brain/search` (with `filters.type`) does not
+    apply the visibility scope filter; `GET /api/brain/nodes` drops nodes by
+    scopes only after the selection (the response may contain fewer than
+    `limit` records); `GET /api/brain/nodes/{key}` and
+    `GET /api/brain/sources/{key}` check only the grants on the namespace. Do
+    not rely on visibility scopes as the only protection for point reads by key.
 
-## Сводка кодов доступа
+## Access code summary
 
-| Код | Когда |
+| Code | When |
 |---|---|
-| `400` | Некорректное имя namespace/scope, больше 50 namespaces, противоречивые `namespace` и `scope.namespace` |
-| `401` | Нет заголовка, неверный ключ, дефектный IAM-токен |
-| `403` | Namespace не покрыт грантами; namespace вне видимости principal; маршрут ядра без service scope; `stats` без глобального гранта; `memory:on-behalf` без `allowed*` |
-| `500` | Некорректный `CB_API_KEYS` |
-| `503` | JWKS или внешний PDP видимости (если включён) недоступны |
+| `400` | Invalid namespace/scope name, more than 50 namespaces, conflicting `namespace` and `scope.namespace` |
+| `401` | No header, wrong key, defective IAM token |
+| `403` | Namespace not covered by grants; namespace outside the principal's visibility; core route without the service scope; `stats` without a global grant; `memory:on-behalf` without `allowed*` |
+| `500` | Invalid `CB_API_KEYS` |
+| `503` | JWKS or the external visibility PDP (if enabled) is unavailable |
 
-## См. также
+## See also
 
 - [API](api.md)
-- [Конфигурация](configuration.md)
-- [Токены IAM](../iam/tokens.md)
+- [Configuration](configuration.md)
+- [IAM tokens](../iam/tokens.md)
 - [Service accounts](../iam/service-accounts.md)
-- [Права и scopes](../reference/permissions.md)
-- [Контекст Control Plane](../control-plane/context.md)
+- [Permissions and scopes](../reference/permissions.md)
+- [Control Plane context](../control-plane/context.md)

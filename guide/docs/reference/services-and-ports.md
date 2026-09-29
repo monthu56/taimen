@@ -1,252 +1,257 @@
-# Сервисы и порты
 
-Все сервисы корневого `compose.yml`: профиль, образ или контекст сборки,
-внутренний и публикуемый порт, зависимости, volumes, healthcheck, лимит
-памяти и маршрут во внешнем контуре (Caddy). Статья для инженера, который
-разворачивает стек, открывает порты на хосте или ищет, какой контейнер
-отвечает на путь `/…`.
+# Services and ports
 
-## Общая схема
+All services of the root `compose.yml`: profile, image or build context,
+internal and published port, dependencies, volumes, healthcheck, memory
+limit, and route at the edge (Caddy). This page is for an engineer who
+deploys the stack, opens ports on the host, or looks for the container that
+answers on a path `/…`.
+
+## Overview
 
 
 ```mermaid
 flowchart LR
-    B[Браузер / харнесс / агент] ==>|80 / 443| CADDY[caddy<br/>edge]
+    B[Browser / harness / agent] ==>|80 / 443| CADDY[caddy<br/>edge]
     CADDY ==>|/iam/*| IAM[iam-service:8010]
     CADDY ==>|/api/v1/*, /health/*, /docs| CP[control-plane-api:8000]
-    CADDY ==>|/memory/* только локально| MEM[memory-service:8077]
+    CADDY ==>|/memory/* local only| MEM[memory-service:8077]
     CP ==> MEM
     CP ==> MINIO[(minio:9000)]
     CP ==> IAM
     CA[context-adapter] ==> MEM
 ```
 
-- Все контейнеры в одной сети `taimen` (имя — `${TAIMEN_NETWORK:-taimen_default}`)
-  и обращаются друг к другу по DNS-именам сервисов.
-- Наружу смотрит **только** `caddy`. Остальные сервисы публикуют порт
-  исключительно на `127.0.0.1` — для `make smoke`, `make bootstrap` и
-  отладки с хоста.
+- All containers share one network `taimen` (the name is
+  `${TAIMEN_NETWORK:-taimen_default}`) and reach each other by service DNS
+  names.
+- **Only** `caddy` faces the outside. The other services publish a port only
+  on `127.0.0.1`, for `make smoke`, `make bootstrap`, and debugging from the
+  host.
 
-- У контейнера `caddy` есть сетевой alias `${TAIMEN_PUBLIC_HOST}`: сервисы
-  обращаются к IAM по публичному имени, чтобы issuer в токене
-  совпадал с тем, что видит браузер.
+- The `caddy` container has the network alias `${TAIMEN_PUBLIC_HOST}`:
+  services reach IAM by the public name so that the issuer in the token
+  matches what the browser sees.
 
-## Профили
+## Profiles
 
 
-По умолчанию `make up` поднимает `core edge`. Остальные профили включаются
-явно: `make up PROFILES="core notify edge"` или
+By default, `make up` brings up `core edge`. The other profiles are enabled
+explicitly: `make up PROFILES="core notify edge"` or
 `docker compose --profile core --profile edge up -d`.
 
-| Профиль | Статус | Сервисы |
+| Profile | Status | Services |
 |---|---|---|
-| `core` | ядро | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` |
-| `edge` | ядро | `caddy`, `guide` |
+| `core` | core | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` |
+| `edge` | core | `caddy`, `guide` |
 
 
-!!! note "Зависимости между профилями"
-    `depends_on` работает только внутри активных профилей: поднимайте
-    зависимые профили вместе.
+!!! note "Dependencies between profiles"
+    `depends_on` works only within active profiles: bring up dependent
+    profiles together.
 
-## Сводная таблица портов
+## Port summary
 
 
-| Сервис | Внутренний порт | Публикуется на хосте | Переменная порта | Путь в Caddy |
+| Service | Internal port | Published on host | Port variable | Caddy path |
 |---|---|---|---|---|
 | `caddy` | 80, 443 | `0.0.0.0:80`, `0.0.0.0:443` | `EDGE_HTTP_PORT`, `EDGE_HTTPS_PORT` | — |
 | `control-plane-api` | 8000 | `127.0.0.1:18000` | `CP_HOST_PORT` | `/api/v1/*`, `/health/*`, `/docs`, `/docs/*`, `/redoc`, `/redoc/*`, `/openapi.json` |
-| `memory-service` | 8077 | `127.0.0.1:18001` | `MEMORY_HOST_PORT` | `/memory/*` (только в локальном Caddyfile) |
-| `iam-service` | 8010 | `127.0.0.1:18010` | `IAM_HOST_PORT` | `/iam/*` (префикс срезается) |
-| `guide` | 8080 | нет | — | `/guide/*` (префикс срезается) |
-| `minio` | 9000 | нет | — | нет |
-| базы `*-db` | 5432 | нет | — | нет |
-| `control-plane-worker`, `context-adapter` | — | нет | — | нет |
+| `memory-service` | 8077 | `127.0.0.1:18001` | `MEMORY_HOST_PORT` | `/memory/*` (local Caddyfile only) |
+| `iam-service` | 8010 | `127.0.0.1:18010` | `IAM_HOST_PORT` | `/iam/*` (prefix stripped) |
+| `guide` | 8080 | no | — | `/guide/*` (prefix stripped) |
+| `minio` | 9000 | no | — | no |
+| `*-db` databases | 5432 | no | — | no |
+| `control-plane-worker`, `context-adapter` | — | no | — | no |
 
 
-!!! tip "Порядок маршрутов Caddy"
-    Caddy выбирает первый совпавший `handle`. Специфичные префиксы (`/iam/*`,
-    `/guide/*` …) и матчер Control Plane `@cp_api` стоят раньше общего
-    `handle`. Добавляя свой маршрут, ставьте его перед общим `handle`.
+!!! tip "Caddy route order"
+    Caddy picks the first matching `handle`. Specific prefixes (`/iam/*`,
+    `/guide/*` …) and the Control Plane matcher `@cp_api` come before the
+    general `handle`. When you add your own route, put it before the general
+    `handle`.
 
-## Ядро (`core`)
+## Core (`core`)
 
 ### iam-db
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ | `postgres:16-alpine` |
-| БД / роль | `iam` / `iam`, пароль `${IAM_POSTGRES_PASSWORD}` |
+| Image | `postgres:16-alpine` |
+| Database / role | `iam` / `iam`, password `${IAM_POSTGRES_PASSWORD}` |
 | Volume | `iam_db` → `/var/lib/postgresql/data` |
 | Healthcheck | `pg_isready -U iam -d iam` |
-| Лимит памяти | `${PG_MEM_LIMIT:-256m}` |
+| Memory limit | `${PG_MEM_LIMIT:-256m}` |
 
 ### iam-service
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ / сборка | `${IMAGE_PREFIX}/iam-service:${IMAGE_TAG}`, контекст `${IAM_BUILD_CONTEXT:-./iam-service}` |
-| Команда | `alembic upgrade head && uvicorn iam_service.app:app --host 0.0.0.0 --port 8010` |
-| Порт | 8010 → `127.0.0.1:${IAM_HOST_PORT:-18010}` |
-| Зависит от | `iam-db` (healthy) |
-| Секреты | `iam_signing_key` → `/run/secrets/iam_signing_key` (файл `${IAM_SIGNING_KEY_FILE}`) |
+| Image / build | `${IMAGE_PREFIX}/iam-service:${IMAGE_TAG}`, context `${IAM_BUILD_CONTEXT:-./iam-service}` |
+| Command | `alembic upgrade head && uvicorn iam_service.app:app --host 0.0.0.0 --port 8010` |
+| Port | 8010 → `127.0.0.1:${IAM_HOST_PORT:-18010}` |
+| Depends on | `iam-db` (healthy) |
+| Secrets | `iam_signing_key` → `/run/secrets/iam_signing_key` (file `${IAM_SIGNING_KEY_FILE}`) |
 | Healthcheck | `GET http://127.0.0.1:8010/healthz` |
-| Лимит памяти | `${IAM_MEM_LIMIT:-256m}` |
-| Пользователь | uid 10001 |
+| Memory limit | `${IAM_MEM_LIMIT:-256m}` |
+| User | uid 10001 |
 
 ### control-plane-db
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ | `postgres:16-alpine` |
-| БД / роль | `control_plane` / `control_plane` |
+| Image | `postgres:16-alpine` |
+| Database / role | `control_plane` / `control_plane` |
 | Volume | `control_plane_db` |
 | Healthcheck | `pg_isready -U control_plane -d control_plane` |
-| Лимит памяти | `${PG_MEM_LIMIT:-256m}` |
+| Memory limit | `${PG_MEM_LIMIT:-256m}` |
 
 ### control-plane-api
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ / сборка | `${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`, контекст `${CP_BUILD_CONTEXT:-.}` (корень суперпроекта), Dockerfile `control-plane/Dockerfile` |
-| Команда | `alembic upgrade head && uvicorn control_plane.main:app --host 0.0.0.0 --port 8000` |
-| Порт | 8000 → `127.0.0.1:${CP_HOST_PORT:-18000}` |
-| Зависит от | `control-plane-db`, `memory-service`, `iam-service` (все healthy) |
-| env_file | `./secrets/control-plane-iam.env` (необязательный) |
+| Image / build | `${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`, context `${CP_BUILD_CONTEXT:-.}` (superproject root), Dockerfile `control-plane/Dockerfile` |
+| Command | `alembic upgrade head && uvicorn control_plane.main:app --host 0.0.0.0 --port 8000` |
+| Port | 8000 → `127.0.0.1:${CP_HOST_PORT:-18000}` |
+| Depends on | `control-plane-db`, `memory-service`, `iam-service` (all healthy) |
+| env_file | `./secrets/control-plane-iam.env` (optional) |
 | Healthcheck | `GET http://127.0.0.1:8000/health/ready` |
-| Лимит памяти | `${CP_MEM_LIMIT:-512m}` |
-| Пользователь | uid 10001 |
+| Memory limit | `${CP_MEM_LIMIT:-512m}` |
+| User | uid 10001 |
 
 ### control-plane-worker
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ | тот же, что у `control-plane-api` (не собирается отдельно) |
-| Команда | `python -m control_plane.worker` |
-| Порт | нет |
-| Зависит от | `control-plane-db` (healthy), `control-plane-api` (healthy) |
+| Image | the same as `control-plane-api` (not built separately) |
+| Command | `python -m control_plane.worker` |
+| Port | none |
+| Depends on | `control-plane-db` (healthy), `control-plane-api` (healthy) |
 | env_file | `./secrets/control-plane-iam.env` |
-| Healthcheck | нет |
-| Лимит памяти | `${CP_WORKER_MEM_LIMIT:-256m}` |
+| Healthcheck | none |
+| Memory limit | `${CP_WORKER_MEM_LIMIT:-256m}` |
 
 ### context-adapter
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ | тот же, что у `control-plane-api` |
-| Команда | `python -m control_plane.worker.context_adapter` |
-| Порт | нет |
-| Зависит от | `control-plane-db`, `control-plane-api`, `memory-service` (все healthy) |
+| Image | the same as `control-plane-api` |
+| Command | `python -m control_plane.worker.context_adapter` |
+| Port | none |
+| Depends on | `control-plane-db`, `control-plane-api`, `memory-service` (all healthy) |
 | env_file | `./secrets/control-plane-iam.env` |
-| Healthcheck | нет |
-| Лимит памяти | `${CP_WORKER_MEM_LIMIT:-256m}` |
+| Healthcheck | none |
+| Memory limit | `${CP_WORKER_MEM_LIMIT:-256m}` |
 
-!!! warning "Один образ на три процесса"
-    `control-plane-api`, `control-plane-worker` и `context-adapter` работают
-    на одном образе. Образ собирается только сервисом `control-plane-api`;
-    после сборки пересоздайте все три контейнера, иначе worker и адаптер
-    останутся на прежнем коде.
+!!! warning "One image for three processes"
+    `control-plane-api`, `control-plane-worker`, and `context-adapter` run on
+    one image. Only the `control-plane-api` service builds the image; after a
+    build, recreate all three containers, otherwise the worker and the adapter
+    stay on the previous code.
 
 ### memory-db
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ / сборка | `${IMAGE_PREFIX}/memory-db:${IMAGE_TAG}`, контекст `${MEMORY_BUILD_CONTEXT:-./memory-service}/infra/memory-db` (PostgreSQL 16 + Apache AGE + pgvector) |
-| БД / роль | `company_brain` / `memory` |
+| Image / build | `${IMAGE_PREFIX}/memory-db:${IMAGE_TAG}`, context `${MEMORY_BUILD_CONTEXT:-./memory-service}/infra/memory-db` (PostgreSQL 16 + Apache AGE + pgvector) |
+| Database / role | `company_brain` / `memory` |
 | Volume | `memory_db` |
 | Healthcheck | `pg_isready -U memory -d company_brain` |
-| Лимит памяти | `${MEMORY_DB_MEM_LIMIT:-512m}` |
+| Memory limit | `${MEMORY_DB_MEM_LIMIT:-512m}` |
 
 ### memory-service
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ / сборка | `${IMAGE_PREFIX}/memory-service:${IMAGE_TAG}`, контекст `${MEMORY_BUILD_CONTEXT:-.}`, Dockerfile `memory-service/Dockerfile` |
-| Порт | 8077 → `127.0.0.1:${MEMORY_HOST_PORT:-18001}` |
-| Зависит от | `memory-db` (healthy) |
-| env_file | `./secrets/memory-service-iam.env` (необязательный) |
+| Image / build | `${IMAGE_PREFIX}/memory-service:${IMAGE_TAG}`, context `${MEMORY_BUILD_CONTEXT:-.}`, Dockerfile `memory-service/Dockerfile` |
+| Port | 8077 → `127.0.0.1:${MEMORY_HOST_PORT:-18001}` |
+| Depends on | `memory-db` (healthy) |
+| env_file | `./secrets/memory-service-iam.env` (optional) |
 | Healthcheck | `GET http://127.0.0.1:8077/healthz` |
-| Лимит памяти | `${MEMORY_MEM_LIMIT:-512m}` |
+| Memory limit | `${MEMORY_MEM_LIMIT:-512m}` |
 
-### minio и minio-bootstrap
+### minio and minio-bootstrap
 
-| Сервис | Образ | Порт | Зависит от | Volume | Healthcheck | Лимит |
+| Service | Image | Port | Depends on | Volume | Healthcheck | Limit |
 |---|---|---|---|---|---|---|
-| `minio` | `minio/minio:RELEASE.2024-10-13T13-34-11Z`, `server /data` | 9000, не публикуется | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
-| `minio-bootstrap` | `minio/mc:RELEASE.2024-10-08T09-37-26Z`, одноразовый: бакет `${CP_S3_BUCKET}`, политика `cp-artifacts` и пользователь ядра | — | `minio` (healthy) | — | — | — |
+| `minio` | `minio/minio:RELEASE.2024-10-13T13-34-11Z`, `server /data` | 9000, not published | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
+| `minio-bootstrap` | `minio/mc:RELEASE.2024-10-08T09-37-26Z`, one-shot: bucket `${CP_S3_BUCKET}`, policy `cp-artifacts`, and the core user | — | `minio` (healthy) | — | — | — |
 
-Хранит только содержимое артефактов ядра; см.
-[Хранилище объектов](../operations/object-storage.md).
+It stores only the content of core artifacts; see
+[Object storage](../operations/object-storage.md).
 
-## Периметр (`edge`)
+## Edge (`edge`)
 
 ### caddy
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Образ | `caddy:2-alpine` |
-| Порты | `${EDGE_HTTP_PORT:-80}:80`, `${EDGE_HTTPS_PORT:-443}:443` на всех интерфейсах |
-| Volumes | `${CADDYFILE}` → `/etc/caddy/Caddyfile` (read-only), `caddy_data` → `/data` (сертификаты ACME), `caddy_config` → `/config` |
-| Сетевой alias | `${TAIMEN_PUBLIC_HOST:-taimen.localhost}` |
-| Healthcheck | нет |
+| Image | `caddy:2-alpine` |
+| Ports | `${EDGE_HTTP_PORT:-80}:80`, `${EDGE_HTTPS_PORT:-443}:443` on all interfaces |
+| Volumes | `${CADDYFILE}` → `/etc/caddy/Caddyfile` (read-only), `caddy_data` → `/data` (ACME certificates), `caddy_config` → `/config` |
+| Network alias | `${TAIMEN_PUBLIC_HOST:-taimen.localhost}` |
+| Healthcheck | none |
 
-Локальный `deploy/caddy/Caddyfile.local` обслуживает `http://taimen.localhost`
-и `http://localhost` без ACME, пишет лог в stderr и сжимает ответы
-(`zstd`, `gzip`). Промышленный Caddyfile задаётся переменной `CADDYFILE` и
-повторяет ту же раскладку путей с TLS, но без маршрута `/memory/*`: память
-наружу не публикуется. Подробнее — [Периметр и TLS](../operations/edge-and-tls.md).
+The local `deploy/caddy/Caddyfile.local` serves `http://taimen.localhost`
+and `http://localhost` without ACME, logs to stderr, and compresses responses
+(`zstd`, `gzip`). The production Caddyfile is set by the `CADDYFILE`
+variable and repeats the same path layout with TLS, but without the
+`/memory/*` route: memory is not exposed externally. Details:
+[Edge and TLS](../operations/edge-and-tls.md).
 
-!!! warning "Правка Caddyfile на месте"
-    Файл смонтирован bind-mount'ом и держит inode. Если заменить файл через
-    `mv`, `caddy reload` перечитает старую версию. Правьте файл на месте или
-    пересоздайте контейнер: `docker compose up -d --force-recreate caddy`.
+!!! warning "Editing the Caddyfile in place"
+    The file is bind-mounted and holds its inode. If you replace the file with
+    `mv`, `caddy reload` rereads the old version. Edit the file in place or
+    recreate the container: `docker compose up -d --force-recreate caddy`.
 
-## Healthcheck'и и smoke {#healthchecks}
+## Healthchecks and smoke {#healthchecks}
 
-У Python-сервисов ядра общий шаблон healthcheck: интервал 5 s, таймаут
-5 s, 30 попыток; проверка — `urllib.request.urlopen` на `127.0.0.1`
-(не `localhost`: в slim-образах `localhost` может резолвиться в IPv6
-`::1`, где сервер не слушает).
+The core Python services share a healthcheck template: interval 5 s,
+timeout 5 s, 30 retries; the check is `urllib.request.urlopen` against
+`127.0.0.1` (not `localhost`: in slim images `localhost` can resolve to IPv6
+`::1`, where the server does not listen).
 
-`make smoke` (`tools/smoke.py`) проверяет поднятые сервисы по портам на
-`127.0.0.1` и пропускает не запущенные:
+`make smoke` (`tools/smoke.py`) checks running services through ports on
+`127.0.0.1` and skips those that are not running:
 
-| Сервис | Порт по умолчанию | Путь |
+| Service | Default port | Path |
 |---|---|---|
 | `iam-service` | 18010 | `/healthz` |
 | `control-plane-api` | 18000 | `/health/ready` |
 | `memory-service` | 18001 | `/healthz` |
 
 
-Ответ с кодом `< 400` — `OK`, иначе `ERR` и ненулевой код выхода.
+A response with code `< 400` is `OK`; otherwise it is `ERR` with a non-zero
+exit code.
 
 ## Volumes
 
-| Volume | Сервис | Что хранит |
+| Volume | Service | What it stores |
 |---|---|---|
-| `iam_db` | `iam-db` | Tenants, principals, credentials IAM |
-| `control_plane_db` | `control-plane-db` | Work graph, журнал событий, bindings |
-| `memory_db` | `memory-db` | Граф знаний, чанки, наблюдения |
-| `platform_minio` | `minio` | Содержимое артефактов ядра (имя тома историческое) |
-| `caddy_data`, `caddy_config` | `caddy` | Сертификаты и состояние Caddy |
+| `iam_db` | `iam-db` | IAM tenants, principals, credentials |
+| `control_plane_db` | `control-plane-db` | Work graph, event log, bindings |
+| `memory_db` | `memory-db` | Knowledge graph, chunks, observations |
+| `platform_minio` | `minio` | Content of core artifacts (the volume name is historical) |
+| `caddy_data`, `caddy_config` | `caddy` | Caddy certificates and state |
 
-Имена задаются переменными `VOLUME_*` (см.
-[Переменные окружения](environment.md)). `make down` volumes не удаляет.
+Names are set by the `VOLUME_*` variables (see
+[Environment variables](environment.md)). `make down` does not remove volumes.
 
-## Docker-секреты
+## Docker secrets
 
-| Секрет | Файл по умолчанию | Кому |
+| Secret | Default file | Used by |
 |---|---|---|
 | `iam_signing_key` | `./secrets/iam-signing.pem` | `iam-service` |
 
-Контейнеры читают секреты под непривилегированным uid (10001 у сервисов
-ядра). На Linux выполните `chown 10001` для файлов в `secrets/`, права
-оставьте `600`.
+Containers read secrets under an unprivileged uid (10001 for the core
+services). On Linux, run `chown 10001` on the files in `secrets/`, and keep
+mode `600`.
 
-## См. также
+## See also
 
-- [Переменные окружения](environment.md)
-- [Цели make](make.md)
-- [Периметр и TLS](../operations/edge-and-tls.md)
-- [Мониторинг и здоровье](../operations/monitoring.md)
-- [Ресурсы и масштабирование](../operations/capacity.md)
-- [Установка и запуск — диагностика](../troubleshooting/startup.md)
+- [Environment variables](environment.md)
+- [Make targets](make.md)
+- [Edge and TLS](../operations/edge-and-tls.md)
+- [Monitoring and health](../operations/monitoring.md)
+- [Resources and scaling](../operations/capacity.md)
+- [Installation and launch: troubleshooting](../troubleshooting/startup.md)

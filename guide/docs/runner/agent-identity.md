@@ -1,28 +1,30 @@
-# Identity агента
 
-Как завести автономному исполнителю собственную identity: principal вида `agent` в IAM и
-Control Plane, binding с ограниченным набором прав и Platform Access Token (PAT), и как
-runner этот PAT хранит и предъявляет. Статья для администратора tenant'а и инженера,
-разворачивающего runner.
+# Agent identity
 
-## Зачем отдельный principal
+How to give an autonomous executor its own identity: a principal of kind `agent` in IAM and
+Control Plane, a binding with a limited set of permissions, and a Platform Access Token (PAT),
+and how the runner stores and presents this PAT. The article is for tenant administrators and
+engineers who deploy the runner.
 
-Агент никогда не работает под credential человека. Причина — аудит: под общим credential
-работа оператора и работа агента в журнале событий неотличимы, а различить их и есть смысл
-разделения. Отдельный principal даёт:
+## Why a separate principal
 
-- **атрибуцию** — каждый claim, run, артефакт, комментарий и событие несут principal агента;
-- **потолок прав** — у агента нет `admin` и `approvals.decide`, поэтому он не может ни
-  переписать собственные права, ни одобрить gate, поставленный, чтобы его остановить;
-- **независимый отзыв** — PAT агента отзывается, не задевая доступ людей;
-- **адресацию работы** — задачи назначаются агенту по его CP principal id
-  (`assigneeId`), а runner с `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` берёт только их.
+An agent never works under a human's credential. The reason is audit: under a shared
+credential the operator's work and the agent's work are indistinguishable in the event log,
+and telling them apart is the whole point of the separation. A separate principal gives:
 
-Если исполнителей несколько (например, кодер и ревьюер или исполнители разных
-репозиториев), у **каждого** свой principal: иначе с `ONLY_ASSIGNED` они брали бы задачи
-друг друга.
+- **attribution** — every claim, run, artifact, comment, and event carries the agent's
+  principal;
+- **a permission ceiling** — the agent has neither `admin` nor `approvals.decide`, so it can
+  neither rewrite its own permissions nor approve a gate set up to stop it;
+- **independent revocation** — the agent's PAT is revoked without affecting human access;
+- **work addressing** — tasks are assigned to the agent by its CP principal id
+  (`assigneeId`), and a runner with `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` takes only those.
 
-## Две половины identity
+If there are several executors (for example, a coder and a reviewer, or executors for
+different repositories), **each** has its own principal: otherwise, with `ONLY_ASSIGNED`,
+they would take each other's tasks.
+
+## The two halves of identity
 
 ```mermaid
 flowchart LR
@@ -33,66 +35,68 @@ flowchart LR
     end
     subgraph CP["Control Plane"]
         CPP["Principal<br/>kind = agent"]
-        B["iam_principal_binding<br/>(issuer, iamPrincipalId) → права"]
+        B["iam_principal_binding<br/>(issuer, iamPrincipalId) → permissions"]
         CPP --- B
     end
     PAT -- "exchange → access token<br/>principal_type = agent" --> B
 ```
 
-| Сущность | Где | Что задаёт |
+| Entity | Where | What it defines |
 |---|---|---|
-| IAM Principal (`kind: agent`) | IAM | кто предъявляет PAT |
-| PAT | IAM | audiences и потолок scopes (`control-plane:read`, `control-plane:write`) |
-| CP Principal (`kind: agent`) | Control Plane | чьим именем записана работа, кому назначаются задачи |
-| Binding | Control Plane | пара `(issuer, iamPrincipalId)` → CP Principal + список прав |
+| IAM Principal (`kind: agent`) | IAM | who presents the PAT |
+| PAT | IAM | audiences and the scope ceiling (`control-plane:read`, `control-plane:write`) |
+| CP Principal (`kind: agent`) | Control Plane | in whose name the work is recorded, to whom tasks are assigned |
+| Binding | Control Plane | the pair `(issuer, iamPrincipalId)` → CP Principal + a list of permissions |
 
-Access token, который runner получает обменом PAT, живёт минуты (по умолчанию 300 с) и
-несёт `principal_type = agent`. У агента нет человеческого входа, поэтому в токене нет
-`auth_time` и `acr` — по этому признаку ядро и отличает сессии агента от операторских.
+The access token the runner obtains by exchanging the PAT lives for minutes (300 s by
+default) and carries `principal_type = agent`. The agent has no human login, so the token has
+no `auth_time` and no `acr` — this is how the core tells agent sessions from operator
+sessions.
 
-## Права агента
+## Agent permissions
 
-Права задаются списком в binding. Сервер отклоняет binding не-человеческого principal'а с
-`admin` или `approvals.decide` ошибкой `permissions_not_allowed_for_kind`, а создатель
-binding не может выдать права, которых нет у него самого (`permission_escalation`).
+Permissions are set as a list in the binding. The server rejects a binding of a non-human
+principal with `admin` or `approvals.decide` with the error
+`permissions_not_allowed_for_kind`, and the creator of the binding cannot grant permissions
+they do not have themselves (`permission_escalation`).
 
-Базовый набор, который использует `deploy/bootstrap.py` для агентов:
+The base set that `deploy/bootstrap.py` uses for agents:
 
-| Право | Зачем runner'у |
+| Permission | Why the runner needs it |
 |---|---|
-| `sessions.open` | открыть сессию харнесса |
-| `tasks.read` | видеть задачи и `/work/available` |
-| `tasks.write` | комментарии, отношения, правка полей (вердикт ревьюера), создание задачи ревью |
-| `tasks.claim` | claim задачи |
-| `events.read` | журнал событий |
-| `artifacts.read`, `artifacts.write` | артефакты `report`, `transcript`, `commit` |
-| `projects.read` | контекст проекта в prompt |
-| `task_types.read` | понять, не исполняется ли тип задачи скиллом (без него такие задачи не берутся) |
+| `sessions.open` | open a harness session |
+| `tasks.read` | see tasks and `/work/available` |
+| `tasks.write` | comments, relations, field edits (reviewer verdict), creating a review task |
+| `tasks.claim` | claim a task |
+| `events.read` | event log |
+| `artifacts.read`, `artifacts.write` | `report`, `transcript`, `commit` artifacts |
+| `projects.read` | project context in the prompt |
+| `task_types.read` | find out whether the task type is executed by a skill (without it such tasks are not taken) |
 
-Дополнительно по ситуации:
+Additionally, depending on the situation:
 
-| Право | Когда нужно |
+| Permission | When it is needed |
 |---|---|
-| `approvals.manage` | кодер в режиме ревью `human`: демон сам запрашивает gate-approval на задачу ревью |
-| `skills.execute` | демон исполняет вызовы скиллов (`CONTROL_PLANE_SKILLS_*`) |
-| `observations.write` | агент пишет в память через `cp_remember` |
+| `approvals.manage` | a coder in `human` review mode: the daemon itself requests a gate approval for the review task |
+| `skills.execute` | the daemon executes skill calls (`CONTROL_PLANE_SKILLS_*`) |
+| `observations.write` | the agent writes to memory through `cp_remember` |
 
-!!! danger "Никогда не выдавайте агенту"
-    `admin` и `approvals.decide`. Сервер откажет и сам, но при ручной правке прав через
-    роли это правило стоит держать в голове: агент, способный решать approvals, обходит
-    любой gate ревью.
+!!! danger "Never grant an agent"
+    `admin` and `approvals.decide`. The server refuses on its own, but keep this rule in mind
+    when you edit permissions manually through roles: an agent that can decide approvals
+    bypasses any review gate.
 
-## Заведение identity по шагам
+## Creating the identity step by step
 
 
-Ниже — последовательность вызовов API. Вручную её повторяют, когда добавляют исполнителя
-без описания в уже развёрнутую систему.
+Below is the sequence of API calls. You repeat it manually when you add an executor without
+a description to an already deployed system.
 
-Обозначения: `$IAM` — базовый URL IAM (например `https://platform.example.com/iam`), `$CP` —
-Control Plane, `$ISSUER` — issuer IAM (совпадает с публичным URL IAM), `$BOOT` — bootstrap-токен
-IAM, `$ADMIN` — access token администратора Control Plane.
+Notation: `$IAM` — IAM base URL (for example `https://platform.example.com/iam`), `$CP` —
+Control Plane, `$ISSUER` — IAM issuer (matches the public IAM URL), `$BOOT` — IAM bootstrap
+token, `$ADMIN` — access token of a Control Plane administrator.
 
-### 1. Principal в IAM
+### 1. Principal in IAM
 
 ```bash
 curl -sS -X POST "$IAM/api/v1/tenants/<iam-tenant-id>/principals" \
@@ -104,12 +108,12 @@ curl -sS -X POST "$IAM/api/v1/tenants/<iam-tenant-id>/principals" \
 {"id": "<iam-principal-id>", "kind": "agent", "displayName": "Autonomous Runner", "...": "..."}
 ```
 
-!!! note "Почему `agent`, а не `service_account`"
-    IAM выпускает PAT только principal'ам вида `human` и `agent`; для `service_account`
-    выпуск отвечает `422 principal_kind_not_allowed`. Service account получает доступ через
-    client credentials — это другой механизм (см. [Service accounts](../iam/service-accounts.md)).
+!!! note "Why `agent` and not `service_account`"
+    IAM issues PATs only to principals of kind `human` and `agent`; for `service_account`
+    issuance returns `422 principal_kind_not_allowed`. A service account gets access through
+    client credentials — a different mechanism (see [Service accounts](../iam/service-accounts.md)).
 
-### 2. Principal в Control Plane
+### 2. Principal in Control Plane
 
 ```bash
 curl -sS -X POST "$CP/api/v1/principals" \
@@ -117,10 +121,10 @@ curl -sS -X POST "$CP/api/v1/principals" \
   -d '{"kind": "agent", "displayName": "Autonomous Runner", "metadata": {"slug": "runner"}}'
 ```
 
-Запомните `id` ответа — это `<cp-principal-id>`: на него назначают задачи и его указывают
-как ревьюера у другого исполнителя.
+Note the `id` from the response — this is `<cp-principal-id>`: tasks are assigned to it, and
+it is specified as the reviewer of another executor.
 
-### 3. Binding с правами
+### 3. Binding with permissions
 
 ```bash
 curl -sS -X POST "$CP/api/v1/principals/<cp-principal-id>/iam-bindings" \
@@ -136,14 +140,16 @@ curl -sS -X POST "$CP/api/v1/principals/<cp-principal-id>/iam-bindings" \
       }'
 ```
 
-!!! warning "Сначала binding, потом первый запрос"
-    Control Plane кэширует отрицательный ответ проверки binding до конца жизни процесса
-    `control-plane-api`. Если runner предъявит токен до создания binding, ответ
-    `binding_not_found` «залипнет», и появившийся позже binding не будет подхвачен до
-    перезапуска `control-plane-api`. Порядок — строго: binding, затем запуск runner'а.
+!!! warning "Binding first, first request second"
+    Control Plane caches a negative binding check result for the lifetime of the
+    `control-plane-api` process. If the runner presents a token before the binding exists,
+    the `binding_not_found` answer "sticks", and a binding created later is not picked up
+    until `control-plane-api` restarts. The order is strict: the binding, then the runner
+    start.
 
-Binding ищется по паре `(issuer, iamPrincipalId)`. Смена issuer IAM (например, публичного
-URL) требует перенести binding тем же движением, иначе вход закроется.
+The binding is looked up by the pair `(issuer, iamPrincipalId)`. Changing the IAM issuer (for
+example, the public URL) requires moving the binding in the same step, otherwise login
+closes.
 
 ### 4. PAT
 
@@ -159,42 +165,44 @@ curl -sS -X POST "$IAM/api/v1/tenants/<iam-tenant-id>/principals/<iam-principal-
       }'
 ```
 
-Ответ содержит `token` — полный PAT, он показывается **один раз**, и `credential.publicPrefix`
-— безопасный префикс для журналов.
+The response contains `token` — the full PAT, shown **once** — and `credential.publicPrefix`
+— a safe prefix for logs.
 
-| Параметр | Правило |
+| Parameter | Rule |
 |---|---|
-| `Idempotency-Key` | обязателен, без него `400 idempotency_key_required` |
-| `scopeCeiling` | с префиксом audience: `control-plane:read`, не `read`; должен входить в `allowedScopes` audience, иначе `422 invalid_scope_ceiling` |
-| `expiresInSeconds` | по умолчанию 30 дней (`pat_default_ttl_seconds`), максимум 365 дней (`pat_max_ttl_seconds`), больше — `422 expiry_too_long` |
-| `control-plane:admin` | агенту не выдавать |
+| `Idempotency-Key` | required; without it — `400 idempotency_key_required` |
+| `scopeCeiling` | with the audience prefix: `control-plane:read`, not `read`; must be within the audience's `allowedScopes`, otherwise `422 invalid_scope_ceiling` |
+| `expiresInSeconds` | default 30 days (`pat_default_ttl_seconds`), maximum 365 days (`pat_max_ttl_seconds`), more — `422 expiry_too_long` |
+| `control-plane:admin` | do not grant to an agent |
 
-Человеку для выпуска PAT IAM требует свежий authentication context (не старше 300 с); у
-агента такого входа нет, и в записи PAT честно фиксируется снимок `agent_bootstrap` —
-кто и когда выпустил credential bootstrap-операцией.
+For a human, IAM requires a fresh authentication context (no older than 300 s) to issue a
+PAT; an agent has no such login, and the PAT record honestly stores an `agent_bootstrap`
+snapshot — who issued the credential with a bootstrap operation and when.
 
-Подробнее о PAT — [Credentials и PAT](../iam/credentials.md).
+More on PATs: [Credentials and PAT](../iam/credentials.md).
 
-## Где runner держит PAT
+## Where the runner keeps the PAT
 
-Runner (через `control_plane_client`) ищет credential в таком порядке: IAM-identity, если
-задан `CONTROL_PLANE_IAM_URL`; иначе legacy API-ключ (`CONTROL_PLANE_API_KEY` или хранилище
-`control-plane login`). На IAM-only сервере работает только первый путь.
+The runner (through `control_plane_client`) looks for a credential in this order: IAM
+identity if `CONTROL_PLANE_IAM_URL` is set; otherwise a legacy API key
+(`CONTROL_PLANE_API_KEY` or the `control-plane login` store). On an IAM-only server only the
+first path works.
 
-PAT для IAM-identity берётся из одного из источников:
+The PAT for IAM identity comes from one of these sources:
 
-=== "Файл credentials (хост)"
+=== "Credentials file (host)"
 
-    `~/.config/iam/credentials.json` пользователя, под которым работает runner
-    (`$XDG_CONFIG_HOME/iam/credentials.json`, если задан). Права файла — строго `0600`:
-    при более широких клиент отказывается его читать (`iam_credentials_file_permissions`).
+    `~/.config/iam/credentials.json` of the user the runner runs as
+    (`$XDG_CONFIG_HOME/iam/credentials.json` if set). The file permissions must be strictly
+    `0600`: with broader ones the client refuses to read it
+    (`iam_credentials_file_permissions`).
 
-    Запись адресуется ключом `<CONTROL_PLANE_IAM_URL>|<iam-tenant-id>|<iam-principal-id>`,
-    поэтому несколько исполнителей одного tenant'а живут в одном файле. Каждый процесс
-    объявляет, кто он, переменной `IAM_PRINCIPAL` (IAM principal id).
+    An entry is addressed by the key `<CONTROL_PLANE_IAM_URL>|<iam-tenant-id>|<iam-principal-id>`,
+    so several executors of one tenant live in one file. Each process declares who it is with
+    the `IAM_PRINCIPAL` variable (IAM principal id).
 
-    Записать токен удобнее CLI `iam` из пакета iam-service — он проверит tenant и audience
-    токена интроспекцией:
+    It is easier to write the token with the `iam` CLI from the iam-service package — it
+    checks the token's tenant and audience by introspection:
 
     ```bash
     sudo -u runner env HOME=/home/runner IAM_PRINCIPAL=<iam-principal-id> \
@@ -202,59 +210,59 @@ PAT для IAM-identity берётся из одного из источнико
       iam auth login --stdin < agent.pat
     ```
 
-    где `iam-binding.json` — несекретный файл
+    where `iam-binding.json` is a non-secret file
     `{"iamUrl": "https://platform.example.com/iam", "tenantId": "<iam-tenant-id>"}`.
 
-=== "Переменная окружения (контейнер)"
+=== "Environment variable (container)"
 
     ```bash
     IAM_CREDENTIAL_MODE=environment
     IAM_PLATFORM_ACCESS_TOKEN=<pat>
     ```
 
-    Переменная без `IAM_CREDENTIAL_MODE=environment` (или `ci`) — ошибка
-    `iam_environment_mode_required`: унаследованная переменная не должна молча подменять
-    учётную запись. Так устроен контейнерный вариант: entrypoint читает PAT из
-    `/run/secrets/agent-pat` и экспортирует его только в окружение процесса.
+    The variable without `IAM_CREDENTIAL_MODE=environment` (or `ci`) is the error
+    `iam_environment_mode_required`: an inherited variable must not silently replace the
+    account. This is how the container variant works: the entrypoint reads the PAT from
+    `/run/secrets/agent-pat` and exports it only into the process environment.
 
 === "Keychain (macOS)"
 
-    На macOS клиент сначала смотрит в Keychain (сервис `iam.platform-access-token`).
-    На хостах runner'а это обычно не нужно; `IAM_NO_KEYCHAIN=1` отключает поиск.
+    On macOS the client first looks in the Keychain (service `iam.platform-access-token`).
+    On runner hosts this is usually not needed; `IAM_NO_KEYCHAIN=1` turns the lookup off.
 
-### Несколько исполнителей на одной машине
+### Several executors on one machine
 
-Если в файле несколько записей одного `IAM URL | tenant`, а процесс не объявил
-`IAM_PRINCIPAL`, клиент откажет с `iam_credential_ambiguous`. Это намеренно: выбрать запись
-наугад значило бы работать под чужой identity, а заметно это стало бы только в аудите.
-Задавайте `IAM_PRINCIPAL` в окружении каждого процесса (например, drop-in юнита
-systemd).
+If the file has several entries for the same `IAM URL | tenant` and the process has not
+declared `IAM_PRINCIPAL`, the client refuses with `iam_credential_ambiguous`. This is
+intentional: picking an entry at random would mean working under someone else's identity,
+and that would become visible only in the audit. Set `IAM_PRINCIPAL` in the environment of
+each process (for example, in a systemd unit drop-in).
 
-## Ротация и отзыв
+## Rotation and revocation
 
-| Действие | Как |
+| Action | How |
 |---|---|
-| Выпустить новый PAT | шаг 4 с новым `name`; записать токен; перезапустить runner; отозвать старый |
-| Ротация существующего | `POST $IAM/api/v1/tenants/<t>/platform-access-tokens/<credential-id>:rotate` — не продлевает окно жизни, срок задаётся при выпуске |
-| Отозвать | `POST $IAM/api/v1/tenants/<t>/platform-access-tokens/<credential-id>:revoke?reason=...` |
-| Список PAT principal'а | `GET $IAM/api/v1/tenants/<t>/platform-access-tokens?principalId=<iam-principal-id>` |
-| Отключить binding | `POST $CP/api/v1/iam-bindings/<binding-id>:revoke` |
+| Issue a new PAT | step 4 with a new `name`; write the token; restart the runner; revoke the old one |
+| Rotate an existing one | `POST $IAM/api/v1/tenants/<t>/platform-access-tokens/<credential-id>:rotate` — does not extend the lifetime window, the expiry is set at issuance |
+| Revoke | `POST $IAM/api/v1/tenants/<t>/platform-access-tokens/<credential-id>:revoke?reason=...` |
+| List a principal's PATs | `GET $IAM/api/v1/tenants/<t>/platform-access-tokens?principalId=<iam-principal-id>` |
+| Disable a binding | `POST $CP/api/v1/iam-bindings/<binding-id>:revoke` |
 
-После отзыва PAT runner не получит новый access token и перестанет claim'ить и писать; уже
-выданный access token доживает свой срок (минуты). CP Principal при этом остаётся — история
-работы не теряется.
+After the PAT is revoked, the runner cannot obtain a new access token and stops claiming and
+writing; an already issued access token lives out its term (minutes). The CP Principal
+remains — the work history is not lost.
 
-!!! tip "Следите за сроком PAT"
-    PAT выпускаются со сроком; истёкший PAT runner увидит как ошибку обмена, и все задачи
-    перестанут браться. Заведите напоминание о перевыпуске заранее.
+!!! tip "Watch the PAT expiry"
+    PATs are issued with an expiry; the runner sees an expired PAT as an exchange error, and
+    all tasks stop being taken. Set up a reminder to reissue it in advance.
 
-Токен подписки кодового агента (Claude Code, Codex) — отдельный credential, он
-принадлежит человеку, а не агенту, и отзывается у поставщика. Подробнее —
-[Адаптеры исполнителей](adapters.md).
+The coding agent's subscription token (Claude Code, Codex) is a separate credential; it
+belongs to a human, not to the agent, and is revoked at the provider. Details:
+[Executor adapters](adapters.md).
 
-## См. также
+## See also
 
-- [Tenants и principals](../iam/principals.md)
-- [Токены, audiences, scopes](../iam/tokens.md)
-- [Авторизация и права](../control-plane/authorization.md)
-- [Секреты и ротация](../operations/secrets.md)
+- [Tenants and principals](../iam/principals.md)
+- [Tokens, audiences, scopes](../iam/tokens.md)
+- [Authorization and permissions](../control-plane/authorization.md)
+- [Secrets and rotation](../operations/secrets.md)

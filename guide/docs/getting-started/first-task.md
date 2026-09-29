@@ -1,20 +1,21 @@
-# Первая задача
 
-Статья проводит одну задачу через полный цикл исполнения — создание, claim,
-run, checkpoint, артефакт, завершение — тремя способами: напрямую через HTTP API
-(`curl`), через CLI `control-plane` и через MCP-сервер Control Plane в Claude
-Code. Предполагается, что стек поднят и bootstrap выполнен
-([Установка и первый запуск](quickstart.md)).
+# First task
 
-## Что произойдёт
+This page takes one task through the full execution cycle (creation, claim,
+run, checkpoint, artifact, completion) in three ways: directly through the
+HTTP API (`curl`), through the `control-plane` CLI, and through the Control
+Plane MCP server in Claude Code. It assumes the stack is up and bootstrap has
+run ([Installation and first launch](quickstart.md)).
+
+## What happens
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant O as Оператор
+    participant O as Operator
     participant IAM as IAM
     participant CP as Control Plane
-    O->>IAM: обмен PAT → токен audience control-plane
+    O->>IAM: PAT exchange → token for audience control-plane
     O->>CP: POST /tasks → TASK-000001 (status todo)
     O->>CP: POST /sessions → sessionId
     O->>CP: POST /tasks/TASK-000001:claim → claimId, fencingToken<br/>(status in_progress)
@@ -22,18 +23,18 @@ sequenceDiagram
     O->>CP: POST /runs/{runId}/checkpoints
     O->>CP: POST /artifacts
     O->>CP: POST /runs/{runId}:succeed → run succeeded,<br/>task done
-    O->>CP: GET /events → журнал всего цикла
+    O->>CP: GET /events → log of the whole cycle
 ```
 
-В примерах используется доменный тип задачи `devops` с полями `environment` и
-`components` — так выглядит тип, который ставится своим пакетом каталога (см.
-[Пакеты каталога](../control-plane/catalog-packages.md)). На чистой установке
-его нет: уберите из запроса `typeKey` и `customFields` — тогда применится
-системный тип `task` с теми же ключевыми статусами.
+The examples use the domain task type `devops` with the fields `environment`
+and `components`; this is what a type installed by its own catalog package
+looks like (see [Catalog packages](../control-plane/catalog-packages.md)). A
+clean installation does not have it: remove `typeKey` and `customFields` from
+the request, and the system type `task` applies, with the same key statuses.
 
-## Способ 1. HTTP API
+## Method 1. HTTP API
 
-### Подготовка переменных
+### Setting up variables
 
 ```bash
 CP=http://127.0.0.1:18000
@@ -48,25 +49,25 @@ TOKEN=$(curl -s -X POST "$IAM/api/v1/platform-access-tokens:exchange" \
 AUTH="Authorization: Bearer $TOKEN"
 ```
 
-Токен живёт 300 секунд. Если на каком-то шаге пришёл `401`, повторите обмен —
-PAT остаётся действительным.
+The token lives for 300 seconds. If any step returns `401`, repeat the
+exchange; the PAT stays valid.
 
-### 1. Создать задачу
+### 1. Create a task
 
 ```bash
 curl -s -X POST "$CP/api/v1/tasks" -H "$AUTH" -H 'Content-Type: application/json' \
   -H "Idempotency-Key: $(uuidgen)" \
   -d @- <<JSON | tee /tmp/task.json | jq '{publicId, status, systemStatusCategory, typeKey, origin}'
 {
-  "title": "Проверить smoke локального стенда",
-  "description": "Выполнить make smoke и приложить вывод.",
+  "title": "Check smoke on the local deployment",
+  "description": "Run make smoke and attach the output.",
   "priority": "high",
   "typeKey": "devops",
   "workspaceId": "$WS",
   "customFields": {"environment": "local", "components": ["control-plane", "iam-service"]},
   "acceptance": [
     {"key": "smoke-ok", "kind": "deterministic",
-     "description": "make smoke возвращает код 0"}
+     "description": "make smoke returns exit code 0"}
   ]
 }
 JSON
@@ -82,23 +83,23 @@ JSON
 }
 ```
 
-Что стоит отметить:
+Things to note:
 
-- `status` — начальный статус типа (`initialStatus`), категория — `active`;
-- `origin` не передан — ядро вывело его по виду пишущего principal (`human`);
-- `customFields` проверены по `fieldSchema` типа `devops` (например,
-  `environment` принимает только значения из перечисления типа);
-- `Idempotency-Key` защищает от дубля при повторе запроса.
+- `status` is the type's initial status (`initialStatus`), and its category is `active`;
+- `origin` was not passed: the core derived it from the kind of the writing principal (`human`);
+- `customFields` are validated against the `fieldSchema` of the `devops` type
+  (for example, `environment` accepts only values from the type's enumeration);
+- `Idempotency-Key` protects against duplicates when a request is retried.
 
-Куда задача может перейти дальше:
+Where the task can move next:
 
 ```bash
 curl -s "$CP/api/v1/tasks/TASK-000001/transitions" -H "$AUTH" | jq
 ```
 
-### 2. Открыть сессию
+### 2. Open a session
 
-Claim всегда берётся в рамках сессии клиента:
+A claim is always taken within a client session:
 
 ```bash
 SESSION=$(curl -s -X POST "$CP/api/v1/sessions" -H "$AUTH" -H 'Content-Type: application/json' \
@@ -107,34 +108,35 @@ SESSION=$(curl -s -X POST "$CP/api/v1/sessions" -H "$AUTH" -H 'Content-Type: app
                    "capabilities": ["tasks.interactive", "checkpoints"]}}' | jq -r .id)
 ```
 
-Сессия живёт `CP_SESSION_TTL_SECONDS` (по умолчанию 300 с) без heartbeat
-(`POST /api/v1/sessions/{id}:heartbeat`). Для этого примера пяти минут хватит.
+Without a heartbeat (`POST /api/v1/sessions/{id}:heartbeat`), a session lives
+for `CP_SESSION_TTL_SECONDS` (300 s by default). Five minutes is enough for
+this example.
 
-### 3. Взять задачу (claim)
+### 3. Claim the task
 
 ```bash
 curl -s -X POST "$CP/api/v1/tasks/TASK-000001:claim" -H "$AUTH" -H 'Content-Type: application/json' \
-  -d "{\"sessionId\": \"$SESSION\", \"intent\": \"проверю smoke\"}" | tee /tmp/claim.json \
+  -d "{\"sessionId\": \"$SESSION\", \"intent\": \"will check smoke\"}" | tee /tmp/claim.json \
   | jq '{id, status, fencingToken, expiresAt}'
 CLAIM=$(jq -r .id /tmp/claim.json)
 FENCE=$(jq -r .fencingToken /tmp/claim.json)
 ```
 
 ```json
-{ "id": "<claim-id>", "status": "active", "fencingToken": 1, "expiresAt": "<время>" }
+{ "id": "<claim-id>", "status": "active", "fencingToken": 1, "expiresAt": "<time>" }
 ```
 
-Задача перешла в `claimStatus` своего типа — `in_progress`. Аренда живёт 300
-секунд; для долгой работы продлевайте её
+The task has moved to its type's `claimStatus`, `in_progress`. The lease lives
+for 300 seconds; for longer work, extend it with
 `POST /api/v1/claims/{id}:heartbeat`.
 
-!!! tip "Почему нельзя взять"
-    Если claim отвергнут, спросите у Control Plane причину:
-    `GET /api/v1/tasks/TASK-000001/claimability` — ответ объясняет, что мешает
-    (активный claim другого principal, незавершённые блокирующие задачи,
-    неудовлетворённые requirements, терминальный статус).
+!!! tip "Why a claim is refused"
+    If a claim is rejected, ask Control Plane for the reason:
+    `GET /api/v1/tasks/TASK-000001/claimability`. The response explains what
+    blocks it (an active claim by another principal, unfinished blocking tasks,
+    unmet requirements, a terminal status).
 
-### 4. Начать run
+### 4. Start a run
 
 ```bash
 RUN=$(curl -s -X POST "$CP/api/v1/tasks/TASK-000001:start-run" -H "$AUTH" \
@@ -142,14 +144,14 @@ RUN=$(curl -s -X POST "$CP/api/v1/tasks/TASK-000001:start-run" -H "$AUTH" \
   -d "{\"claimId\": \"$CLAIM\", \"fencingToken\": $FENCE}" | jq -r .id)
 ```
 
-`claimId` и `fencingToken` обязательны: run стартует только под живым claim с
-актуальным токеном.
+`claimId` and `fencingToken` are required: a run starts only under a live
+claim with a current token.
 
-### 5. Записать checkpoint и артефакт
+### 5. Record a checkpoint and an artifact
 
 ```bash
 curl -s -X POST "$CP/api/v1/runs/$RUN/checkpoints" -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"kind": "progress", "data": {"step": "smoke", "note": "запускаю make smoke"}}' | jq '{seq, kind}'
+  -d '{"kind": "progress", "data": {"step": "smoke", "note": "running make smoke"}}' | jq '{seq, kind}'
 
 curl -s -X POST "$CP/api/v1/artifacts" -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"type\": \"report\", \"name\": \"smoke-output\", \"task\": \"TASK-000001\",
@@ -158,15 +160,15 @@ curl -s -X POST "$CP/api/v1/artifacts" -H "$AUTH" -H 'Content-Type: application/
   | jq '{id, type, name}'
 ```
 
-Checkpoint нужен для возобновления: если run прервётся, следующий исполнитель
-прочитает checkpoints в `GET /api/v1/runs/{id}/context`. Артефакт — результат
-работы, на который потом можно сослаться как на evidence.
+A checkpoint enables resumption: if the run is interrupted, the next executor
+reads the checkpoints from `GET /api/v1/runs/{id}/context`. An artifact is a
+result of the work that you can later reference as evidence.
 
-### 6. Завершить
+### 6. Complete
 
 ```bash
 curl -s -X POST "$CP/api/v1/runs/$RUN:succeed" -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"output": {"summary": "smoke зелёный"}}' \
+  -d '{"output": {"summary": "smoke is green"}}' \
   | jq '{run: .run.status, task: .task.status, category: .task.systemStatusCategory}'
 ```
 
@@ -174,18 +176,18 @@ curl -s -X POST "$CP/api/v1/runs/$RUN:succeed" -H "$AUTH" -H 'Content-Type: appl
 { "run": "succeeded", "task": "done", "category": "terminal_success" }
 ```
 
-По умолчанию `:succeed` атомарно завершает и задачу (`completeTask: true`),
-переводя её в `completionStatus` типа, и освобождает claim. Передайте
-`"completeTask": false`, если задача должна остаться открытой — например, для
-следующей попытки или ревью.
+By default, `:succeed` atomically completes the task as well
+(`completeTask: true`), moving it to the type's `completionStatus`, and
+releases the claim. Pass `"completeTask": false` if the task must stay open,
+for example for another attempt or a review.
 
-!!! note "Провал и приостановка"
-    Честный провал — `POST /api/v1/runs/{id}:fail` с `failureReason`: claim
-    сохраняется, можно начать следующий run. Приостановка до решения человека —
-    `:suspend` с `waitingForApprovalId`. См.
-    [Исполнение — claims и runs](../control-plane/execution.md).
+!!! note "Failure and suspension"
+    To report a genuine failure, use `POST /api/v1/runs/{id}:fail` with
+    `failureReason`: the claim is kept, and you can start another run. To
+    suspend until a human decides, use `:suspend` with `waitingForApprovalId`.
+    See [Execution: claims and runs](../control-plane/execution.md).
 
-### 7. Посмотреть журнал
+### 7. View the log
 
 ```bash
 TASK_ID=$(jq -r .id /tmp/task.json)
@@ -199,25 +201,27 @@ curl -s "$CP/api/v1/events?entityType=task&entityId=$TASK_ID" -H "$AUTH" \
 …  task.completed
 ```
 
-Полный журнал всех сущностей — `GET /api/v1/events?tail=20` (там же
-`session.opened`, `run.started`, `run.checkpointed`, `artifact.created`,
-`run.succeeded`). Эти же события `context-adapter` доставит в память tenant.
+The full log for all entities is at `GET /api/v1/events?tail=20` (it also
+includes `session.opened`, `run.started`, `run.checkpointed`,
+`artifact.created`, `run.succeeded`). `context-adapter` delivers the same
+events to the tenant's memory.
 
-## Способ 2. CLI `control-plane`
+## Method 2. The `control-plane` CLI
 
-CLI входит в пакет `control-plane` и ставится как uv-инструмент из сабмодуля
-(рядом должен лежать `platform-auth-sdk` — path-зависимость):
+The CLI is part of the `control-plane` package and is installed as a uv tool
+from the submodule (`platform-auth-sdk` must sit next to it as a path
+dependency):
 
 ```bash
 uv tool install ./control-plane
 control-plane --version
 ```
 
-### Подключение
+### Connecting
 
-CLI (как и MCP-сервер) ищет credential в таком порядке: IAM-identity, если
-задан `CONTROL_PLANE_IAM_URL`, затем legacy-ключ. Самый простой способ для
-локального стенда — передать PAT переменной окружения:
+The CLI (like the MCP server) looks for a credential in this order: the IAM
+identity, if `CONTROL_PLANE_IAM_URL` is set, then the legacy key. The simplest
+option for a local deployment is to pass the PAT in an environment variable:
 
 ```bash
 export CONTROL_PLANE_SERVER=http://127.0.0.1:18000
@@ -229,65 +233,68 @@ export IAM_PLATFORM_ACCESS_TOKEN=$(cat secrets/harness-pat)
 control-plane whoami
 ```
 
-!!! warning "`IAM_PLATFORM_ACCESS_TOKEN` требует `IAM_CREDENTIAL_MODE`"
-    PAT из переменной окружения принимается только вместе с
-    `IAM_CREDENTIAL_MODE=environment` (или `ci`); иначе клиент отвечает
-    `iam_environment_mode_required`. Так унаследованная переменная не может
-    молча подменить credential разработчика.
+!!! warning "`IAM_PLATFORM_ACCESS_TOKEN` requires `IAM_CREDENTIAL_MODE`"
+    A PAT from an environment variable is accepted only together with
+    `IAM_CREDENTIAL_MODE=environment` (or `ci`); otherwise the client returns
+    `iam_environment_mode_required`. This way, an inherited variable cannot
+    silently replace the developer's credential.
 
-Постоянный вариант — файл `~/.config/iam/credentials.json` с правами `600`.
-Ключ записи — `<CONTROL_PLANE_IAM_URL>|<tenant-id>|<iam-principal-id>`:
+The persistent option is the file `~/.config/iam/credentials.json` with mode
+`600`. The entry key is `<CONTROL_PLANE_IAM_URL>|<tenant-id>|<iam-principal-id>`:
 
 ```json
 {
   "http://127.0.0.1:18010|<tenant-id>|<iam-principal-id>": {
-    "token": "<содержимое secrets/harness-pat>",
+    "token": "<contents of secrets/harness-pat>",
     "principalId": "<iam-principal-id>"
   }
 }
 ```
 
-Если в файле несколько credential одного tenant, процесс должен объявить себя
-переменной `IAM_PRINCIPAL=<iam-principal-id>`, иначе получит
-`iam_credential_ambiguous`. На macOS клиент сначала смотрит в Keychain (сервис
-`iam.platform-access-token`); отключить — `IAM_NO_KEYCHAIN=1`.
+If the file contains several credentials for the same tenant, the process
+must identify itself with the variable `IAM_PRINCIPAL=<iam-principal-id>`;
+otherwise it gets `iam_credential_ambiguous`. On macOS, the client checks the
+Keychain first (service `iam.platform-access-token`); to disable this, set
+`IAM_NO_KEYCHAIN=1`.
 
-!!! note "Ключ записи совпадает с адресом IAM, а не с issuer"
-    Bootstrap печатает подсказку с ключом на основе issuer
-    (`http://taimen.localhost/iam|…`). Такой ключ подходит, если
-    `CONTROL_PLANE_IAM_URL=http://taimen.localhost/iam` (через Caddy). При
-    обращении к IAM напрямую по порту ключ начинается с
+!!! note "The entry key matches the IAM address, not the issuer"
+    Bootstrap prints a hint with a key based on the issuer
+    (`http://taimen.localhost/iam|…`). That key works if
+    `CONTROL_PLANE_IAM_URL=http://taimen.localhost/iam` (through Caddy). When
+    you reach IAM directly by port, the key starts with
     `http://127.0.0.1:18010`.
 
-### Цикл через CLI
+### The cycle through the CLI
 
-CLI не создаёт задачи — создайте её через API (способ 1) или MCP (способ 3).
-Дальше:
+The CLI does not create tasks: create one through the API (method 1) or MCP
+(method 3). Then:
 
 ```bash
-control-plane work list                          # доступная principal работа
+control-plane work list                          # work available to the principal
 control-plane task get TASK-000002
 control-plane task claimability TASK-000002
-control-plane task claim TASK-000002 --intent "беру"
+control-plane task claim TASK-000002 --intent "taking it"
 # → {"sessionId": "...", "claim": {"id": "<claim-id>", "fencingToken": 1, ...}}
 control-plane run start TASK-000002 --claim <claim-id> --fencing-token 1
 control-plane artifact add --type report --name smoke-output --task TASK-000002 --run <run-id>
 control-plane run status <run-id>
-control-plane events tail --replay 10            # Ctrl+C для выхода
+control-plane events tail --replay 10            # Ctrl+C to exit
 ```
 
-`task claim` открывает собственную сессию CLI и **не шлёт heartbeat**: у вас
-есть TTL сессии и claim (по умолчанию 5 минут), чтобы начать и завершить run.
-Завершение run выполняется через API (`:succeed`) или MCP (`cp_complete_run`).
-Полный список команд — [CLI и MCP-сервер](../control-plane/cli-and-mcp.md).
+`task claim` opens its own CLI session and **does not send heartbeats**: you
+have the session and claim TTL (5 minutes by default) to start and finish the
+run. You complete the run through the API (`:succeed`) or MCP
+(`cp_complete_run`). The full command list is in
+[CLI and MCP server](../control-plane/cli-and-mcp.md).
 
-## Способ 3. MCP-сервер в Claude Code
+## Method 3. MCP server in Claude Code
 
-MCP-сервер `control-plane-mcp` ставится тем же `uv tool install ./control-plane`
-и работает по stdio. Он держит сессию и heartbeat claim сам, а права — те же,
-что у PAT оператора.
+The `control-plane-mcp` MCP server is installed by the same
+`uv tool install ./control-plane` and runs over stdio. It maintains the
+session and the claim heartbeat itself, and its permissions are those of the
+operator's PAT.
 
-### Подключение
+### Connecting
 
 ```bash
 claude mcp add control-plane \
@@ -298,61 +305,62 @@ claude mcp add control-plane \
   -- control-plane-mcp
 ```
 
-Credential берётся из `~/.config/iam/credentials.json` (см. выше) или из пары
-`IAM_CREDENTIAL_MODE=environment` + `IAM_PLATFORM_ACCESS_TOKEN`, переданной
-через `-e`. Проверьте в сессии Claude Code: попросите вызвать `cp_whoami`.
+The credential comes from `~/.config/iam/credentials.json` (see above) or from
+the pair `IAM_CREDENTIAL_MODE=environment` + `IAM_PLATFORM_ACCESS_TOKEN`
+passed with `-e`. Verify it in a Claude Code session: ask it to call
+`cp_whoami`.
 
-Вместо `CONTROL_PLANE_SERVER` можно положить в репозиторий файл
-`.control-plane/config.json` (`control-plane init --server … --workspace …
---project …`) — тогда MCP-сервер знает проект этого репозитория и создаёт
-задачи в его workspace.
+Instead of `CONTROL_PLANE_SERVER`, you can put a `.control-plane/config.json`
+file in the repository (`control-plane init --server … --workspace …
+--project …`); then the MCP server knows the repository's project and creates
+tasks in its workspace.
 
-### Цикл в диалоге
+### The cycle in a conversation
 
-Инструменты MCP-сервера рассчитаны на работу с подтверждением человека:
-описания `cp_create_task`, `cp_claim_task` и `cp_complete_run` требуют явного
-решения пользователя. Типичный диалог:
+The MCP server's tools are designed for work with human confirmation: the
+descriptions of `cp_create_task`, `cp_claim_task`, and `cp_complete_run`
+require an explicit user decision. A typical conversation:
 
-| Реплика оператора | Инструмент | Что происходит |
+| Operator says | Tool | What happens |
 |---|---|---|
-| «Покажи, кто я и что мне доступно» | `cp_whoami`, `cp_list_work` | identity, права, доступные задачи |
-| «Создай задачу типа devops: проверить smoke локального стенда, environment=local» | `cp_list_task_types`, `cp_create_task` | задача `TASK-000003` в статусе `todo` |
-| «Беру TASK-000003» | `cp_claim_task` | сессия + claim; heartbeat держит MCP-сервер |
-| «Начинай» | `cp_start_run` | run под текущим claim |
-| — | `cp_checkpoint`, `cp_record_action` | прогресс и аудит действий |
-| «Приложи вывод smoke» | `cp_create_artifact` | артефакт к задаче и run |
-| «Готово, закрывай» | `cp_complete_run` | run `succeeded`, задача `done`, claim освобождён |
+| "Show me who I am and what I can access" | `cp_whoami`, `cp_list_work` | identity, permissions, available tasks |
+| "Create a devops task: check smoke on the local deployment, environment=local" | `cp_list_task_types`, `cp_create_task` | task `TASK-000003` in status `todo` |
+| "I'm taking TASK-000003" | `cp_claim_task` | session + claim; the MCP server keeps the heartbeat |
+| "Start" | `cp_start_run` | a run under the current claim |
+| — | `cp_checkpoint`, `cp_record_action` | progress and action audit |
+| "Attach the smoke output" | `cp_create_artifact` | an artifact for the task and run |
+| "Done, close it" | `cp_complete_run` | run `succeeded`, task `done`, claim released |
 
-Если инструмент вернул `stale_claim`, `task_already_claimed` или
-`run_not_active`, владение задачей потеряно: MCP-сервер подсказывает
-перечитать `cp_context` и не повторять запись. Подробно о плагине и
-повседневной работе — [MCP-плагин для Claude Code](../operator/mcp-plugin.md).
+If a tool returns `stale_claim`, `task_already_claimed`, or `run_not_active`,
+ownership of the task is lost: the MCP server advises you to reread
+`cp_context` and not to repeat the write. For details on the plugin and
+everyday work, see [MCP plugin for Claude Code](../operator/mcp-plugin.md).
 
-## Что дальше
+## What's next
 
-| Хочу | Куда |
+| I want to | Go to |
 |---|---|
-| Настроить свои типы задач и статусы | [Типы задач и статусы](../control-plane/task-types.md), [Пакеты каталога](../control-plane/catalog-packages.md) |
-| Связать задачи с целями и evidence | [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md) |
-| Добавить approval перед завершением | [Approvals](../control-plane/approvals.md) |
-| Отдать задачу автономному агенту | [Агенты и runner](../runner/index.md) |
-| Дать агенту контекст из памяти | [Контекст задачи и память](../control-plane/context.md) |
+| Set up my own task types and statuses | [Task types and statuses](../control-plane/task-types.md), [Catalog packages](../control-plane/catalog-packages.md) |
+| Link tasks to goals and evidence | [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md) |
+| Add an approval before completion | [Approvals](../control-plane/approvals.md) |
+| Hand a task to an autonomous agent | [Agents and runner](../runner/index.md) |
+| Give an agent context from memory | [Task context and memory](../control-plane/context.md) |
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `401` на любом запросе к Control Plane | токен истёк (300 с) или обмен делался не тем PAT | повторить обмен |
-| `403 scope_not_allowed` при обмене | запрошен scope вне потолка PAT или без префикса (`read` вместо `control-plane:read`) | запросить корректные scopes или не передавать `scopes` |
-| `stale_claim` при `start-run` или `:succeed` | claim истёк или перехвачен, fencing token устарел | взять задачу заново; для долгой работы — heartbeat |
-| `422` при создании задачи с `customFields` | поля не проходят `fieldSchema` типа | `GET /api/v1/task-types/{id}` — посмотреть схему |
-| CLI: `no credentials for …` | не задан `CONTROL_PLANE_IAM_URL` или не найден PAT | переменные из раздела «Подключение» |
-| CLI/MCP: `iam_credentials_file_permissions` | у `credentials.json` права шире `600` | `chmod 600 ~/.config/iam/credentials.json` |
+| `401` on any request to Control Plane | the token expired (300 s) or was exchanged from the wrong PAT | repeat the exchange |
+| `403 scope_not_allowed` on exchange | a scope outside the PAT ceiling was requested, or without the prefix (`read` instead of `control-plane:read`) | request correct scopes or omit `scopes` |
+| `stale_claim` on `start-run` or `:succeed` | the claim expired or was taken over; the fencing token is stale | claim the task again; for longer work, send heartbeats |
+| `422` when creating a task with `customFields` | the fields do not pass the type's `fieldSchema` | `GET /api/v1/task-types/{id}` to see the schema |
+| CLI: `no credentials for …` | `CONTROL_PLANE_IAM_URL` is not set or the PAT was not found | the variables from the "Connecting" section |
+| CLI/MCP: `iam_credentials_file_permissions` | `credentials.json` has permissions wider than `600` | `chmod 600 ~/.config/iam/credentials.json` |
 
-## См. также
+## See also
 
-- [Модель работы](../control-plane/work-model.md)
-- [Исполнение — claims и runs](../control-plane/execution.md)
-- [Харнесс-протокол](../control-plane/harness-protocol.md)
-- [API Control Plane](../control-plane/api.md)
-- [Исполнение и runner — диагностика](../troubleshooting/runner.md)
+- [Work model](../control-plane/work-model.md)
+- [Execution: claims and runs](../control-plane/execution.md)
+- [Harness protocol](../control-plane/harness-protocol.md)
+- [Control Plane API](../control-plane/api.md)
+- [Execution and runner (troubleshooting)](../troubleshooting/runner.md)

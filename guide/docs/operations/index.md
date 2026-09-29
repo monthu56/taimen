@@ -1,22 +1,23 @@
-# Эксплуатация
 
-Раздел для инженера, который разворачивает платформу Taimen в промышленном
-окружении и сопровождает её: раскладка установки, внешний периметр, обновления,
-секреты, резервные копии, наблюдаемость, ресурсы и аварийные процедуры.
-Диагностика конкретных симптомов вынесена в раздел
-[Диагностика](../troubleshooting/index.md).
+# Operations
 
-## Модель установки в двух словах
+This section is for the engineer who deploys the Taimen platform in a
+production environment and maintains it: installation layout, edge,
+upgrades, secrets, backups, observability, resources, and emergency
+procedures. Diagnosing specific symptoms is covered in
+[Troubleshooting](../troubleshooting/index.md).
 
-Промышленная установка Taimen — это **одна машина с Docker Compose** и, при
-необходимости, **отдельный runner-хост** для автономных исполнителей.
+## The installation model in brief
+
+A production Taimen installation is **one machine with Docker Compose** and,
+if needed, **a separate runner host** for autonomous executors.
 
 
 ```mermaid
 flowchart LR
-    user([Люди и harness]) ==>|HTTPS 443| caddy
-    subgraph host["Хост платформы (корневой compose.yml)"]
-        caddy[Caddy<br/>единственный периметр]
+    user([People and harness]) ==>|HTTPS 443| caddy
+    subgraph host["Platform host (root compose.yml)"]
+        caddy[Caddy<br/>the only edge]
         caddy ==> iam[iam-service]
         caddy ==> cp[control-plane-api]
         cp --- worker[control-plane-worker]
@@ -26,55 +27,58 @@ flowchart LR
         cp --- cpdb[(control-plane-db)]
         mem --- memdb[(memory-db<br/>AGE + pgvector)]
     end
-    runner[Runner-хост<br/>control-plane-agent] ==>|HTTPS: PAT → access token| caddy
+    runner[Runner host<br/>control-plane-agent] ==>|HTTPS: PAT → access token| caddy
 ```
 
-Ключевые принципы:
+Key principles:
 
 
-- **Один файл описания** — корневой `compose.yml` суперпроекта с профилями
-  (`core`, `edge`, `notify`). Локальная установка и промышленная различаются
-  только файлом `.env` и Caddyfile.
-- **Один периметр** — наружу публикует порты только контейнер `caddy` (80/443).
-  Все прочие сервисы слушают на `127.0.0.1` хоста или только во внутренней сети.
-- **Релиз = коммит суперпроекта.** Версии компонентов закреплены указателями
-  сабмодулей; обновление — это `git pull` суперпроекта и
+- **One description file**: the superproject's root `compose.yml` with
+  profiles (`core`, `edge`, `notify`). A local installation and a production
+  one differ only in the `.env` file and the Caddyfile.
+- **One edge**: only the `caddy` container publishes ports (80/443).
+  All other services listen on the host's `127.0.0.1` or only on the internal
+  network.
+- **A release is a superproject commit.** Component versions are pinned by
+  submodule pointers; an upgrade is a `git pull` of the superproject and
   `git submodule update`.
-- **Секреты только в `.env` и `secrets/`** (оба в `.gitignore`), права `0600`.
-- **Миграции схем применяются при старте** сервисов (`alembic upgrade head` в
-  команде контейнера), отдельного шага миграции нет.
+- **Secrets live only in `.env` and `secrets/`** (both in `.gitignore`), mode `0600`.
+- **Schema migrations are applied at startup** of the services
+  (`alembic upgrade head` in the container command); there is no separate
+  migration step.
 
-## Статьи раздела
+## Articles in this section
 
-| Статья | Что внутри |
+| Article | What is inside |
 |---|---|
-| [Промышленное развёртывание](deployment.md) | Раскладка каталогов, `.env`, профили, первый запуск, bootstrap, runner-хост |
-| [Периметр и TLS](edge-and-tls.md) | Маршруты Caddy, выпуск сертификатов, закрытие служебных путей, типичные ошибки |
-| [Обновление и миграции](upgrades.md) | Штатная выкладка, миграции Alembic, минимизация простоя, откат |
-| [Секреты и ротация](secrets.md) | Инвентарь секретов, права файлов, ротация PAT, ключа подписи, паролей |
-| [Резервное копирование](backup.md) | Что бэкапить, `pg_dump` каждой БД, особенности Apache AGE, восстановление |
-| [Мониторинг и здоровье](monitoring.md) | Health-эндпоинты, `/metrics`, `make smoke`, логи, что алертить |
-| [Ресурсы и масштабирование](capacity.md) | Лимиты памяти из `compose.yml`, минимальные и рекомендуемые конфигурации |
-| [Аварийные процедуры](emergency.md) | Отказ IAM, откат релиза, потеря runner-хоста, компрометация credentials |
+| [Production deployment](deployment.md) | Directory layout, `.env`, profiles, first start, bootstrap, runner host |
+| [Edge and TLS](edge-and-tls.md) | Caddy routes, certificate issuance, closing internal paths, common mistakes |
+| [Upgrades and migrations](upgrades.md) | Standard rollout, Alembic migrations, minimizing downtime, rollback |
+| [Secrets and rotation](secrets.md) | Secret inventory, file permissions, rotating PATs, the signing key, passwords |
+| [Backup](backup.md) | What to back up, `pg_dump` of each database, Apache AGE specifics, restore |
+| [Monitoring and health](monitoring.md) | Health endpoints, `/metrics`, `make smoke`, logs, what to alert on |
+| [Resources and scaling](capacity.md) | Memory limits from `compose.yml`, minimum and recommended configurations |
+| [Emergency procedures](emergency.md) | IAM outage, release rollback, loss of the runner host, credential compromise |
 
-## Чек-лист дежурного
+## On-call checklist
 
-- [ ] `make smoke` зелёный, `docker compose --profile "*" ps` без `unhealthy`.
-- [ ] `GET /health/ready` Control Plane отвечает `200`, а не `503`.
-- [ ] `context_adapter_parked_tenants` равен `0`.
-- [ ] Свободно не меньше 20 % диска (журнал Control Plane и память растут).
-- [ ] Срок действия PAT исполнителей и операторов не истекает в ближайшие
-      две недели (см. [Секреты и ротация](secrets.md)).
-- [ ] Последний успешный бэкап всех БД моложе суток.
+- [ ] `make smoke` is green, `docker compose --profile "*" ps` shows no `unhealthy`.
+- [ ] Control Plane `GET /health/ready` returns `200`, not `503`.
+- [ ] `context_adapter_parked_tenants` equals `0`.
+- [ ] At least 20% of the disk is free (the Control Plane log and memory grow).
+- [ ] The PATs of executors and operators do not expire within the next
+      two weeks (see [Secrets and rotation](secrets.md)).
+- [ ] The last successful backup of all databases is less than a day old.
 
-!!! tip "Где команды"
-    Все команды `docker compose` в разделе выполняются из корня клона
-    суперпроекта: там лежат `compose.yml` и `.env`. Цели `make` описаны в
-    справочнике [Цели make](../reference/make.md).
+!!! tip "Where to run commands"
+    All `docker compose` commands in this section run from the root of the
+    superproject clone, where `compose.yml` and `.env` live. The `make`
+    targets are described in the [Make targets](../reference/make.md)
+    reference.
 
-## См. также
+## See also
 
-- [Установка и первый запуск](../getting-started/quickstart.md)
-- [Конфигурация .env](../getting-started/configuration.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
-- [Диагностика](../troubleshooting/index.md)
+- [Installation and first start](../getting-started/quickstart.md)
+- [.env configuration](../getting-started/configuration.md)
+- [Services and ports](../reference/services-and-ports.md)
+- [Troubleshooting](../troubleshooting/index.md)

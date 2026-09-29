@@ -1,63 +1,67 @@
-# Периметр и TLS
 
-Во всей установке наружу смотрит один контейнер — `caddy` (профиль `edge`).
-Он терминирует TLS, сам выпускает и продлевает сертификаты и раскладывает
-запросы по сервисам по префиксу пути. Статья — для инженера, который готовит
-Caddyfile установки и отвечает за сертификаты.
+# Edge and TLS
 
-## Как устроен периметр
+In the whole installation, only one container faces the outside: `caddy`
+(the `edge` profile). It terminates TLS, issues and renews certificates
+itself, and routes requests to services by path prefix. This article is for
+the engineer who prepares the installation's Caddyfile and is responsible
+for certificates.
+
+## How the edge works
 
 
 ```mermaid
 flowchart LR
-    client([Браузер, harness, runner]) ==>|443| caddy[caddy]
-    caddy ==>|/iam/*, префикс срезается| iam[iam-service:8010]
+    client([Browser, harness, runner]) ==>|443| caddy[caddy]
+    caddy ==>|/iam/*, prefix stripped| iam[iam-service:8010]
     caddy ==>|/api/v1/*, /health/*, /docs, /openapi.json| cp[control-plane-api:8000]
-    caddy ==>|/notify/*, /guide/*| other[сервисы профилей]
+    caddy ==>|/notify/*, /guide/*| other[profile services]
 ```
 
-- Контейнер `caddy` публикует `${EDGE_HTTP_PORT:-80}` и `${EDGE_HTTPS_PORT:-443}`.
-- Остальные сервисы либо не публикуют порты вовсе (`control-plane-worker`,
-  `context-adapter`, базы), либо публикуют их только на `127.0.0.1` хоста —
-  для эксплуатационного доступа и `make smoke`.
-- `memory-service` в промышленном Caddyfile **наружу не выводится**: память
-  доступна только ядру и сервисам во внутренней сети.
-- В сети compose у `caddy` есть alias `${TAIMEN_PUBLIC_HOST}`. Контейнеры,
-  которые ходят к IAM или внешнему IdP по публичному адресу (issuer должен
-  совпадать с тем, что видит браузер), резолвят публичное имя прямо в `caddy`
-  внутри сети — без выхода наружу и hairpin NAT.
+- The `caddy` container publishes `${EDGE_HTTP_PORT:-80}` and `${EDGE_HTTPS_PORT:-443}`.
+- The other services either publish no ports at all (`control-plane-worker`,
+  `context-adapter`, databases) or publish them only on the host's
+  `127.0.0.1`, for operational access and `make smoke`.
+- `memory-service` is **not exposed** in the production Caddyfile: memory is
+  available only to the core and to services on the internal network.
+- On the compose network, `caddy` has the alias `${TAIMEN_PUBLIC_HOST}`.
+  Containers that reach IAM or an external IdP by the public address (the
+  issuer must match what the browser sees) resolve the public name directly
+  to `caddy` inside the network, without going outside and without hairpin
+  NAT.
 
-## Маршруты
+## Routes
 
 
-Образец — `deploy/caddy/Caddyfile.local` (локальный вариант без TLS).
-Промышленный файл отличается от него адресом сайта и включённым TLS, см.
-«Минимальный Caddyfile установки» ниже.
+The template is `deploy/caddy/Caddyfile.local` (the local variant without
+TLS). The production file differs from it in the site address and enabled
+TLS; see "Minimal installation Caddyfile" below.
 
-| Путь | Upstream | Префикс | Профиль | Назначение |
+| Path | Upstream | Prefix | Profile | Purpose |
 |---|---|---|---|---|
-| `/iam/*` | `iam-service:8010` | срезается (`handle_path`) | `core` | IAM для клиентов: JWKS, обмен/интроспекция/отзыв PAT, `tokens/exchange`, `federation:*`, SCIM; issuer `${TAIMEN_PUBLIC_URL}/iam`. Административные пути — 404 (см. ниже) |
-| `/api/v1/*`, `/health/*`, `/docs*`, `/redoc*`, `/openapi.json` | `control-plane-api:8000` | нет | `core` | Control Plane API, WebSocket-подписки идут тем же маршрутом. `/metrics` наружу не выводится |
-| `/notify/*` | `notification-service:8000` | срезается | `notify` | Сервис уведомлений: API и инбокс, вебхук бота Telegram (`/notify/channels/telegram/webhook`, проверяется секретом вебхука), точка приёма скилла `notify.send@1` |
-| `/guide/*` | `guide:8080` | срезается | `edge` | Это руководство: статический сайт MkDocs (`guide/Dockerfile`) |
+| `/iam/*` | `iam-service:8010` | stripped (`handle_path`) | `core` | IAM for clients: JWKS, PAT exchange/introspection/revocation, `tokens/exchange`, `federation:*`, SCIM; issuer `${TAIMEN_PUBLIC_URL}/iam`. Administrative paths return 404 (see below) |
+| `/api/v1/*`, `/health/*`, `/docs*`, `/redoc*`, `/openapi.json` | `control-plane-api:8000` | no | `core` | Control Plane API; WebSocket subscriptions use the same route. `/metrics` is not exposed |
+| `/notify/*` | `notification-service:8000` | stripped | `notify` | Notification service: API and inbox, the Telegram bot webhook (`/notify/channels/telegram/webhook`, verified by the webhook secret), the intake point of the `notify.send@1` skill |
+| `/guide/*` | `guide:8080` | stripped | `edge` | This guide: a static MkDocs site (`guide/Dockerfile`) |
 
 
-!!! warning "Порядок блоков важен"
-    Маршрут Control Plane объявлен именованным матчером `@cp_api`. Если в
-    файле есть общий `handle` без матчера (запасной маршрут корня), свои
-    маршруты объявляйте до него, иначе запрос уйдёт в запасной маршрут.
+!!! warning "Block order matters"
+    The Control Plane route is declared with the named matcher `@cp_api`. If
+    the file has a generic `handle` without a matcher (a root fallback
+    route), declare your routes before it; otherwise the request goes to the
+    fallback route.
 
-Маршрут профиля, который не поднят, отвечает `502` — это ожидаемо. Лишние
-маршруты лучше убрать из файла установки.
+A route for a profile that is not running returns `502`; this is expected.
+It is better to remove extra routes from the installation file.
 
-## Минимальный Caddyfile установки
+## Minimal installation Caddyfile
 
 
 ```caddyfile
 platform.example.com {
 	encode zstd gzip
 
-	# Административные пути IAM на периметре не нужны: см. «Закрытие служебных путей»
+	# IAM administrative paths are not needed at the edge: see "Closing internal paths"
 	handle_path /iam/* {
 		@iam_admin {
 			path /api/v1/events /api/v1/events/* /api/v1/tenants /api/v1/tenants/*
@@ -68,7 +72,7 @@ platform.example.com {
 		reverse_proxy iam-service:8010
 	}
 
-	# /metrics намеренно не входит в список: см. «Закрытие служебных путей»
+	# /metrics is intentionally not in the list: see "Closing internal paths"
 	@cp_api path /api/v1/* /health/* /docs /docs/* /redoc /redoc/* /openapi.json
 	handle @cp_api {
 		reverse_proxy control-plane-api:8000 {
@@ -85,145 +89,149 @@ platform.example.com {
 ```
 
 
-Путь к файлу задаётся в `.env` переменной `CADDYFILE`.
+The file path is set in `.env` by the `CADDYFILE` variable.
 
-## TLS и сертификаты
+## TLS and certificates
 
-Caddy включает automatic HTTPS для любого адреса сайта с доменным именем:
-получает сертификат у ACME-центра, продлевает его сам и редиректит `http` на
-`https`. Состояние (сертификаты, ключи, ACME-аккаунт) лежит в томе
-`caddy_data` (`${COMPOSE_PROJECT_NAME}_caddy_data`), конфигурация — в
-`caddy_config`.
+Caddy enables automatic HTTPS for any site address with a domain name: it
+obtains a certificate from an ACME CA, renews it itself, and redirects
+`http` to `https`. The state (certificates, keys, ACME account) is kept in
+the `caddy_data` volume (`${COMPOSE_PROJECT_NAME}_caddy_data`), and the
+configuration in `caddy_config`.
 
-### Требования для выпуска
+### Requirements for issuance
 
-| Условие | Почему |
+| Condition | Why |
 |---|---|
-| A/AAAA-запись имени указывает на хост **до** первого запуска `caddy` | ACME-проверка (HTTP-01 или TLS-ALPN-01) приходит на адрес из DNS |
-| Порты 80 и 443 доступны из интернета | Через них идут проверки |
-| Перед хостом нет CDN/прокси, терминирующего TLS | TLS-ALPN-проверка через чужой TLS не проходит |
-| Том `caddy_data` сохраняется между пересозданиями контейнера | Иначе каждый пересозданный контейнер выпускает сертификат заново |
+| The A/AAAA record of the name points to the host **before** the first start of `caddy` | The ACME challenge (HTTP-01 or TLS-ALPN-01) arrives at the address from DNS |
+| Ports 80 and 443 are reachable from the internet | The challenges go through them |
+| No CDN/proxy that terminates TLS sits in front of the host | The TLS-ALPN challenge does not pass through someone else's TLS |
+| The `caddy_data` volume persists across container recreation | Otherwise every recreated container issues the certificate again |
 
-!!! danger "Не держите в Caddyfile имена, которые не указывают на хост"
-    Каждое такое имя Caddy будет пытаться сертифицировать, проверка будет
-    уходить на чужой адрес и падать. Серия неудачных проверок упирается в
-    лимиты ACME-центра на неудачные валидации, и выпуск для этого имени
-    блокируется на время (у Let's Encrypt — ответ `429`). Добавляйте блок
-    сайта только когда DNS уже переключён, а неготовые имена держите
-    закомментированными.
+!!! danger "Do not keep names in the Caddyfile that do not point to the host"
+    Caddy tries to certify every such name; the challenge goes to someone
+    else's address and fails. A series of failed challenges hits the ACME
+    CA's limits on failed validations, and issuance for that name is blocked
+    for a while (Let's Encrypt responds with `429`). Add a site block only
+    after DNS has been switched, and keep names that are not ready commented
+    out.
 
-### Перенос на новый хост
+### Moving to a new host
 
-1. Остановите `caddy` на старом хосте.
-2. Скопируйте том `caddy_data` (см. [Резервное копирование](backup.md)) на
-   новый хост до первого запуска `caddy` там.
-3. Переключите DNS, поднимите `caddy`. Перенесённые сертификаты
-   подхватываются без перевыпуска, продление продолжится на новом хосте.
+1. Stop `caddy` on the old host.
+2. Copy the `caddy_data` volume (see [Backup](backup.md)) to the new host
+   before the first start of `caddy` there.
+3. Switch DNS and start `caddy`. The transferred certificates are picked up
+   without reissuance, and renewal continues on the new host.
 
-### Если перед Caddy нужен балансировщик или CDN
+### If you need a load balancer or CDN in front of Caddy
 
-- TLS-проверки через CDN не проходят; нужен DNS-01, а стандартный образ
-  `caddy:2-alpine` DNS-провайдеров не содержит — потребуется собственная
-  сборка Caddy с плагином провайдера.
-- Caddy по умолчанию не доверяет входящему `X-Forwarded-For` и ставит адрес
-  соединения. За балансировщиком это будет адрес балансировщика: объявите его
-  в глобальной опции `servers { trusted_proxies static <cidr> }`, иначе
-  сервисы увидят вместо адреса клиента адрес балансировщика (`X-Real-IP`,
-  журналы).
+- TLS challenges do not pass through a CDN; you need DNS-01, and the
+  standard `caddy:2-alpine` image contains no DNS providers, so you need a
+  custom Caddy build with your provider's plugin.
+- By default Caddy does not trust an incoming `X-Forwarded-For` and sets the
+  connection address. Behind a load balancer that is the load balancer's
+  address: declare it in the global option
+  `servers { trusted_proxies static <cidr> }`, otherwise services see the
+  load balancer's address instead of the client's (`X-Real-IP`, logs).
 
-## Закрытие служебных путей
+## Closing internal paths
 
 ### `/metrics`
 
 
-`GET /metrics` Control Plane **не аутентифицирован**. Он не раскрывает
-tenant'ов и задачи (метрики агрегатные), но раскрывает счётчики, пути и
-нагрузку. Поставляемый `deploy/caddy/Caddyfile.local` и образец из этой
-статьи его на периметр не выводят: `/metrics` нет в матчере `@cp_api`.
-Снимайте метрики изнутри сети compose (`control-plane-api:8000/metrics`) или
-с хоста:
+Control Plane `GET /metrics` is **not authenticated**. It does not reveal
+tenants and tasks (the metrics are aggregate), but it does reveal counters,
+paths, and load. The shipped `deploy/caddy/Caddyfile.local` and the template
+in this article do not expose it at the edge: `/metrics` is not in the
+`@cp_api` matcher. Scrape metrics from inside the compose network
+(`control-plane-api:8000/metrics`) or from the host:
 
 ```bash
 curl -s http://127.0.0.1:18000/metrics
 ```
 
-### Административная поверхность IAM
+### IAM administrative surface
 
-Административные операции IAM (tenants, principals, audiences, identity
-providers, выпуск и отзыв PAT, service accounts, журнал `/api/v1/events`)
-защищены только заголовком `X-IAM-Bootstrap-Token`. Отдельной
-административной роли нет, поэтому утечка или перебор токена — это захват
-всей identity. Поставляемые Caddyfile эту поверхность наружу **не публикуют**:
+IAM administrative operations (tenants, principals, audiences, identity
+providers, PAT issuance and revocation, service accounts, the
+`/api/v1/events` log) are protected only by the `X-IAM-Bootstrap-Token`
+header. There is no separate administrative role, so a leaked or
+brute-forced token means taking over the entire identity. The shipped
+Caddyfiles **do not publish** this surface:
 
-- пути `/api/v1/tenants`, `/api/v1/tenants/*` и `/api/v1/events` отвечают на
-  периметре `404`. Исключение — `federation:authenticate` и
-  `federation:exchange`: их вызывают клиенты с токеном внешнего провайдера;
-- второй рубеж — заголовок `X-IAM-Bootstrap-Token` срезается до прокси. Даже
-  запрос, обошедший матчер, до административного эндпоинта не авторизуется.
+- the paths `/api/v1/tenants`, `/api/v1/tenants/*`, and `/api/v1/events`
+  return `404` at the edge. The exceptions are `federation:authenticate` and
+  `federation:exchange`: clients call them with an external provider's
+  token;
+- the second line of defense: the `X-IAM-Bootstrap-Token` header is stripped
+  before the proxy. Even a request that bypasses the matcher is not
+  authorized at the administrative endpoint.
 
-Наружу остаётся то, что нужно клиентам: `/.well-known/jwks.json`, обмен,
-интроспекция и отзыв PAT (`/api/v1/platform-access-tokens:*`),
-`/api/v1/tokens/exchange` для service account'ов, `federation:*`, SCIM
-(`/scim/v2/*`, аутентифицируется токеном источника провижининга) и `/healthz`.
-
-
-`deploy/bootstrap.py` и служебные скрипты установки ходят в IAM по
-`127.0.0.1:${IAM_HOST_PORT:-18010}` и периметр не используют. Если внешний
-инструмент вашей установки выполняет административные операции через
-публичный адрес, переведите его на внутренний адрес или SSH-туннель — через
-периметр такие запросы больше не проходят.
+What stays exposed is what clients need: `/.well-known/jwks.json`, PAT
+exchange, introspection, and revocation (`/api/v1/platform-access-tokens:*`),
+`/api/v1/tokens/exchange` for service accounts, `federation:*`, SCIM
+(`/scim/v2/*`, authenticated by the provisioning source's token), and
+`/healthz`.
 
 
-## Изменение Caddyfile без простоя
+`deploy/bootstrap.py` and the installation's utility scripts reach IAM at
+`127.0.0.1:${IAM_HOST_PORT:-18010}` and do not use the edge. If an external
+tool in your installation performs administrative operations through the
+public address, switch it to the internal address or an SSH tunnel: such
+requests no longer pass through the edge.
+
+
+## Changing the Caddyfile without downtime
 
 ```bash
-# 1. Проверить синтаксис новой версии
+# 1. Validate the syntax of the new version
 docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile
 
-# 2. Применить
+# 2. Apply
 docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-!!! warning "Bind-mount файла держит inode"
-    Caddyfile смонтирован в контейнер как **файл**. Команды, которые
-    заменяют файл новым (`mv new Caddyfile`, многие редакторы с атомарной
-    записью, `sed -i`), создают новый inode, а контейнер продолжает видеть
-    старый — `caddy reload` перечитает прежнюю версию. Правьте файл на месте
-    (`cat new > Caddyfile`) или пересоздайте контейнер:
+!!! warning "A file bind mount holds the inode"
+    The Caddyfile is mounted into the container as a **file**. Commands that
+    replace the file with a new one (`mv new Caddyfile`, many editors with
+    atomic writes, `sed -i`) create a new inode, while the container keeps
+    seeing the old one, so `caddy reload` rereads the previous version. Edit
+    the file in place (`cat new > Caddyfile`) or recreate the container:
     `docker compose up -d --force-recreate caddy`.
 
-Проверить, что контейнер видит актуальный файл:
+Check that the container sees the current file:
 
 ```bash
-docker compose exec caddy cat /etc/caddy/Caddyfile | diff - /opt/taimen/Caddyfile && echo "совпадает"
+docker compose exec caddy cat /etc/caddy/Caddyfile | diff - /opt/taimen/Caddyfile && echo "identical"
 ```
 
-## Проверка периметра
+## Edge verification
 
 ```bash
-# Сертификат и срок
+# Certificate and expiry
 echo | openssl s_client -connect platform.example.com:443 -servername platform.example.com 2>/dev/null \
   | openssl x509 -noout -subject -enddate
 
-# Маршруты
+# Routes
 curl -fsS https://platform.example.com/health/ready
 curl -fsS https://platform.example.com/iam/healthz
 curl -fsS https://platform.example.com/iam/.well-known/jwks.json
-curl -s -o /dev/null -w '%{http_code}\n' https://platform.example.com/metrics   # не 200
+curl -s -o /dev/null -w '%{http_code}\n' https://platform.example.com/metrics   # not 200
 
-# Снаружи не должно быть ничего, кроме 80/443
+# Nothing but 80/443 should be visible from outside
 nmap -Pn -p 1-65535 platform.example.com
 ```
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Solution |
 |---|---|---|
-| Браузер получает ошибку TLS, в логах `caddy` — `challenge failed` / `429` | Имя не указывает на хост или порт 80/443 закрыт; превышены лимиты ACME | Проверить `dig`, открыть порты, убрать неготовые имена; после `429` ждать окна лимита |
-| После правки Caddyfile ничего не изменилось | Файл заменён новым inode | Записать на месте или `up -d --force-recreate caddy` |
+| The browser gets a TLS error; the `caddy` logs show `challenge failed` / `429` | The name does not point to the host or port 80/443 is closed; ACME limits exceeded | Check `dig`, open the ports, remove names that are not ready; after a `429`, wait for the limit window |
+| Nothing changed after editing the Caddyfile | The file was replaced with a new inode | Write it in place or run `up -d --force-recreate caddy` |
 
-## См. также
+## See also
 
-- [Промышленное развёртывание](deployment.md)
-- [Мониторинг и здоровье](monitoring.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
+- [Production deployment](deployment.md)
+- [Monitoring and health](monitoring.md)
+- [Services and ports](../reference/services-and-ports.md)

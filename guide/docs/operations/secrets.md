@@ -1,57 +1,61 @@
-# Секреты и ротация
 
-Где в установке Taimen лежат секреты, с какими правами, как следить за сроками
-и как менять каждый вид секрета — плановая ротация и замена при компрометации.
-Статья для инженера эксплуатации и ответственного за безопасность.
+# Secrets and rotation
 
-## Принципы
+Where secrets live in a Taimen installation, with what permissions, how to
+track expiry, and how to change each kind of secret: scheduled rotation and
+replacement after compromise. This article is for the operations engineer
+and the person responsible for security.
 
-- Секреты живут **только** в `.env` и каталоге `secrets/` клона суперпроекта
-  (оба в `.gitignore`) и в credential-файлах рабочих мест и runner-хоста.
-- Права — `0600` на файл, `0700` на каталог. Клиент `control-plane`
-  отказывается читать `~/.config/iam/credentials.json`, если файл доступен
-  кому-то кроме владельца (`iam_credentials_file_permissions`).
-- Скрипты платформы секреты не печатают: `make secrets`, `deploy/bootstrap.py`
-  пишут их сразу в файлы с `0600` и выводят только идентификаторы и
-  публичные префиксы PAT.
-- Секрет, который прошёл через чат, тикет, скриншот или историю shell,
-  считается скомпрометированным и перевыпускается.
+## Principles
 
-## Инвентарь
+- Secrets live **only** in `.env` and the `secrets/` directory of the
+  superproject clone (both in `.gitignore`) and in the credential files of
+  workstations and the runner host.
+- Permissions are `0600` for a file and `0700` for a directory. The
+  `control-plane` client refuses to read `~/.config/iam/credentials.json` if
+  the file is accessible to anyone other than its owner
+  (`iam_credentials_file_permissions`).
+- Platform scripts do not print secrets: `make secrets` and
+  `deploy/bootstrap.py` write them straight to files with `0600` and output
+  only identifiers and public PAT prefixes.
+- A secret that has passed through a chat, ticket, screenshot, or shell
+  history is considered compromised and is reissued.
 
-### Хост платформы: `.env`
+## Inventory
+
+### Platform host: `.env`
 
 
-| Переменная | Кто использует | Как заменить |
+| Variable | Who uses it | How to replace |
 |---|---|---|
-| `CP_POSTGRES_PASSWORD`, `IAM_POSTGRES_PASSWORD`, `MEMORY_POSTGRES_PASSWORD`, `NOTIFY_POSTGRES_PASSWORD` | Базы и сервисы | `ALTER ROLE` в базе, затем `.env`, затем пересоздание сервиса (см. ниже) |
-| `CP_BOOTSTRAP_TOKEN` | `POST /api/v1/bootstrap` Control Plane | `.env` и `up -d control-plane-api` |
-| `IAM_BOOTSTRAP_TOKEN` | Административные операции IAM (`X-IAM-Bootstrap-Token`) | `.env` и пересоздание `iam-service` |
-| `MEMORY_API_KEY` | Статический ключ памяти: `memory-service`, ядро до перехода на service account | `.env` и пересоздание всех потребителей |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | Root-учётка MinIO; ею пользуется только `minio-bootstrap` | См. [Хранилище объектов](object-storage.md) |
-| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | Пользователь Control Plane в хранилище объектов (только свой бакет), его заводит `minio-bootstrap` | `.env`, повторный запуск `minio-bootstrap`, затем пересоздание `control-plane-api`, `control-plane-worker`, `context-adapter`; для внешнего S3 — сначала у провайдера (см. [Хранилище объектов](object-storage.md)) |
-| `LLM_API_KEY` | Ключ OpenAI-совместимого LLM-провайдера для памяти и исполнителей | У провайдера, затем `.env` и пересоздание потребителей |
+| `CP_POSTGRES_PASSWORD`, `IAM_POSTGRES_PASSWORD`, `MEMORY_POSTGRES_PASSWORD`, `NOTIFY_POSTGRES_PASSWORD` | Databases and services | `ALTER ROLE` in the database, then `.env`, then recreate the service (see below) |
+| `CP_BOOTSTRAP_TOKEN` | Control Plane `POST /api/v1/bootstrap` | `.env` and `up -d control-plane-api` |
+| `IAM_BOOTSTRAP_TOKEN` | IAM administrative operations (`X-IAM-Bootstrap-Token`) | `.env` and recreate `iam-service` |
+| `MEMORY_API_KEY` | Static memory key: `memory-service`, the core before it switches to a service account | `.env` and recreate all consumers |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | MinIO root account; only `minio-bootstrap` uses it | See [Object storage](object-storage.md) |
+| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | The Control Plane user in object storage (its own bucket only), created by `minio-bootstrap` | `.env`, rerun `minio-bootstrap`, then recreate `control-plane-api`, `control-plane-worker`, `context-adapter`; for an external S3, change it at the provider first (see [Object storage](object-storage.md)) |
+| `LLM_API_KEY` | Key of the OpenAI-compatible LLM provider for memory and executors | At the provider, then `.env` and recreate the consumers |
 
 
-`make secrets` заполняет случайными значениями все перечисленные пароли,
-bootstrap-токены, `MEMORY_API_KEY` и ключи MinIO, если они пусты.
+`make secrets` fills all the listed passwords, bootstrap tokens,
+`MEMORY_API_KEY`, and MinIO keys with random values if they are empty.
 
-Секретов со значением по умолчанию в `compose.yml` нет: пароли БД и
-bootstrap-токены всех профилей, включая экспериментальные, объявлены
-обязательными (`${VAR:?…}`) и генерируются `make secrets`. Если ключа нет в
-`.env` (файл создан по старому `.env.example` или строка закомментирована),
-`make secrets` дописывает его.
+There are no secrets with default values in `compose.yml`: the database
+passwords and bootstrap tokens of all profiles, including experimental ones,
+are declared required (`${VAR:?…}`) and are generated by `make secrets`. If a
+key is missing from `.env` (the file was created from an old `.env.example`
+or the line is commented out), `make secrets` adds it.
 
-### Хост платформы: `secrets/`
+### Platform host: `secrets/`
 
-| Файл | Что | Кто пишет | Кто читает |
+| File | What | Who writes it | Who reads it |
 |---|---|---|---|
-| `iam-signing.pem` | Приватный ключ подписи access token (RSA 3072) | `make secrets` | `iam-service` (uid 10001, docker secret) |
-| `harness-pat` | PAT оператора (read/write/admin) | bootstrap, шаг 4 | Переносится на рабочее место оператора |
-| `control-plane-iam.env` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET` — service account ядра | bootstrap, шаг 2a | `docker compose` (`env_file` трёх процессов ядра) |
+| `iam-signing.pem` | Private access token signing key (RSA 3072) | `make secrets` | `iam-service` (uid 10001, docker secret) |
+| `harness-pat` | Operator PAT (read/write/admin) | bootstrap, step 4 | Moved to the operator's workstation |
+| `control-plane-iam.env` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET`: the core service account | bootstrap, step 2a | `docker compose` (`env_file` of the three core processes) |
 
-Права: всё — `0600`. Файлы, которые монтируются в контейнер (ключи подписи),
-на Linux должны принадлежать uid `10001`:
+Permissions: everything is `0600`. Files mounted into a container (signing
+keys) must be owned by uid `10001` on Linux:
 
 
 ```bash
@@ -59,42 +63,42 @@ sudo chown 10001:10001 secrets/iam-signing.pem
 sudo chmod 600 secrets/*.pem
 ```
 
-Ослаблять права до `644` вместо `chown` нельзя: это приватные ключи и токены.
-Env-файлы (`*.env`) читает `docker compose` на хосте, их владелец — тот, кто
-запускает compose.
+Do not relax permissions to `644` instead of using `chown`: these are
+private keys and tokens. Env files (`*.env`) are read by `docker compose` on
+the host; their owner is whoever runs compose.
 
-### Runner-хост и рабочие места
+### Runner host and workstations
 
-| Где | Секрет | Комментарий |
+| Where | Secret | Comment |
 |---|---|---|
-| Runner | PAT агента | Файл-секрет контейнера или `~/.config/iam/credentials.json` пользователя `runner` |
-| Runner | `CLAUDE_CODE_OAUTH_TOKEN` | Токен подписки кодового агента; принадлежит человеку, а не агенту. Выпускается `claude setup-token` на машине с браузером |
-| Runner | Токен forge (для push веток задач) | Минимальные права: запись только в репозитории задач, чтение соседей |
-| Оператор | `~/.config/iam/credentials.json` | JSON-объект: ключ — адрес IAM, tenant и principal через вертикальную черту, значение с полем `token`; режим `0600` |
+| Runner | Agent PAT | A container secret file or the `runner` user's `~/.config/iam/credentials.json` |
+| Runner | `CLAUDE_CODE_OAUTH_TOKEN` | The coding agent's subscription token; it belongs to a person, not to the agent. Issued with `claude setup-token` on a machine with a browser |
+| Runner | Forge token (for pushing task branches) | Minimal permissions: write only to the task repositories, read the neighbors |
+| Operator | `~/.config/iam/credentials.json` | A JSON object: the key is the IAM address, tenant, and principal separated by a vertical bar; the value has a `token` field; mode `0600` |
 
 
-## Сроки жизни credentials
+## Credential lifetimes
 
-| Credential | Срок | Параметр |
+| Credential | Lifetime | Parameter |
 |---|---|---|
-| Access token IAM | 300 с | `IAM_TOKEN_TTL_SECONDS` (по умолчанию) |
-| PAT, срок по умолчанию | 30 дней | `IAM_PAT_DEFAULT_TTL_SECONDS=2592000` |
-| PAT, максимальный срок | 365 дней | `IAM_PAT_MAX_TTL_SECONDS=31536000`; больше — `422 expiry_too_long` |
-| PAT, выпущенный `deploy/bootstrap.py` | 180 дней | Аргумент `--pat-ttl` (секунды) |
-| Свежесть входа человека для выпуска PAT | 300 с | `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` |
-| Service account (client credentials) | Без срока | Отзыв — `…/service-accounts/{client_id}:revoke` |
+| IAM access token | 300 s | `IAM_TOKEN_TTL_SECONDS` (default) |
+| PAT, default lifetime | 30 days | `IAM_PAT_DEFAULT_TTL_SECONDS=2592000` |
+| PAT, maximum lifetime | 365 days | `IAM_PAT_MAX_TTL_SECONDS=31536000`; longer gives `422 expiry_too_long` |
+| PAT issued by `deploy/bootstrap.py` | 180 days | The `--pat-ttl` argument (seconds) |
+| Freshness of a person's sign-in for PAT issuance | 300 s | `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS` |
+| Service account (client credentials) | No expiry | Revocation: `…/service-accounts/{client_id}:revoke` |
 
-Параметры IAM в `compose.yml` не пробрасываются: чтобы изменить значения по
-умолчанию, добавьте их в `environment` сервиса `iam-service` через
+IAM parameters are not passed through in `compose.yml`: to change the
+defaults, add them to the `environment` of the `iam-service` service via
 `compose.override.yml`.
 
-!!! danger "Ротация не продлевает PAT"
-    `POST …/platform-access-tokens/{id}:rotate` меняет только секрет: новый
-    токен наследует audiences, потолок scope и **`expiresAt`**
-    предшественника. Это инструмент для утечки, а не для продления. Чтобы
-    продлить доступ, выпускается **новый** PAT, а старый отзывается.
+!!! danger "Rotation does not extend a PAT"
+    `POST …/platform-access-tokens/{id}:rotate` changes only the secret: the
+    new token inherits the predecessor's audiences, scope ceiling, and
+    **`expiresAt`**. It is a tool for leaks, not for extension. To extend
+    access, issue a **new** PAT and revoke the old one.
 
-### Как следить за сроками
+### How to track expiry
 
 ```bash
 source <(grep -E '^(IAM_BOOTSTRAP_TOKEN|IAM_TENANT_ID)=' .env)
@@ -103,13 +107,14 @@ curl -s "http://127.0.0.1:18010/api/v1/tenants/$IAM_TENANT_ID/platform-access-to
   | python3 -c 'import json,sys; [print(t["expiresAt"][:10], t["publicPrefix"], t["name"]) for t in sorted(json.load(sys.stdin), key=lambda t: t["expiresAt"])]'
 ```
 
-Ответ содержит только активные токены (`includeRevoked=true` — вместе с
-отозванными), с полями `publicPrefix`, `name`, `principalId`, `expiresAt`,
-`lastUsedAt`. Заведите напоминание за две недели до ближайшего `expiresAt`.
+The response contains only active tokens (`includeRevoked=true` includes
+revoked ones), with the fields `publicPrefix`, `name`, `principalId`,
+`expiresAt`, `lastUsedAt`. Set a reminder two weeks before the nearest
+`expiresAt`.
 
-## Процедуры
+## Procedures
 
-Во всех примерах ниже переменные окружения:
+All examples below use these environment variables:
 
 ```bash
 IAM=http://127.0.0.1:18010
@@ -117,41 +122,43 @@ T=<tenant-id>                       # IAM tenant
 H="X-IAM-Bootstrap-Token: $IAM_BOOTSTRAP_TOKEN"
 ```
 
-### Перевыпуск PAT агента (плановый)
+### Reissuing an agent PAT (scheduled)
 
-У агента (principal вида `agent`) нет человеческого входа, свежий
-authentication context для него не требуется.
+An agent (a principal of kind `agent`) has no human sign-in, so it does not
+need a fresh authentication context.
 
 ```bash
-# 1. Новый PAT; Idempotency-Key обязателен (без него — 400 idempotency_key_required)
+# 1. New PAT; Idempotency-Key is required (without it: 400 idempotency_key_required)
 curl -s -X POST "$IAM/api/v1/tenants/$T/principals/<agent-principal-id>/platform-access-tokens" \
   -H "$H" -H "Content-Type: application/json" -H "Idempotency-Key: $(uuidgen)" \
   -d '{"name": "runner-2026-q3", "audiences": ["control-plane"],
        "scopeCeiling": ["control-plane:read", "control-plane:write"],
        "expiresInSeconds": 15552000}' > /tmp/pat.json
-# поле token — секрет, показывается ровно один раз
+# the token field is a secret and is shown exactly once
 ```
 
-2. Установите токен на runner-хост (файл-секрет контейнера или
-   `credentials.json` пользователя `runner`, `0600`), удалите `/tmp/pat.json`.
-3. Перезапустите исполнителя и убедитесь, что он получил задачу или хотя бы
-   открыл сессию (в логах нет `invalid_token`).
-4. Отзовите прежний PAT:
+2. Install the token on the runner host (a container secret file or the
+   `runner` user's `credentials.json`, `0600`), and delete `/tmp/pat.json`.
+3. Restart the executor and make sure it claimed a task or at least opened a
+   session (no `invalid_token` in the logs).
+4. Revoke the previous PAT:
 
 ```bash
 curl -s -X POST "$IAM/api/v1/tenants/$T/platform-access-tokens/<old-credential-id>:revoke?reason=superseded" \
   -H "$H"          # 204
 ```
 
-`scopeCeiling` должен быть подмножеством `allowedScopes` указанных audiences,
-иначе `422 invalid_scope_ceiling`. PAT выпускается только principal вида
-`human` или `agent`; для `service_account` — `422 principal_kind_not_allowed`
-(у сервисов свой поток client credentials).
+`scopeCeiling` must be a subset of the `allowedScopes` of the specified
+audiences; otherwise you get `422 invalid_scope_ceiling`. A PAT is issued
+only to a principal of kind `human` or `agent`; for `service_account` you
+get `422 principal_kind_not_allowed` (services have their own client
+credentials flow).
 
-### Перевыпуск PAT человека
+### Reissuing a person's PAT
 
-Человеку IAM выпускает PAT только при свежем (не старше 300 с) authentication
-context. Запись контекста и выпуск выполняются одна за другой:
+IAM issues a PAT to a person only with a fresh (no older than 300 s)
+authentication context. Recording the context and issuing the token run one
+right after the other:
 
 ```bash
 curl -s -X POST "$IAM/api/v1/tenants/$T/principals/<human-principal-id>/authentication-contexts" \
@@ -165,43 +172,45 @@ curl -s -X POST "$IAM/api/v1/tenants/$T/principals/<human-principal-id>/platform
        "expiresInSeconds": 15552000}'
 ```
 
-Если между вызовами прошло больше 300 с — `403 authentication_context_expired`;
-если контекста нет вовсе — `403 authentication_context_required`.
-`deploy/bootstrap.py` делает то же самое для оператора, если файла
-`secrets/harness-pat` нет: удалите (переименуйте) файл и запустите bootstrap
-повторно, затем отзовите прежний PAT.
+If more than 300 s pass between the calls, you get
+`403 authentication_context_expired`; if there is no context at all,
+`403 authentication_context_required`. `deploy/bootstrap.py` does the same
+for the operator if the `secrets/harness-pat` file does not exist: delete
+(rename) the file and run bootstrap again, then revoke the previous PAT.
 
-### Замена PAT при утечке
+### Replacing a leaked PAT
 
-1. **Немедленно перекройте доступ в Control Plane**: отзовите binding
-   identity. Это закрывает вход сразу, не дожидаясь истечения уже выданных
-   access token (до 300 с):
+1. **Cut off access in Control Plane immediately**: revoke the identity
+   binding. This closes access at once, without waiting for already issued
+   access tokens to expire (up to 300 s):
 
     ```bash
     curl -s -X POST https://platform.example.com/api/v1/iam-bindings/<binding-id>:revoke \
       -H "Authorization: Bearer <admin access token>"
     ```
 
-2. Отзовите PAT в IAM (`:revoke`) — либо владелец отзывает свой токен сам,
-   без bootstrap-полномочий:
+2. Revoke the PAT in IAM (`:revoke`), or the owner revokes their own token
+   without bootstrap authority:
 
     ```bash
     curl -s -X POST "$IAM/api/v1/platform-access-tokens:revoke-self" \
       -H "Content-Type: application/json" -d '{"token": "<leaked PAT>", "reason": "leaked"}'
     ```
 
-3. Выпустите новый PAT (процедуры выше), восстановите binding повторным
-   `POST /api/v1/principals/<principal-id>/iam-bindings` с теми же правами.
-4. Проверьте audit IAM и журнал Control Plane за период утечки.
+3. Issue a new PAT (procedures above) and restore the binding with another
+   `POST /api/v1/principals/<principal-id>/iam-bindings` with the same
+   permissions.
+4. Review the IAM audit and the Control Plane log for the period of the leak.
 
-Подробный сценарий — в [Аварийных процедурах](emergency.md).
+The detailed scenario is in [Emergency procedures](emergency.md).
 
-### Ротация секрета service account
+### Rotating a service account secret
 
 
-Service accounts ядра и сервисов платформы (например,
-`notification-iam.env`) перевыпускает bootstrap: если env-файла нет, он
-выпускает новый service account, пишет файл и **отзывает прежний**.
+Service accounts of the core and platform services (for example,
+`notification-iam.env`) are reissued by bootstrap: if the env file does not
+exist, it issues a new service account, writes the file, and **revokes the
+previous one**.
 
 ```bash
 mv secrets/control-plane-iam.env secrets/control-plane-iam.env.old
@@ -211,76 +220,79 @@ shred -u secrets/control-plane-iam.env.old
 ```
 
 
-### Ротация ключа подписи IAM
+### Rotating the IAM signing key
 
-IAM публикует в `/.well-known/jwks.json` **один** ключ — текущий. Сервисы
-проверяют подпись по JWKS с кэшем и обновляют его при встрече неизвестного
-`kid`.
+IAM publishes **one** key in `/.well-known/jwks.json`: the current one.
+Services verify signatures against JWKS with a cache and refresh it when
+they encounter an unknown `kid`.
 
-1. Сгенерируйте новый ключ и дайте ему новый `kid`:
+1. Generate a new key and give it a new `kid`:
 
     ```bash
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out secrets/iam-signing.new.pem
     sudo chown 10001:10001 secrets/iam-signing.new.pem && chmod 600 secrets/iam-signing.new.pem
     ```
 
-2. В `.env`: `IAM_SIGNING_KEY_FILE=./secrets/iam-signing.new.pem`,
-   `IAM_SIGNING_KEY_ID=<новый kid>`.
+2. In `.env`: `IAM_SIGNING_KEY_FILE=./secrets/iam-signing.new.pem`,
+   `IAM_SIGNING_KEY_ID=<new kid>`.
 3. `docker compose up -d iam-service`.
-4. Проверьте `curl -s $IAM/.well-known/jwks.json` — новый `kid`.
+4. Check `curl -s $IAM/.well-known/jwks.json`: it shows the new `kid`.
 
-Что происходит: PAT и секреты service accounts от ключа подписи не зависят и
-остаются действительными. Access token, подписанные старым ключом (живут
-до 300 с), перестают проходить проверку, как только сервис обновит JWKS;
-клиенты получают `401` и заново обменивают PAT. Выполняйте ротацию в период
-низкой активности. Старый файл ключа храните до конца окна как точку отката.
+What happens: PATs and service account secrets do not depend on the signing
+key and stay valid. Access tokens signed with the old key (they live up to
+300 s) stop passing verification as soon as a service refreshes JWKS;
+clients get `401` and exchange the PAT again. Rotate during a period of low
+activity. Keep the old key file until the end of the window as a rollback
+point.
 
-!!! danger "Компрометация ключа подписи"
-    Утечка `iam-signing.pem` позволяет подделать access token любого
-    principal. Ротируйте ключ немедленно и перезапустите сервисы,
-    проверяющие токены (`control-plane-api`, `memory-service` и другие),
-    чтобы они сбросили кэш JWKS со старым ключом.
+!!! danger "Signing key compromise"
+    A leak of `iam-signing.pem` lets an attacker forge an access token for
+    any principal. Rotate the key immediately and restart the services that
+    verify tokens (`control-plane-api`, `memory-service`, and others) so
+    they drop the JWKS cache with the old key.
 
-### Пароли баз данных
+### Database passwords
 
-`POSTGRES_PASSWORD` применяется образом PostgreSQL только при инициализации
-пустого тома. Изменение `.env` на существующей базе пароль **не меняет** —
-сервис просто перестанет подключаться. Порядок:
+The PostgreSQL image applies `POSTGRES_PASSWORD` only when it initializes an
+empty volume. Changing `.env` on an existing database does **not** change
+the password; the service simply stops connecting. The order:
 
 ```bash
-# 1. Сменить пароль роли в базе
+# 1. Change the role password in the database
 docker compose exec control-plane-db psql -U control_plane -d control_plane \
-  -c "ALTER ROLE control_plane PASSWORD '<новый пароль>'"
-# 2. Записать тот же пароль в .env (CP_POSTGRES_PASSWORD)
-# 3. Пересоздать потребителей
+  -c "ALTER ROLE control_plane PASSWORD '<new password>'"
+# 2. Write the same password to .env (CP_POSTGRES_PASSWORD)
+# 3. Recreate the consumers
 docker compose up -d control-plane-api control-plane-worker context-adapter
 ```
 
 
-### Токен подписки кодового агента и токен forge
+### Coding agent subscription token and forge token
 
-- Токен подписки выпускается человеком на машине с браузером
-  (`claude setup-token`), на runner-хосте войти интерактивно нельзя.
-  Замена: новый токен → файл-секрет или env-файл исполнителя → перезапуск.
-- Отзыв токена подписки выполняется на стороне поставщика. После отзыва
-  исполнитель продолжает брать задачи и валить их — остановите его.
-- Токен forge заменяется так же; проверка — успешная публикация ветки
-  следующей задачи (в артефакте `commit` поле `published: true`).
+- A person issues the subscription token on a machine with a browser
+  (`claude setup-token`); you cannot sign in interactively on the runner
+  host. Replacement: new token → the executor's secret file or env file →
+  restart.
+- The subscription token is revoked on the provider's side. After
+  revocation the executor keeps claiming tasks and failing them, so stop it.
+- The forge token is replaced the same way; to verify, check that the next
+  task's branch is published successfully (the `commit` artifact has
+  `published: true`).
 
-## Рекомендуемый календарь
+## Recommended schedule
 
-| Периодичность | Действие |
+| Frequency | Action |
 |---|---|
-| Еженедельно | Список PAT с `expiresAt` ближе 30 дней |
-| За 2 недели до истечения | Перевыпуск PAT исполнителей и операторов |
-| Раз в квартал | Ротация `MEMORY_API_KEY`, ключа LLM-провайдера, секретов service accounts |
-| Раз в год | Ротация ключа подписи IAM и паролей БД |
-| Сразу | Любой секрет, прошедший через переписку или логи |
+| Weekly | List PATs with `expiresAt` within 30 days |
+| 2 weeks before expiry | Reissue the PATs of executors and operators |
+| Quarterly | Rotate `MEMORY_API_KEY`, the LLM provider key, service account secrets |
+| Yearly | Rotate the IAM signing key and database passwords |
+| Immediately | Any secret that has passed through correspondence or logs |
 
-## См. также
+## See also
 
-- [Credentials и PAT](../iam/credentials.md)
-- [Токены, audiences, scopes](../iam/tokens.md)
+- [Credentials and PATs](../iam/credentials.md)
+- [Tokens, audiences, scopes](../iam/tokens.md)
 - [Service accounts](../iam/service-accounts.md)
-- [Аварийные процедуры](emergency.md)
-- [Аутентификация и доступ — диагностика](../troubleshooting/auth.md)
+- [Emergency procedures](emergency.md)
+- [Authentication and access: troubleshooting](../troubleshooting/auth.md)

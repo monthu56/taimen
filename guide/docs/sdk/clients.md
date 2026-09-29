@@ -1,32 +1,32 @@
-# Клиенты сервисов
 
-Канонические Python-клиенты платформы: `control-plane-client` для Control
-Plane и `platform-memory-client` для memory-service. Статья описывает
-подключение, разрешение credential, обмен PAT на access token, повторы и
-идемпотентность, обработку ошибок и типовые сценарии. Для разработчиков
-исполнителей, коннекторов, демо и вертикальных пакетов.
+# Service clients
 
-!!! tip "Не пишите свой клиент"
-    Логика обмена токенов, повторов под тем же `Idempotency-Key` и разбора
-    конверта ошибок уже есть в каноне (TAI-ADR-0030). Если чего-то не хватает,
-    добавьте метод в клиент рядом с сервером, а не обёртку «по памяти о
-    контракте» в своём репозитории.
+The platform's canonical Python clients: `control-plane-client` for Control Plane and
+`platform-memory-client` for memory-service. The article covers connecting, credential
+resolution, PAT-to-access-token exchange, retries and idempotency, error handling, and
+typical scenarios. For developers of executors, connectors, demos, and vertical packages.
+
+!!! tip "Do not write your own client"
+    The logic of token exchange, retries under the same `Idempotency-Key`, and parsing the
+    error envelope already exists in the canonical implementation (TAI-ADR-0030). If
+    something is missing, add a method to the client next to the server, not a wrapper "from
+    memory of the contract" in your own repository.
 
 ## control-plane-client {#control-plane-client}
 
 | | |
 |---|---|
-| Пакет | `control_plane_client` (дистрибутив `control-plane-client`) |
-| Где лежит | `control-plane/client` |
-| Зависимости | только `httpx` |
-| Протокол | `control-harness/2`; базовый путь `{server}/api/v1` |
+| Package | `control_plane_client` (distribution `control-plane-client`) |
+| Location | `control-plane/client` |
+| Dependencies | `httpx` only |
+| Protocol | `control-harness/2`; base path `{server}/api/v1` |
 
 ```toml
 [tool.uv.sources]
 control-plane-client = { path = "../control-plane/client", editable = true }
 ```
 
-### Быстрый старт
+### Quick start
 
 ```python
 from control_plane_client import ControlPlaneClient, IamCredential
@@ -41,37 +41,36 @@ credential = IamCredential(
 async with ControlPlaneClient("https://platform.example.com", credential,
                               user_agent="acme-connector/0.1") as cp:
     ctx = await cp.get_context()
-    task = await cp.create_task(...)       # Idempotency-Key генерируется сам
+    task = await cp.create_task(...)       # the Idempotency-Key is generated automatically
 ```
 
-Второй аргумент `ControlPlaneClient` — строка (статический API-ключ) или
-`CredentialProvider` (объект с `token()`, `refresh()`, `refreshable`).
-`user_agent` ставится перед токеном SDK: `acme-connector/0.1 control-plane-client/<версия>`.
+The second argument of `ControlPlaneClient` is a string (a static API key) or a
+`CredentialProvider` (an object with `token()`, `refresh()`, `refreshable`). `user_agent` is
+placed before the SDK token: `acme-connector/0.1 control-plane-client/<version>`.
 
-### Credential: откуда берётся PAT
+### Credential: where the PAT comes from
 
-Control Plane **не принимает PAT как Bearer**: PAT предъявляется только IAM,
-а сервис получает короткоживущий access token своего audience.
-`IamCredential` делает обмен
-`POST {iam}/api/v1/platform-access-tokens:exchange` с телом
-`{token, audience, scopes}`, кэширует токен и обменивает заново за
-`refresh_margin_seconds` (по умолчанию 30 с) до истечения.
+Control Plane **does not accept a PAT as a Bearer**: a PAT is presented only to IAM, and the
+service receives a short-lived access token for its audience. `IamCredential` performs the
+exchange `POST {iam}/api/v1/platform-access-tokens:exchange` with the body
+`{token, audience, scopes}`, caches the token, and exchanges again
+`refresh_margin_seconds` (30 s by default) before expiry.
 
-Порядок поиска PAT:
+PAT lookup order:
 
-| Источник | Когда используется |
+| Source | When it is used |
 |---|---|
-| аргумент `platform_access_token=` (строка или callable) | явная передача; callable читается при **каждом** обмене — ротация файла подхватывается без перезапуска; локальное хранилище не читается, tenant может быть пустым |
-| `IAM_PLATFORM_ACCESS_TOKEN` | только вместе с `IAM_CREDENTIAL_MODE=environment` (или `ci`); без режима — ошибка `iam_environment_mode_required` |
-| Keychain macOS | если не отключён `IAM_NO_KEYCHAIN=1` |
-| файл `~/.config/iam/credentials.json` | учитывается `XDG_CONFIG_HOME` |
+| the `platform_access_token=` argument (a string or a callable) | explicit passing; a callable is read on **every** exchange — file rotation is picked up without a restart; the local store is not read, the tenant can be empty |
+| `IAM_PLATFORM_ACCESS_TOKEN` | only together with `IAM_CREDENTIAL_MODE=environment` (or `ci`); without the mode — error `iam_environment_mode_required` |
+| macOS Keychain | unless disabled with `IAM_NO_KEYCHAIN=1` |
+| the file `~/.config/iam/credentials.json` | `XDG_CONFIG_HOME` is respected |
 
-Запись в локальном хранилище адресуется тройкой `issuer|tenant|principal`.
-Если на машине несколько credential одного tenant'а (несколько
-исполнителей), процесс обязан назвать себя переменной `IAM_PRINCIPAL`; иначе
-— отказ `iam_credential_ambiguous`, а не работа под чужой identity.
+An entry in the local store is addressed by the triple `issuer|tenant|principal`. If the
+machine has several credentials of one tenant (several executors), the process must name
+itself with the `IAM_PRINCIPAL` variable; otherwise it gets the refusal
+`iam_credential_ambiguous` instead of working under someone else's identity.
 
-Процесс в контейнере с PAT в файле:
+A process in a container with the PAT in a file:
 
 ```python
 from pathlib import Path
@@ -86,64 +85,62 @@ credential = IamCredential(
 )
 ```
 
-Одному процессу нужны два сервиса — два `IamCredential` над одним PAT с
-разными `audience` (правило «один токен — один audience»).
+If one process needs two services, use two `IamCredential` objects over one PAT with
+different `audience` values (the "one token — one audience" rule).
 
-### Конфигурация из окружения
+### Configuration from the environment
 
-`resolve_credential(server_url)` выбирает credential харнесса: сначала IAM,
-затем API-ключ.
+`resolve_credential(server_url)` chooses the harness credential: IAM first, then an API key.
 
-| Переменная | Смысл |
+| Variable | Meaning |
 |---|---|
-| `CONTROL_PLANE_IAM_URL` | адрес IAM; без него IAM-режим не включается |
-| `CONTROL_PLANE_IAM_TENANT` | tenant IAM; URL без tenant'а — ошибка конфигурации, а не молчаливый откат |
-| `CONTROL_PLANE_IAM_AUDIENCE` | audience, по умолчанию `control-plane` |
-| `CONTROL_PLANE_IAM_SCOPES` | scopes через пробел или запятую, например `"control-plane:read control-plane:write"` |
-| `IAM_PRINCIPAL` | какой principal этот процесс, если на машине их несколько |
-| `CONTROL_PLANE_API_KEY` | legacy API-ключ (только если IAM не настроен) |
+| `CONTROL_PLANE_IAM_URL` | IAM address; IAM mode is not turned on without it |
+| `CONTROL_PLANE_IAM_TENANT` | IAM tenant; a URL without a tenant is a configuration error, not a silent fallback |
+| `CONTROL_PLANE_IAM_AUDIENCE` | audience, default `control-plane` |
+| `CONTROL_PLANE_IAM_SCOPES` | scopes separated by spaces or commas, for example `"control-plane:read control-plane:write"` |
+| `IAM_PRINCIPAL` | which principal this process is, if the machine has several |
+| `CONTROL_PLANE_API_KEY` | legacy API key (only if IAM is not configured) |
 
-Значения со пробелами в env-файлах, которые читает shell (`source`),
-заключайте в кавычки.
+Quote values with spaces in env files that a shell reads (`source`).
 
-### Команды, повторы и идемпотентность
+### Commands, retries, and idempotency
 
-| Свойство | Поведение |
+| Property | Behavior |
 |---|---|
-| Создающие и action-команды (`create_task`, `claim_task`, `start_run`, `succeed_run`, `fail_run`, `create_artifact`, `request_approval`, …) | клиент ставит `Idempotency-Key` и повторяет запрос при **транспортном** сбое (всего до 3 попыток, паузы 0,5 с и 1 с) **тем же ключом** — повтор HTTP-запроса никогда не становится второй бизнес-командой |
-| Свой ключ | `idempotency_key=` у `create_task`, `succeed_run`, `fail_run`, `create_artifact`, `request_approval` — для потребителей, которые повторяют команду по своему состоянию |
-| 401 при refreshable credential | один переобмен и один повтор с тем же ключом; второй 401 — настоящий отказ |
-| Оптимистичная блокировка | `update_task(..., expected_version=)`, `complete_task(..., version=)` отправляют `If-Match: "task-<version>"` |
-| Чтения | без повторов |
+| Creating and action commands (`create_task`, `claim_task`, `start_run`, `succeed_run`, `fail_run`, `create_artifact`, `request_approval`, …) | the client sets an `Idempotency-Key` and retries the request on a **transport** failure (up to 3 attempts in total, pauses of 0.5 s and 1 s) **with the same key** — a retried HTTP request never becomes a second business command |
+| Your own key | `idempotency_key=` on `create_task`, `succeed_run`, `fail_run`, `create_artifact`, `request_approval` — for consumers that retry a command based on their own state |
+| 401 with a refreshable credential | one re-exchange and one retry with the same key; a second 401 is a real refusal |
+| Optimistic locking | `update_task(..., expected_version=)`, `complete_task(..., version=)` send `If-Match: "task-<version>"` |
+| Reads | no retries |
 
-### Ошибки
+### Errors
 
-Ответы Control Plane приходят в конверте
-`{"error": {"code", "message", "details", "requestId"}}` и превращаются в
-исключения по коду, а при незнакомом коде — по статусу:
+Control Plane responses arrive in the envelope
+`{"error": {"code", "message", "details", "requestId"}}` and are turned into exceptions by
+code, and for an unknown code — by status:
 
-| Исключение | Коды / статус | Что делать |
+| Exception | Codes / status | What to do |
 |---|---|---|
-| `AuthenticationError` | `invalid_credentials`, 401 | проверить PAT, binding |
-| `PermissionDeniedError` | `permission_denied`, 403 | не хватает права в binding'е |
-| `NotEligibleError` | `not_eligible` | нет роли/capability для задачи |
+| `AuthenticationError` | `invalid_credentials`, 401 | check the PAT and the binding |
+| `PermissionDeniedError` | `permission_denied`, 403 | a permission is missing in the binding |
+| `NotEligibleError` | `not_eligible` | no role/capability for the task |
 | `NotFoundError` | `not_found`, 404 | — |
-| `ValidationError` | 422, 428, `unsupported_protocol_version` | исправить запрос |
-| `StaleClaimError` | `stale_claim` | **прекратить запись**: владение задачей потеряно |
-| `ClaimConflictError` | `task_already_claimed`, `task_claimed`, `claim_conflict`, … | задача занята |
-| `VersionConflictError` | `version_conflict` | перечитать задачу, повторить с новой версией |
-| `IdempotencyConflictError` | `idempotency_key_reused`, `idempotency_in_flight` | ключ использован с другим телом или команда ещё выполняется |
-| `SessionExpiredError` | `session_expired`, `session_not_active` | открыть новую сессию |
-| `ApprovalRequiredError`, `TaskNotReadyError`, `BudgetExceededError`, `SkillUnavailableError`, `RunNotActiveError`, `CancelledError` | одноимённые коды | см. [Исполнение — claims и runs](../control-plane/execution.md) |
-| `TransportError` | ответа нет | повторить позже |
-| `IamCredentialError` | `iam_unreachable`, `iam_invalid_token`, `iam_audience_not_allowed`, `iam_exchange_failed`, `iam_not_authenticated`, `iam_credential_ambiguous` | проблема обмена в IAM |
+| `ValidationError` | 422, 428, `unsupported_protocol_version` | fix the request |
+| `StaleClaimError` | `stale_claim` | **stop writing**: ownership of the task is lost |
+| `ClaimConflictError` | `task_already_claimed`, `task_claimed`, `claim_conflict`, … | the task is taken |
+| `VersionConflictError` | `version_conflict` | re-read the task, retry with the new version |
+| `IdempotencyConflictError` | `idempotency_key_reused`, `idempotency_in_flight` | the key was used with a different body, or the command is still running |
+| `SessionExpiredError` | `session_expired`, `session_not_active` | open a new session |
+| `ApprovalRequiredError`, `TaskNotReadyError`, `BudgetExceededError`, `SkillUnavailableError`, `RunNotActiveError`, `CancelledError` | codes of the same name | see [Execution — claims and runs](../control-plane/execution.md) |
+| `TransportError` | no response | retry later |
+| `IamCredentialError` | `iam_unreachable`, `iam_invalid_token`, `iam_audience_not_allowed`, `iam_exchange_failed`, `iam_not_authenticated`, `iam_credential_ambiguous` | an exchange problem in IAM |
 
-Все исключения наследуют `ControlPlaneError` (`code`, `message`, `status`,
-`details`).
+All exceptions inherit from `ControlPlaneError` (`code`, `message`, `status`, `details`).
 
-### Аренды: `HeartbeatRunner`
+### Leases: `HeartbeatRunner`
 
-Сессия и claim — аренды с TTL. `HeartbeatRunner` продлевает их в фоне:
+The session and the claim are leases with a TTL. `HeartbeatRunner` renews them in the
+background:
 
 ```python
 from control_plane_client import HeartbeatRunner
@@ -152,63 +149,62 @@ runner = HeartbeatRunner(cp, session_id=session["id"], claim_id=claim["id"],
                          interval_seconds=60, max_transport_failures=3)
 runner.start()
 try:
-    # … в цикле работы:
+    # … in the work loop:
     if runner.error is not None:
-        ...  # владение потеряно — прекратить авторитетные записи
+        ...  # ownership lost — stop authoritative writes
 finally:
     await runner.stop()
 ```
 
-Доменная ошибка (аренда истекла, владение потеряно) терминальна и
-сохраняется в `error`; транспортная ошибка повторяется на следующем тике и
-становится терминальной только после `max_transport_failures` подряд.
+A domain error (the lease expired, ownership lost) is terminal and is stored in `error`; a
+transport error is retried on the next tick and becomes terminal only after
+`max_transport_failures` in a row.
 
-### Привязка каталога к проекту
+### Binding a directory to a project
 
-`find_project_config()` ищет вверх от текущего каталога
-`.control-plane/config.json` — несекретную привязку рабочей копии к серверу,
-tenant'у, workspace, проекту и репозиторию; `write_project_config()` её
-записывает. Секретов в этом файле нет, его можно коммитить.
+`find_project_config()` searches upward from the current directory for
+`.control-plane/config.json` — a non-secret binding of the working copy to a server, tenant,
+workspace, project, and repository; `write_project_config()` writes it. The file contains no
+secrets, and you can commit it.
 
-### Группы методов
+### Method groups
 
-| Группа | Методы (выборочно) |
+| Group | Methods (selection) |
 |---|---|
-| контекст и сессии | `get_context`, `open_session`, `heartbeat_session`, `close_session` |
-| работа | `list_available_work`, `list_tasks`, `get_task`, `get_task_transitions`, `get_claimability` |
-| задачи | `create_task`, `update_task`, `complete_task`, `add_task_relation`, `add_task_comment`, `edit_task_comment` |
-| цели | `create_goal`, `list_goals`, `get_goal`, `update_goal`, `list_goal_work` |
-| claims и runs | `claim_task`, `heartbeat_claim`, `release_claim`, `start_run`, `succeed_run`, `fail_run`, `suspend_run`, `prepare_handoff`, `continue_after_handoff`, `launch_child_run` |
-| трасса | `create_checkpoint`, `record_action`, `finish_action` |
-| артефакты | `create_artifact`, `get_artifact`, `list_artifacts` |
+| context and sessions | `get_context`, `open_session`, `heartbeat_session`, `close_session` |
+| work | `list_available_work`, `list_tasks`, `get_task`, `get_task_transitions`, `get_claimability` |
+| tasks | `create_task`, `update_task`, `complete_task`, `add_task_relation`, `add_task_comment`, `edit_task_comment` |
+| goals | `create_goal`, `list_goals`, `get_goal`, `update_goal`, `list_goal_work` |
+| claims and runs | `claim_task`, `heartbeat_claim`, `release_claim`, `start_run`, `succeed_run`, `fail_run`, `suspend_run`, `prepare_handoff`, `continue_after_handoff`, `launch_child_run` |
+| trace | `create_checkpoint`, `record_action`, `finish_action` |
+| artifacts | `create_artifact`, `get_artifact`, `list_artifacts` |
 | approvals | `request_approval`, `list_approvals`, `approve`, `reject`, `get_approval_outcome` |
-| инструменты | `search_tools`, `describe_tool`, `get_harness_manifest` |
+| tools | `search_tools`, `describe_tool`, `get_harness_manifest` |
 
-Полный контракт — OpenAPI Control Plane (`/openapi.json`, см.
-[API Control Plane](../control-plane/api.md)).
+The full contract is the Control Plane OpenAPI (`/openapi.json`, see
+[Control Plane API](../control-plane/api.md)).
 
 ## platform-memory-client {#memory-client}
 
 | | |
 |---|---|
-| Пакет | `platform_memory_client` (дистрибутив `platform-memory-client`) |
-| Где лежит | `memory-service/client` |
-| Зависимости | `httpx`, `pydantic` (движок памяти не подтягивается) |
-| Классы | `MemoryClient` (синхронный), `AsyncMemoryClient` (asyncio) |
+| Package | `platform_memory_client` (distribution `platform-memory-client`) |
+| Location | `memory-service/client` |
+| Dependencies | `httpx`, `pydantic` (the memory engine is not pulled in) |
+| Classes | `MemoryClient` (synchronous), `AsyncMemoryClient` (asyncio) |
 
-!!! note "Кто ходит в память напрямую"
-    Исполнители получают контекст задачи через Control Plane (контекст
-    харнесса и run'а), а не из памяти напрямую — см.
-    [Контекст задачи и память](../control-plane/context.md). Клиент памяти
-    нужен сервисам с собственным грантом на namespace: коннекторам загрузки
-    знаний, демо, сервисам пакетов.
+!!! note "Who accesses memory directly"
+    Executors get the task context through Control Plane (the harness and run context), not
+    from memory directly — see [Task context and memory](../control-plane/context.md). The
+    memory client is for services with their own grant on a namespace: knowledge ingestion
+    connectors, demos, package services.
 
 ### Credential
 
-Bearer — статический ключ-грант на namespace или access token IAM audience
-`memory-service`. Параметр `token` принимает строку или callable
-(вызывается перед каждым запросом); асинхронный клиент — ещё и объект с
-`async token()`, то есть `IamCredential` подключается напрямую:
+The Bearer is a static key grant on a namespace or an IAM access token for the
+`memory-service` audience. The `token` parameter accepts a string or a callable (called
+before every request); the asynchronous client also accepts an object with
+`async token()`, so `IamCredential` plugs in directly:
 
 ```python
 from control_plane_client.iam import IamCredential
@@ -221,42 +217,41 @@ cred = IamCredential(
     platform_access_token=lambda: pat,
 )
 async with AsyncMemoryClient("http://memory-service:8077", token=cred) as mem:
-    result = await mem.query("как получить пропуск для посетителя?", namespaces=["kb"])
+    result = await mem.query("how do I get a visitor pass?", namespaces=["kb"])
 ```
 
-### Методы
+### Methods
 
-| Метод | Путь | Назначение |
+| Method | Path | Purpose |
 |---|---|---|
-| `healthz()` | `GET /healthz` | живость и статистика графа |
-| `recall(query, budget=, hops=, namespaces=, …)` | `POST /recall` | поиск с раскрытием связей |
-| `search(...)` | `POST /search` | гибридный поиск |
-| `query(question, k=8, hops=1, synthesize=, namespaces=, …)` | `POST /api/brain/query` | ответ с источниками (опционально — синтез LLM) |
-| `retain(content, type=, external_id=, title=, links=, provenance=, run_id=, namespace=)` | `POST /retain` | идемпотентная запись факта или решения |
-| `audit(...)` | `POST /audit` | аудит записей |
-| `retain_document(...)`, `delete_document(key)` | `/api/brain/documents` | загрузка и удаление документа |
-| `nodes(...)`, `node(key)`, `source(key)`, `delete_node(key)` | `/api/brain/nodes`, `/api/brain/sources` | узлы графа и источники |
-| `observe(...)`, `observe_batch(...)` | `POST /api/memory/observations` | наблюдения |
-| `context(request, namespaces=, run_id=, …)` | `POST /api/memory/context` | собрать ограниченный ContextPack без синтеза |
-| `register_package`, `packages`, `package` | `/api/memory/packages` | доменные пакеты видов (scope `memory:service`) |
-| `namespace_kinds`, `set_namespace_kinds` | `/api/memory/namespaces/{ns}/kinds` | виды namespace |
-| `reconcile(...)`, `typed_context(...)` | `/api/memory/reconcile`, `/api/memory/context/typed` | сверка и типизированный контекст |
+| `healthz()` | `GET /healthz` | liveness and graph statistics |
+| `recall(query, budget=, hops=, namespaces=, …)` | `POST /recall` | search with link expansion |
+| `search(...)` | `POST /search` | hybrid search |
+| `query(question, k=8, hops=1, synthesize=, namespaces=, …)` | `POST /api/brain/query` | answer with sources (optionally LLM synthesis) |
+| `retain(content, type=, external_id=, title=, links=, provenance=, run_id=, namespace=)` | `POST /retain` | idempotent write of a fact or a decision |
+| `audit(...)` | `POST /audit` | audit of records |
+| `retain_document(...)`, `delete_document(key)` | `/api/brain/documents` | upload and delete a document |
+| `nodes(...)`, `node(key)`, `source(key)`, `delete_node(key)` | `/api/brain/nodes`, `/api/brain/sources` | graph nodes and sources |
+| `observe(...)`, `observe_batch(...)` | `POST /api/memory/observations` | observations |
+| `context(request, namespaces=, run_id=, …)` | `POST /api/memory/context` | assemble a bounded ContextPack without synthesis |
+| `register_package`, `packages`, `package` | `/api/memory/packages` | domain kind packages (scope `memory:service`) |
+| `namespace_kinds`, `set_namespace_kinds` | `/api/memory/namespaces/{ns}/kinds` | namespace kinds |
+| `reconcile(...)`, `typed_context(...)` | `/api/memory/reconcile`, `/api/memory/context/typed` | reconciliation and typed context |
 
-Параметры `allowed_namespaces` / `allowed_scopes` у чтений сужают видимость:
-для обычного вызывающего они пересекаются с тем, что сервер и так
-разрешает, и никогда не расширяют её; пустой список не видит ничего.
-`run_id` передаётся заголовком `X-Run-Id` для корреляции.
+The `allowed_namespaces` / `allowed_scopes` parameters of reads narrow visibility: for a
+regular caller they are intersected with what the server already allows and never widen it;
+an empty list sees nothing. `run_id` is passed in the `X-Run-Id` header for correlation.
 
-### Ошибки
+### Errors
 
-| Исключение | Когда |
+| Exception | When |
 |---|---|
-| `MemoryServiceError` | ответ 4xx/5xx; поля `status_code`, `detail`; свойства `unavailable` (5xx) и `not_found` |
-| `MemoryTransportError` | ответа нет (`status_code == 0`) |
+| `MemoryServiceError` | a 4xx/5xx response; fields `status_code`, `detail`; properties `unavailable` (5xx) and `not_found` |
+| `MemoryTransportError` | no response (`status_code == 0`) |
 
-Подробно о контракте памяти — [API памяти](../memory/api.md).
+Details of the memory contract: [Memory API](../memory/api.md).
 
-## Сценарий: коннектор, который заводит задачи
+## Scenario: a connector that creates tasks
 
 ```python
 import asyncio
@@ -274,8 +269,8 @@ async def main() -> None:
         for item in await fetch_new_items():
             try:
                 await cp.create_task(
-                    ...,                                 # поля задачи по OpenAPI
-                    idempotency_key=f"acme:{item.id}",   # повтор не создаст дубль
+                    ...,                                 # task fields per OpenAPI
+                    idempotency_key=f"acme:{item.id}",   # a retry does not create a duplicate
                 )
             except ConflictError:
                 continue
@@ -283,14 +278,14 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Principal коннектора — вида `agent` или `service` с IAM-binding'ом в Control
-Plane (права `tasks.read`, `tasks.write`, при необходимости `events.read`),
-PAT — в файле с правами `0600`.
+The connector principal is of kind `agent` or `service` with an IAM binding in Control Plane
+(permissions `tasks.read`, `tasks.write`, and `events.read` if needed); the PAT is in a file
+with permissions `0600`.
 
-## См. также
+## See also
 
-- [SDK и интеграции](index.md)
+- [SDK and integrations](index.md)
 - [platform-auth-sdk](platform-auth-sdk.md)
-- [Харнесс-протокол](../control-plane/harness-protocol.md)
-- [Credentials и PAT](../iam/credentials.md)
-- [API памяти](../memory/api.md)
+- [Harness protocol](../control-plane/harness-protocol.md)
+- [Credentials and PAT](../iam/credentials.md)
+- [Memory API](../memory/api.md)

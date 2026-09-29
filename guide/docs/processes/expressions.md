@@ -1,70 +1,74 @@
-# Выражения
 
-Все выражения языка процессов — условия, ключи, вычисляемые поля, сроки,
-назначения, входы таблиц решений, якоря памяти — пишутся на одном языке:
-CEL (Common Expression Language) в профиле платформы. Статья для авторов
-процессов: переменные, типы, функции календаря, ограничения и перевод
-прежних синтаксисов. Обоснование — CP-ADR-0075.
+# Expressions
 
-## Профиль `cp/1`
+All expressions in the process language (conditions, keys, computed fields,
+deadlines, assignments, decision table inputs, memory anchors) are written
+in one language: CEL (Common Expression Language) in the platform profile.
+This article is for process authors: variables, types, calendar functions,
+restrictions, and translation of earlier syntaxes. Rationale: CP-ADR-0075.
 
-Профиль — это окружение (переменные и их типы), набор функций, запреты и
-лимиты. Ядро записывает имя профиля в версию определения
-(`expressionProfile`). Новая функция, не меняющая прежних значений,
-остаётся в `cp/1`; изменение смысла — новый профиль, и определение на
-`cp/1` вычисляется по `cp/1`, пока живы его экземпляры.
+## The `cp/1` profile
 
-!!! note "Одно имя профиля"
-    В описаниях схемы каталога профиль может называться по имени продукта с
-    тем же номером `/1` — это тот же профиль. Пакеты имя профиля не хранят.
+A profile is an environment (variables and their types), a set of
+functions, prohibitions, and limits. The core records the profile name in
+the definition version (`expressionProfile`). A new function that does not
+change earlier values stays in `cp/1`; a change in meaning is a new
+profile, and a definition on `cp/1` is evaluated by `cp/1` for as long as
+its instances are alive.
 
-Где встречаются выражения:
+!!! note "One profile name"
+    In catalog schema descriptions, the profile may be named after the
+    product with the same `/1` number; it is the same profile. Packages do
+    not store the profile name.
 
-| Место | Что даёт выражение |
+Where expressions appear:
+
+| Place | What the expression produces |
 |---|---|
-| `when`, `entry`, `exit`, вехи, `where` триггера | `bool` |
-| `start.key`, `correlate[].key` | ключ экземпляра |
-| `set`, `output.as`, `export.as`, `start.set`, `correlate[].set` | значение поля данных |
-| `input.from`, `call.input`, `decide.input` | вход шага |
-| `due.at`, `timeout.at`, `wait.at`, `at` таймеров, `after` эскалаций | `timestamp` или `duration` |
-| `assign[].expr`, `approvers[].expr` | id principal'а, `agent:<ключ>` или `role:<slug>` |
-| `separationOfDuties` | список principal'ов |
-| `title`, `raise.detail`, `suspend.reason` | строка |
-| входы таблиц решений (`inputs[].expr`) | значение входа |
-| `memory`, якоря `recall` и `context`, `remember` | ключи и значения для базы знаний |
+| `when`, `entry`, `exit`, milestones, trigger `where` | `bool` |
+| `start.key`, `correlate[].key` | instance key |
+| `set`, `output.as`, `export.as`, `start.set`, `correlate[].set` | data field value |
+| `input.from`, `call.input`, `decide.input` | step input |
+| `due.at`, `timeout.at`, `wait.at`, timer `at`, escalation `after` | `timestamp` or `duration` |
+| `assign[].expr`, `approvers[].expr` | a principal id, `agent:<key>`, or `role:<slug>` |
+| `separationOfDuties` | a list of principals |
+| `title`, `raise.detail`, `suspend.reason` | string |
+| decision table inputs (`inputs[].expr`) | input value |
+| `memory`, `recall` and `context` anchors, `remember` | keys and values for the knowledge base |
 
-В YAML выражение — строка. Строковый литерал внутри выражения берётся в
-одинарные кавычки: `"'invoice:' + data.number"`.
+In YAML an expression is a string. A string literal inside an expression is
+enclosed in single quotes: `"'invoice:' + data.number"`.
 
-## Переменные
+## Variables
 
-| Переменная | Что | Тип |
+| Variable | What | Type |
 |---|---|---|
-| `data` | данные экземпляра | из JSON Schema `spec.data` |
-| `event` | событие входа: `id`, `type`, `time`, `entityType`, `entityId`, `actorId`, `correlationId`, `payload` | `payload` — из каталога событий для `event:` или `map(string, dyn)` |
-| `step` | результат шага: `id`, `skill`, `status`, `result`, `error.code`, `error.message`; в блоке — последний завершённый шаг потока, в `output.as` — сам шаг | выход скилла по его схеме, форма задачи, выходы таблицы, ответ `recall` |
-| `task` | задача шага: `id`, `publicId`, `typeKey`, `title`, `status`, `assigneeId`, `customFields`, `artifacts`… | `customFields` — по `fieldSchema` типа задачи |
-| `stage` | `stage.<id>.completed`, `stage.<id>.active` (или `stage["<id>"]`) | `bool` |
-| `instance` | `id`, `key`, `version`, `startedAt`, `clock` | `clock` — время текущего входа |
+| `data` | instance data | from the JSON Schema `spec.data` |
+| `event` | the input event: `id`, `type`, `time`, `entityType`, `entityId`, `actorId`, `correlationId`, `payload` | `payload` comes from the event catalog for `event:` or is `map(string, dyn)` |
+| `step` | step result: `id`, `skill`, `status`, `result`, `error.code`, `error.message`; in a block, the last completed step of the flow; in `output.as`, the step itself | the skill output per its schema, the task form, table outputs, the `recall` response |
+| `task` | the step's task: `id`, `publicId`, `typeKey`, `title`, `status`, `assigneeId`, `customFields`, `artifacts`… | `customFields` follows the task type's `fieldSchema` |
+| `stage` | `stage.<id>.completed`, `stage.<id>.active` (or `stage["<id>"]`) | `bool` |
+| `instance` | `id`, `key`, `version`, `startedAt`, `clock` | `clock` is the time of the current input |
 
-Кроме переменных профиля, по месту видны привязки: `milestone.<id>` (вехи
-стадий), имя ошибки из `try.catch[].as` в её обработчике и `compensated`
-(компенсируемый шаг) внутри `onCompensate`.
+Besides the profile variables, local bindings are visible where they apply:
+`milestone.<id>` (stage milestones), the error name from `try.catch[].as` in
+its handler, and `compensated` (the step being compensated) inside
+`onCompensate`.
 
-`step.result` зависит от вида шага:
+`step.result` depends on the kind of step:
 
-| Шаг | `step.result` |
+| Step | `step.result` |
 |---|---|
-| `human` | поля формы шага (или `fieldSchema` типа задачи) |
+| `human` | the step's form fields (or the task type's `fieldSchema`) |
 | `approve` | `{outcome, approvedBy, rejectedBy}` |
-| `call` скилла | выход скилла по его схеме |
-| `decide` | выходы строки таблицы; у `collect` — `{items: [...]}` |
+| skill `call` | the skill output per its schema |
+| `decide` | the outputs of the table row; for `collect`, `{items: [...]}` |
 | `recall` | `{nodes, edges, truncated}` |
 | `listen` | `{option, event}` |
 
-## Типы из схемы данных { #types }
+## Types from the data schema { #types }
 
-Типы выражений выводятся из JSON Schema данных процесса:
+Expression types are derived from the process's data JSON Schema:
 
 | JSON Schema | CEL |
 |---|---|
@@ -72,102 +76,103 @@ CEL (Common Expression Language) в профиле платформы. Стат�
 | `integer` | `int` |
 | `number` | `double` |
 | `boolean` | `bool` |
-| `array` | `list(T)`; отсутствующий массив — пустой список |
-| `object` с `properties` | запись с объявленными полями — обращение к необъявленному полю — **ошибка при публикации** |
-| `object` без `properties` | `map(string, dyn)` |
+| `array` | `list(T)`; a missing array is an empty list |
+| `object` with `properties` | a record with the declared fields; accessing an undeclared field is an **error at publication** |
+| `object` without `properties` | `map(string, dyn)` |
 | `format: date-time` | `timestamp` |
 | `format: duration` | `duration` |
-| `oneOf`, `$ref`, смесь типов | `dyn` — проверяется при вычислении |
+| `oneOf`, `$ref`, mixed types | `dyn`, checked at evaluation |
 
-Отсутствующее или `null` скалярное поле читается как `null` и падает при
-использовании. Для необязательных полей:
+A missing or `null` scalar field reads as `null` and fails when used. For
+optional fields:
 
 ```text
-has(data.review)                         // есть ли поле
-data.?review.orValue('')                 // значение или '' — результат не должен остаться optional
+has(data.review)                         // whether the field is present
+data.?review.orValue('')                 // the value or '' — the result must not remain optional
 data.?approval.orValue('') == 'approved'
 ```
 
-Незаданное поле времени без `has()` или `.?` — ошибка вычисления: иначе оно
-читалось бы как 1970 год.
+An unset time field without `has()` or `.?` is an evaluation error;
+otherwise it would read as the year 1970.
 
-## Функции
+## Functions
 
-### Календарь { #calendar }
+### Calendar { #calendar }
 
-| Функция | Что возвращает |
+| Function | What it returns |
 |---|---|
-| `cal.addWorkdays(ts, n)` | `n`-й рабочий день после дня `ts` (при `n < 0` — до него); сам день `ts` не считается, `n = 0` — тот же момент; время суток сохраняется в поясе календаря |
-| `cal.isWorkday(ts)` | рабочий ли день `ts` |
-| `cal.workdaysBetween(a, b)` | число рабочих дней в `(a, b]`, при `b < a` — со знаком минус |
+| `cal.addWorkdays(ts, n)` | the `n`-th workday after the day of `ts` (with `n < 0`, before it); the day of `ts` itself is not counted, `n = 0` returns the same moment; the time of day is preserved in the calendar's time zone |
+| `cal.isWorkday(ts)` | whether `ts` falls on a workday |
+| `cal.workdaysBetween(a, b)` | the number of workdays in `(a, b]`; negative when `b < a` |
 
-Последний аргумент — ключ календаря (`cal.addWorkdays(ts, -3, 'ru')`). Его
-можно опустить, если у процесса есть `spec.calendar`; без календаря
-процесса короткая форма — ошибка типа при публикации.
+The last argument is the calendar key (`cal.addWorkdays(ts, -3, 'ru')`). You
+can omit it if the process has `spec.calendar`; without a process calendar,
+the short form is a type error at publication.
 
-- День рабочий, если он в `workdays` года; иначе — если он не в `holidays` и
-  не выходной день недели. Для года, которого в календаре нет, известны
-  только выходные дни недели.
-- Вычисление, которое задело предварительный год (`provisional: true`) или
-  год вне календаря, помечается «предварительно».
+- A day is a workday if it is in the year's `workdays`; otherwise, if it is
+  not in `holidays` and is not a weekend day of the week. For a year that is
+  not in the calendar, only the weekend days of the week are known.
+- An evaluation that touched a provisional year (`provisional: true`) or a
+  year outside the calendar is marked "provisional".
 
 ```yaml
-due: {at: "cal.addWorkdays(data.submissionEnd, -3)"}   # за три рабочих дня до даты
+due: {at: "cal.addWorkdays(data.submissionEnd, -3)"}   # three workdays before the date
 when: cal.workdaysBetween(instance.clock, data.submissionEnd) < 3
 ```
 
-### Время и длительности
+### Time and durations
 
-- `duration("P3D")` принимает литерал ISO 8601 (недели, дни, часы, минуты,
-  секунды; годы и месяцы — ошибка типа) и форму CEL (`duration("72h")`).
-  Строка ISO, вычисленная во время работы, не разбирается — длительности
-  данных типизируются схемой (`format: duration`).
-- `timestamp("2026-10-19T09:00:00+03:00")` — RFC 3339.
-- Арифметика: `data.submissionEnd - duration("72h")`,
+- `duration("P3D")` accepts an ISO 8601 literal (weeks, days, hours,
+  minutes, seconds; years and months are a type error) and the CEL form
+  (`duration("72h")`). An ISO string computed at run time is not parsed;
+  durations in data are typed by the schema (`format: duration`).
+- `timestamp("2026-10-19T09:00:00+03:00")` is RFC 3339.
+- Arithmetic: `data.submissionEnd - duration("72h")`,
   `instance.clock < data.submissionEnd`.
 
-### Строки, списки, макросы
+### Strings, lists, macros
 
-- Строки: `lowerAscii`, `split`, `join`, `replace`, `substring` и другие
-  функции расширения `strings`.
-- Списки: `size`, `in`, `slice`, `flatten`, `sort`, `distinct`.
-- Макросы: `all`, `exists`, `map`, `filter`:
+- Strings: `lowerAscii`, `split`, `join`, `replace`, `substring`, and other
+  functions of the `strings` extension.
+- Lists: `size`, `in`, `slice`, `flatten`, `sort`, `distinct`.
+- Macros: `all`, `exists`, `map`, `filter`:
   `size(data.history.filter(n, n.kind == 'lesson')) > 0`.
-- Необязательные значения: `.?поле`, `orValue(…)`.
-- `cel.bind(имя, значение, выражение)` — локальное имя.
+- Optional values: `.?field`, `orValue(…)`.
+- `cel.bind(name, value, expression)` binds a local name.
 
-## Чего нет
+## What is not available
 
-- **Текущего времени.** Функции `now()` нет, её вызов — ошибка типа с
-  подсказкой. Время входит в выражение только как `instance.clock` и
-  `event.time` — их задаёт вход движка. Поэтому одно выражение на одних
-  входах даёт одно значение в живом прогоне, тесте и replay.
-- **Случайности, ввода-вывода, обращений к памяти и каталогу.** База знаний
-  попадает в выражения только через записанный ответ `recall`, календарь —
-  версией, записанной в журнале.
-- **Побочных эффектов.** Запись в данные — только `set` и `output.as`.
-- **Шаблонов `{{…}}`.** Они остаются у правил вывода работы и правил
-  уведомлений; в процессах их нет.
+- **The current time.** There is no `now()` function; calling it is a type
+  error with a hint. Time enters an expression only as `instance.clock` and
+  `event.time`, which the engine input sets. So one expression on the same
+  inputs yields one value in a live run, a test, and a replay.
+- **Randomness, I/O, access to memory and the catalog.** The knowledge base
+  enters expressions only through a recorded `recall` response, and the
+  calendar through the version recorded in the log.
+- **Side effects.** Writing to data happens only through `set` and
+  `output.as`.
+- **`{{…}}` templates.** They remain in work rules and notification rules;
+  processes do not have them.
 
-## Лимиты
+## Limits
 
-| Лимит | Значение | Когда проверяется |
+| Limit | Value | When it is checked |
 |---|---|---|
-| длина выражения | 4000 символов | схема каталога |
-| глубина дерева выражения | 32 | при публикации (`expression_too_complex`) |
-| вложенность итерирующих макросов | 3 | при публикации (`expression_too_complex`) |
-| стоимость вычисления | 10 000 единиц | перед вычислением, по размерам входов (`expression_cost_exceeded`) |
+| expression length | 4000 characters | catalog schema |
+| expression tree depth | 32 | at publication (`expression_too_complex`) |
+| nesting of iterating macros | 3 | at publication (`expression_too_complex`) |
+| evaluation cost | 10,000 units | before evaluation, from input sizes (`expression_cost_exceeded`) |
 
-Стоимость оценивается сверху до вычисления: шаг на сегмент пути, вызов
-функции, итерации макросов по размеру списка. Выше лимита вычисление не
-запускается: шаг получает ошибку `expression_cost_exceeded`, её ловит `try`,
-иначе экземпляр переходит в `failed` с понятной причиной — процесс не
-зависает молча.
+Cost is estimated from above before evaluation: a step per path segment, a
+function call, macro iterations by list size. Above the limit the
+evaluation does not start: the step gets an `expression_cost_exceeded`
+error, which `try` can catch; otherwise the instance moves to `failed` with
+a clear reason, so the process never hangs silently.
 
-## Ошибки
+## Errors
 
-Ошибки разбора приходят находками проверки с местом в файле и позицией в
-выражении:
+Parse errors arrive as check findings with the location in the file and the
+position in the expression:
 
 ```json
 {"code": "expression_type_error", "severity": "error",
@@ -176,69 +181,69 @@ when: cal.workdaysBetween(instance.clock, data.submissionEnd) < 3
  "hint": "data.procurement has submissionDeadline"}
 ```
 
-| Код | Когда |
+| Code | When |
 |---|---|
-| `expression_syntax_error` | синтаксис |
-| `expression_type_error` | тип: неизвестное поле, `now()`, не тот тип результата по месту (ждали `bool`, `timestamp` или `duration`, список) |
-| `expression_too_complex` | глубина или вложенность макросов |
-| `expression_error` | при вычислении: `null`, отсутствующее поле, нет календаря |
-| `expression_cost_exceeded` | превышен лимит стоимости |
+| `expression_syntax_error` | syntax |
+| `expression_type_error` | type: an unknown field, `now()`, the wrong result type for the place (expected `bool`, `timestamp` or `duration`, a list) |
+| `expression_too_complex` | depth or macro nesting |
+| `expression_error` | at evaluation: `null`, a missing field, no calendar |
+| `expression_cost_exceeded` | the cost limit was exceeded |
 
-## Частые ошибки
+## Common mistakes
 
-| Ошибка | Правильно |
+| Mistake | Correct |
 |---|---|
-| `title: 'Счёт ' + data.number` — YAML съел кавычки, CEL видит `Счёт` без кавычек | `title: "'Счёт ' + data.number"` |
-| `when: data.note != ''` на необязательном поле | `when: data.?note.orValue('') != ''` |
-| `due: {at: "now() + duration('P1D')"}` | `due: P1D` или `{at: "cal.addWorkdays(instance.clock, 1)"}` |
-| `set: {total: data.amount * 1.2}` при `amount: {type: integer}` | в CEL `int` и `double` не смешиваются: `double(data.amount) * 1.2` |
-| `data.?approval` в конце выражения | результат не может остаться optional: `data.?approval.orValue('')` |
-| сторож стадии читает результат шага | сторожа стадий и вехи читают `data`, `stage` и `milestone`: запишите результат шага в данные через `output.as` |
-| булево значение строкой `set: {done: "yes"}` | `set: {done: "true"}` — строка YAML с выражением `true` |
+| `title: 'Invoice ' + data.number`: YAML consumed the quotes, and CEL sees `Invoice` without quotes | `title: "'Invoice ' + data.number"` |
+| `when: data.note != ''` on an optional field | `when: data.?note.orValue('') != ''` |
+| `due: {at: "now() + duration('P1D')"}` | `due: P1D` or `{at: "cal.addWorkdays(instance.clock, 1)"}` |
+| `set: {total: data.amount * 1.2}` with `amount: {type: integer}` | CEL does not mix `int` and `double`: `double(data.amount) * 1.2` |
+| `data.?approval` at the end of an expression | the result cannot remain optional: `data.?approval.orValue('')` |
+| a stage guard reads a step result | stage guards and milestones read `data`, `stage`, and `milestone`: write the step result into data with `output.as` |
+| a boolean as a string, `set: {done: "yes"}` | `set: {done: "true"}`, a YAML string with the expression `true` |
 
-## Перевод прежних синтаксисов
+## Translating earlier syntaxes
 
-Правила вывода работы, исходы approval, входы исполнения типов задач и
-профиль контекста исторически используют свои синтаксисы путей. Они
-продолжают работать, пока пакеты не переведены, а для перевода есть
-команда:
+Work rules, approval outcomes, task type execution inputs, and the context
+profile historically use their own path syntaxes. They keep working until
+the packages are translated, and there is a command for the translation:
 
 ```bash
-python3 tools/cp_packages.py migrate-expr --package packages/<пакет>          # diff, ничего не пишет
-python3 tools/cp_packages.py migrate-expr --package packages/<пакет> --write  # записать
+python3 tools/cp_packages.py migrate-expr --package packages/<package>          # diff, writes nothing
+python3 tools/cp_packages.py migrate-expr --package packages/<package> --write  # write
 ```
 
-- Команда печатает diff по файлам; `--write` записывает с сохранением файла
-  (комментарии, порядок ключей и стиль остаются).
-- Выражения ищет и переводит ядро: нужен control-plane с профилем CEL в
-  `PYTHONPATH` (или интерпретатор его uv-окружения).
-- Процессы и календари уже на CEL и командой не трогаются.
-- То, что не переводится, печатается с причиной и остаётся как было; если
-  перевод читает переменные сверх профиля (например `spawnedBy`), это тоже
-  печатается.
+- The command prints a diff per file; `--write` writes the changes while
+  preserving the file (comments, key order, and style remain).
+- The core finds and translates the expressions: you need control-plane with
+  the CEL profile on `PYTHONPATH` (or the interpreter of its uv environment).
+- Processes and calendars are already in CEL, and the command does not touch
+  them.
+- Anything that cannot be translated is printed with a reason and stays as
+  it was; if a translation reads variables beyond the profile (for example,
+  `spawnedBy`), that is printed too.
 
-| Прежнее | CEL |
+| Earlier | CEL |
 |---|---|
 | `{"var": "payload.data.repo"}` | `event.payload.?data.?repo.orValue(null)` |
 | `{"exists": "payload.data.url"}` | `event.payload.?data.?url.orValue(null) != null` |
 | `{"lt": [{"var": "x"}, 3]}` | `x != null && x < 3` |
 | `$.task.customFields.branch` | `task.customFields.?branch.orValue(null)` |
-| `$.task.customFields.branch!` | `task.customFields.branch` (нет поля — ошибка) |
+| `$.task.customFields.branch!` | `task.customFields.branch` (a missing field is an error) |
 | `$.task.artifact[commit].metadata.sha` | `task.artifacts.?commit.?metadata.?sha.orValue(null)` |
 | `$.invocation.output.x` | `step.result.?x.orValue(null)` |
-| шаблон `"Merge $.task.publicId!: $.task.title"` | конкатенация; отсутствующее — `""` |
+| template `"Merge $.task.publicId!: $.task.title"` | concatenation; a missing value becomes `""` |
 | `execution.inputs: $.customFields.url` | `task.customFields.?url.orValue(null)` |
 | `from: "$.customFields.okpdCodes"` | `task.customFields.?okpdCodes.orValue(null)` |
 
-!!! warning "Где перевод расходится с прежним вычислением"
-    `0` в `when` прежде считался невыполненным условием, в CEL — выполненным;
-    нестроковое значение в шаблоне печатается `true`, а не `True`;
-    обязательное `!` на поле с пустой строкой прежде давало отказ, в CEL —
-    `""`. Проверьте такие места после перевода.
+!!! warning "Where the translation differs from the earlier evaluation"
+    `0` in `when` used to count as an unmet condition; in CEL it counts as
+    met. A non-string value in a template prints as `true`, not `True`. A
+    required `!` on a field with an empty string used to cause a refusal; in
+    CEL it yields `""`. Check such places after the translation.
 
-## См. также
+## See also
 
-- [Процессы](index.md)
-- [Тесты пакета](package-tests.md)
-- [Схема языка процессов](../reference/process-schema.md#schema-cel)
-- [Правила вывода работы](../control-plane/work-rules.md)
+- [Processes](index.md)
+- [Package tests](package-tests.md)
+- [Process language schema](../reference/process-schema.md#schema-cel)
+- [Work rules](../control-plane/work-rules.md)

@@ -1,98 +1,99 @@
-# Модель работы
 
-Статья описывает, как в Control Plane организована работа: tenant, иерархия
-workspaces, проекты с шаблонами и конфигурацией, задачи (work items) с
-полями, датами, требованиями и связями, а также выборки задач с фильтрами и
-сортировкой. Она нужна всем, кто заводит структуру платформы или
-интегрирует внешние системы с задачами ядра.
+# Work model
 
-## Иерархия сущностей
+This article describes how work is organized in Control Plane: the tenant, the
+workspace hierarchy, projects with templates and configuration, tasks (work items) with
+fields, dates, requirements, and relations, and task queries with filters and
+sorting. It is for anyone who sets up the platform structure or
+integrates external systems with core tasks.
+
+## Entity hierarchy
 
 ```text
 Tenant
-└── Workspace (дерево; slug уникален среди соседей)
-    ├── Project Profile (0..1 на workspace)
-    ├── Principals (члены, роли, capabilities, skills)
+└── Workspace (tree; slug is unique among siblings)
+    ├── Project Profile (0..1 per workspace)
+    ├── Principals (members, roles, capabilities, skills)
     ├── Goals
     └── Tasks
-         ├── тип (Task type, закреплённая версия)
-         ├── статус = ключ + системная категория
-         ├── custom fields, плановые даты
+         ├── type (Task type, pinned version)
+         ├── status = key + system category
+         ├── custom fields, planned dates
          ├── requirements (roles / capabilities / skills)
          ├── relations (parent | blocks | depends_on | spawned_by | related_to)
-         ├── comments (с историей правок)
+         ├── comments (with edit history)
          ├── claims → runs → checkpoints, actions, artifacts
          └── approvals
 ```
 
-Дерево **одно**: `Workspace` — единственная иерархия, а проект — это профиль,
-привязанный к workspace отношением один-к-одному. Принадлежность задачи
-проекту не хранится, а вычисляется из дерева при чтении.
+There is **one** tree: `Workspace` is the only hierarchy, and a project is a profile
+bound to a workspace one-to-one. A task's membership in a
+project is not stored; it is computed from the tree on read.
 
 ## Tenant
 
-Tenant — граница изоляции данных. Любая сущность принадлежит ровно одному
-tenant'у; составные внешние ключи вида `(tenant_id, …)` делают
-межтенантные ссылки невозможными на уровне базы, а обращение к чужому
-объекту отвечает `404` — так же, как к несуществующему.
+A tenant is the data isolation boundary. Every entity belongs to exactly one
+tenant; composite foreign keys of the form `(tenant_id, …)` make
+cross-tenant references impossible at the database level, and accessing another tenant's
+object returns `404` — the same as for a nonexistent one.
 
-Tenant создаётся одноразовым вызовом `POST /api/v1/bootstrap`, защищённым
-токеном `CP_BOOTSTRAP_TOKEN`: он заводит tenant, первого principal-администратора
-и его credential, а также системные справочники (системный тип задачи `task`,
-системный тип workspace `generic`). Повторный вызов даёт
-`409 already_bootstrapped`. Обычно bootstrap выполняет скрипт развёртывания —
-см. [Bootstrap](../getting-started/bootstrap.md).
+A tenant is created by a one-time call to `POST /api/v1/bootstrap`, protected by
+the `CP_BOOTSTRAP_TOKEN` token: it creates the tenant, the first administrator principal
+and its credential, as well as the system reference data (the system task type `task`,
+the system workspace type `generic`). A repeated call returns
+`409 already_bootstrapped`. Bootstrap is usually performed by the deployment script —
+see [Bootstrap](../getting-started/bootstrap.md).
 
 ## Workspaces
 
-Workspace — узел дерева, в котором живут задачи, цели, члены и роли.
+A workspace is a tree node where tasks, goals, members, and roles live.
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `slug` | `^[a-z0-9][a-z0-9-]*$`, 2–63 символа, уникален среди детей одного родителя |
-| `name`, `description` | Отображаемые имя и описание |
-| `parentId` | Родитель; `null` — корень |
-| `typeId` / `typeKey` | Тип узла; не указан — системный тип tenant'а |
-| `customFields` | Поля, проверяемые по `fieldSchema` типа |
-| `status` | `active` или `archived` |
+| `slug` | `^[a-z0-9][a-z0-9-]*$`, 2–63 characters, unique among the children of one parent |
+| `name`, `description` | Display name and description |
+| `parentId` | Parent; `null` is a root |
+| `typeId` / `typeKey` | Node type; if omitted, the tenant's system type |
+| `customFields` | Fields validated against the type's `fieldSchema` |
+| `status` | `active` or `archived` |
 
-Операции:
+Operations:
 
 ```bash
-# Создать workspace
+# Create a workspace
 curl -s -X POST "$CP/workspaces" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"slug": "platform", "name": "Platform team", "typeKey": "team"}'
 
-# Дерево целиком (один рекурсивный запрос)
+# The whole tree (one recursive query)
 curl -s "$CP/workspaces/tree?includeProjects=true" -H "Authorization: Bearer $TOKEN"
 
-# Переместить под другого родителя (циклы запрещены)
+# Move under another parent (cycles are forbidden)
 curl -s -X POST "$CP/workspaces/<workspace-id>:move" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"newParentId": "<parent-id>"}'
 ```
 
-- `PATCH /workspaces/{id}` требует `If-Match: "workspace-<version>"`.
-- `:archive` требует отсутствия активных детей
-  (`422 workspace_has_active_children`); в архивном workspace нельзя
-  создавать задачи (`422 workspace_archived`).
-- `:move` в собственное поддерево отклоняется (`422 workspace_cycle`) и
-  перепроверяет governance перемещаемого поддерева
-  (`422 governance_weakened`, откат целиком).
-- Члены: `POST /workspaces/{id}/members`, `GET …/members`,
+- `PATCH /workspaces/{id}` requires `If-Match: "workspace-<version>"`.
+- `:archive` requires that there are no active children
+  (`422 workspace_has_active_children`); you cannot create tasks in an archived
+  workspace (`422 workspace_archived`).
+- `:move` into its own subtree is rejected (`422 workspace_cycle`) and
+  re-checks the governance of the moved subtree
+  (`422 governance_weakened`, full rollback).
+- Members: `POST /workspaces/{id}/members`, `GET …/members`,
   `POST …/members/{principalId}:remove`.
 
-Права: `workspaces.read` на чтение, `workspaces.manage` на изменения.
+Permissions: `workspaces.read` for reading, `workspaces.manage` for changes.
 
-### Типы workspaces
+### Workspace types
 
-Workspace Type — справочник tenant'а: `key`, `displayName`, `fieldSchema`
-(JSON Schema 2020-12 для `customFields` узла) и `allowedChildTypes` —
-какие типы допустимы детьми. У каждого tenant'а есть системный тип `generic`,
-разрешающий любых детей. Правило «родитель — ребёнок» проверяется при
-создании, перемещении и смене типа под тем же per-tenant lock, что и прочие
-структурные мутации.
+Workspace Type is tenant reference data: `key`, `displayName`, `fieldSchema`
+(JSON Schema 2020-12 for the node's `customFields`), and `allowedChildTypes` —
+which types are allowed as children. Every tenant has the system type `generic`,
+which allows any children. The parent–child rule is checked on
+creation, move, and type change under the same per-tenant lock as other
+structural mutations.
 
 ```bash
 curl -s -X POST "$CP/workspace-types" \
@@ -104,90 +105,90 @@ curl -s -X POST "$CP/workspace-types" \
   }'
 ```
 
-`POST /workspace-types/{id}:archive` отклоняется, пока тип используется
+`POST /workspace-types/{id}:archive` is rejected while the type is in use
 (`422 workspace_type_in_use`).
 
-## Проекты
+## Projects
 
-Проект — это **профиль** (`project_profiles`), привязанный к workspace.
-Родитель проекта не хранится: это ближайший предок-workspace, у которого
-тоже есть профиль.
+A project is a **profile** (`project_profiles`) bound to a workspace.
+A project's parent is not stored: it is the nearest ancestor workspace that
+also has a profile.
 
 ```text
 Tenant
 └── Workspace (portfolio)
-    ├── Workspace (project)  + Project Profile     ← проект A
-    │   ├── Workspace (workstream)                 ← принадлежит A
-    │   └── Workspace (project) + Project Profile  ← проект B, вложен в A
+    ├── Workspace (project)  + Project Profile     ← project A
+    │   ├── Workspace (workstream)                 ← belongs to A
+    │   └── Workspace (project) + Project Profile  ← project B, nested in A
     └── Workspace (team)
 ```
 
-### Шаблоны проектов
+### Project templates
 
-Project Template версионируется и **неизменяем**: `POST /project-templates`
-создаёт следующую версию ключа, а триггер базы разрешает единственную
-мутацию — `active → deprecated`. Проект ссылается на точную версию, поэтому
-его поля и статус всегда проверяются по той схеме, под которой были записаны.
+A Project Template is versioned and **immutable**: `POST /project-templates`
+creates the next version of the key, and a database trigger allows a single
+mutation — `active → deprecated`. A project references an exact version, so
+its fields and status are always validated against the schema they were written under.
 
-Шаблон несёт `fieldSchema`, `lifecycleSchema`, `defaultConfig`,
-`defaultViews`, `governanceSchema` и `memoryDefaults`.
+A template carries `fieldSchema`, `lifecycleSchema`, `defaultConfig`,
+`defaultViews`, `governanceSchema`, and `memoryDefaults`.
 
-### Lifecycle проекта
+### Project lifecycle
 
-Статусы пользовательские, решения системные: каждый статус шаблона
-отображается в одну из пяти категорий — `planned`, `active`, `paused`,
-`terminal_success`, `terminal_cancelled`. Ядро ветвится только по категории.
-Смена статуса — `POST /projects/{id}:transition` с `If-Match` и только по
-объявленному ребру; событие `project.status_changed`.
+Statuses are user-defined, decisions are system-defined: each template status
+maps to one of five categories — `planned`, `active`, `paused`,
+`terminal_success`, `terminal_cancelled`. The core branches only on the category.
+A status change is `POST /projects/{id}:transition` with `If-Match`, and only along a
+declared edge; the event is `project.status_changed`.
 
-!!! note "Категории проекта и задачи различаются"
-    У проекта есть `paused`, у задачи — `blocked` и `backlog`. Это разные
-    словари поверх одного механизма разбора lifecycle; подробнее о задачах —
-    в [Типах задач и статусах](task-types.md).
+!!! note "Project and task categories differ"
+    A project has `paused`, a task has `blocked` and `backlog`. These are different
+    vocabularies on top of the same lifecycle parsing mechanism; for more on tasks,
+    see [Task types and statuses](task-types.md).
 
-### Конфигурация проекта
+### Project configuration
 
-- `POST /projects/{id}/config-revisions` добавляет ревизию (append-only) и
-  **не** активирует её.
-- `POST /projects/{id}/config-revisions/{n}:activate` с `If-Match` делает её
-  единственным авторитетным указателем.
-- `GET /projects/{id}/effective-config` возвращает сложенную конфигурацию и
-  provenance по каждому ключу верхнего уровня.
+- `POST /projects/{id}/config-revisions` adds a revision (append-only) and
+  does **not** activate it.
+- `POST /projects/{id}/config-revisions/{n}:activate` with `If-Match` makes it
+  the single authoritative pointer.
+- `GET /projects/{id}/effective-config` returns the merged configuration and
+  provenance for each top-level key.
 
-Порядок сложения детерминирован: defaults шаблона → разрешённые settings
-предков (от корня к родителю) → активная ревизия → overlay профиля.
-`settings` и `memory` сливаются рекурсивно (массивы и скаляры заменяются
-целиком), `views` заменяются полностью, `governance` сворачивается операцией
-«строже»: потомок может только ужесточить ограничения.
+The merge order is deterministic: template defaults → resolved settings
+of ancestors (from the root to the parent) → active revision → profile overlay.
+`settings` and `memory` are merged recursively (arrays and scalars are replaced
+entirely), `views` are replaced completely, `governance` is folded with the
+"stricter" operation: a descendant can only tighten restrictions.
 
-Права: `projects.read` / `projects.manage`, `project_templates.read` /
+Permissions: `projects.read` / `projects.manage`, `project_templates.read` /
 `project_templates.manage`.
 
-## Задачи (work items)
+## Tasks (work items)
 
-### Поля задачи
+### Task fields
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `id` | UUID | Идентификатор |
-| `publicId` | строка | Человекочитаемый номер вида `TASK-000123`, уникален в tenant'е. Везде, где путь принимает `{task_ref}`, подходит и UUID, и `publicId` |
-| `title` | строка ≤ 500 | Не пустой |
-| `description` | строка | Произвольный текст |
-| `typeId`, `typeKey`, `typeVersion` | — | Закреплённая версия [типа задачи](task-types.md) |
-| `status` | строка ≤ 64 | Ключ статуса из lifecycle типа |
-| `systemStatusCategory` | enum | `backlog`, `active`, `blocked`, `terminal_success`, `terminal_cancelled`; выводится из ключа, клиентом не задаётся |
-| `priority` | enum | `critical`, `high`, `medium` (по умолчанию), `low` |
-| `ownerId`, `assigneeId` | UUID | Principal'ы tenant'а |
-| `workspaceId` | UUID | Workspace задачи (может быть `null`) |
-| `projectId` | UUID | Вычисляется из дерева при чтении, не хранится |
-| `customFields` | объект | Проверяется по `fieldSchema` версии типа |
-| `startDate`, `dueDate` | ISO-8601 | Плановые даты |
-| `goalId`, `origin`, `acceptance`, `evidence` | — | Граф работы, см. [Цели, приёмка и evidence](goals-and-evidence.md) |
-| `version` | int | Версия для `If-Match` |
-| `claimEpoch`, `activeClaimId` | — | Fencing и текущий claim, см. [Исполнение](execution.md) |
-| `createdBy`, `createdAt`, `updatedAt`, `completedAt` | — | Аудит |
+| `id` | UUID | Identifier |
+| `publicId` | string | Human-readable number of the form `TASK-000123`, unique within the tenant. Wherever a path accepts `{task_ref}`, both the UUID and the `publicId` work |
+| `title` | string ≤ 500 | Not empty |
+| `description` | string | Free text |
+| `typeId`, `typeKey`, `typeVersion` | — | Pinned version of the [task type](task-types.md) |
+| `status` | string ≤ 64 | Status key from the type's lifecycle |
+| `systemStatusCategory` | enum | `backlog`, `active`, `blocked`, `terminal_success`, `terminal_cancelled`; derived from the key, not set by the client |
+| `priority` | enum | `critical`, `high`, `medium` (default), `low` |
+| `ownerId`, `assigneeId` | UUID | Principals of the tenant |
+| `workspaceId` | UUID | The task's workspace (can be `null`) |
+| `projectId` | UUID | Computed from the tree on read, not stored |
+| `customFields` | object | Validated against the `fieldSchema` of the type version |
+| `startDate`, `dueDate` | ISO-8601 | Planned dates |
+| `goalId`, `origin`, `acceptance`, `evidence` | — | The work graph, see [Goals, acceptance, and evidence](goals-and-evidence.md) |
+| `version` | int | Version for `If-Match` |
+| `claimEpoch`, `activeClaimId` | — | Fencing and the current claim, see [Execution](execution.md) |
+| `createdBy`, `createdAt`, `updatedAt`, `completedAt` | — | Audit |
 
-### Создание
+### Creation
 
 ```bash
 curl -s -X POST "$CP/tasks" \
@@ -195,7 +196,7 @@ curl -s -X POST "$CP/tasks" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
-    "title": "Подготовить отчёт о нагрузке",
+    "title": "Prepare a load report",
     "typeKey": "task",
     "priority": "high",
     "workspaceId": "<workspace-id>",
@@ -206,27 +207,27 @@ curl -s -X POST "$CP/tasks" \
   }'
 ```
 
-Правила создания:
+Creation rules:
 
-- без `typeId` / `typeKey` задача получает системный тип `task`; `typeKey`
-  без `typeVersion` резолвится в новейшую `active` версию ключа;
-- `status` по умолчанию — `initialStatus` типа. Явно можно указать только
-  начальный статус или статус категории `backlog`, иначе
-  `422 invalid_status`: задача не может родиться «в работе» без claim;
-- статус вне lifecycle типа — `422 status_not_in_lifecycle`;
-- `parentTask` (UUID или `publicId`) в той же транзакции создаёт связь
-  `parent` и выставляет `origin.kind = "parent"`;
-- `workspaceId` должен указывать на активный workspace; право `tasks.write`
-  проверяется на этом workspace.
+- without `typeId` / `typeKey` the task gets the system type `task`; `typeKey`
+  without `typeVersion` resolves to the newest `active` version of the key;
+- the default `status` is the type's `initialStatus`. You can explicitly specify only
+  the initial status or a status of the `backlog` category, otherwise
+  `422 invalid_status`: a task cannot be born "in progress" without a claim;
+- a status outside the type's lifecycle — `422 status_not_in_lifecycle`;
+- `parentTask` (UUID or `publicId`) creates a `parent` relation in the same
+  transaction and sets `origin.kind = "parent"`;
+- `workspaceId` must point to an active workspace; the `tasks.write` permission
+  is checked on that workspace.
 
-Ответ — `201` с телом задачи. Номер `publicId` выдаётся транзакционно из
-счётчика tenant'а, коллизии исключены.
+The response is `201` with the task body. The `publicId` number is issued transactionally from
+the tenant's counter, so collisions are impossible.
 
-### Изменение
+### Update
 
-`PATCH /tasks/{ref}` требует `If-Match: "task-<version>"`. Если у задачи
-есть живой claim, запрос обязан нести `claimId` и `fencingToken` этого
-claim — иначе `409 task_claimed` (подробности в [Исполнении](execution.md)).
+`PATCH /tasks/{ref}` requires `If-Match: "task-<version>"`. If the task
+has a live claim, the request must carry that claim's `claimId` and `fencingToken`
+— otherwise `409 task_claimed` (details in [Execution](execution.md)).
 
 ```bash
 curl -s -X PATCH "$CP/tasks/TASK-000123" \
@@ -236,49 +237,49 @@ curl -s -X PATCH "$CP/tasks/TASK-000123" \
   -d '{"status": "blocked", "dueDate": null, "priority": "critical"}'
 ```
 
-| Поле в PATCH | Семантика |
+| Field in PATCH | Semantics |
 |---|---|
-| `title`, `description`, `priority`, `status` | `null` запрещён (`422 invalid_field`) |
-| `status` | Только по объявленному ребру lifecycle; переход в `terminal_success` идёт через `:complete`, а не PATCH |
-| `customFields` | Заменяет документ **целиком**; `null` запрещён, очистка — `{}` |
-| `startDate`, `dueDate` | `null` очищает дату; новое значение проверяется против другого конца интервала |
-| `ownerId`, `assigneeId`, `workspaceId`, `goalId` | `null` снимает значение |
-| `requirements` | Заменяет набор требований; `null` запрещён, очистка — пустой объект |
-| `acceptance`, `evidence` | Заменяют список целиком; `null` запрещён |
-| `origin` | Отсутствует в контракте: происхождение неизменяемо (`400 invalid_request`) |
+| `title`, `description`, `priority`, `status` | `null` is forbidden (`422 invalid_field`) |
+| `status` | Only along a declared lifecycle edge; the transition to `terminal_success` goes through `:complete`, not PATCH |
+| `customFields` | Replaces the document **entirely**; `null` is forbidden, clear with `{}` |
+| `startDate`, `dueDate` | `null` clears the date; a new value is checked against the other end of the interval |
+| `ownerId`, `assigneeId`, `workspaceId`, `goalId` | `null` removes the value |
+| `requirements` | Replaces the set of requirements; `null` is forbidden, clear with an empty object |
+| `acceptance`, `evidence` | Replace the list entirely; `null` is forbidden |
+| `origin` | Not part of the contract: origin is immutable (`400 invalid_request`) |
 
-Пустой PATCH — `422 empty_update`. Каждый успешный PATCH увеличивает
-`version` и пишет событие `task.updated` со списком изменённых полей;
-при смене статуса в событии есть `fromStatus`, `status` и
+An empty PATCH — `422 empty_update`. Each successful PATCH increments
+`version` and writes a `task.updated` event with the list of changed fields;
+on a status change the event contains `fromStatus`, `status`, and
 `systemStatusCategory`.
 
-### Завершение
+### Completion
 
-`POST /tasks/{ref}:complete` с `If-Match` переводит задачу в
-`completionStatus` её типа, освобождает claim и проставляет `completedAt`.
-Подробности и ограничения — в [Типах задач](task-types.md) и
-[Исполнении](execution.md).
+`POST /tasks/{ref}:complete` with `If-Match` moves the task to
+its type's `completionStatus`, releases the claim, and sets `completedAt`.
+Details and restrictions are in [Task types](task-types.md) and
+[Execution](execution.md).
 
 ## Custom fields
 
-Custom fields — поля, которые tenant объявляет сам в `fieldSchema` типа
-задачи (JSON Schema draft 2020-12).
+Custom fields are fields the tenant declares itself in the task type's `fieldSchema`
+(JSON Schema draft 2020-12).
 
-- Проверка идёт по схеме **той версии типа, которую закрепила задача**, а не
-  новейшей: тип, под которым задача создана, — её контракт.
-- Схема может ссылаться только на себя (`$ref` вида `#…`); внешние ссылки
-  отклоняются `422 invalid_json_schema`.
-- Документ ограничен 64 КиБ, глубиной 20 и 5 000 узлами.
-- Нарушение схемы — `422 custom_fields_invalid` со списком ошибок и
-  JSON-путями.
-- Ключи, похожие на секреты (`password`, `token`, `apiKey`, `secret`,
-  `credential`, `authorization` и т. п.), отклоняются
-  `422 secret_material_rejected`. Для ссылок на секреты используйте ключ
-  `secretRef`.
-- В журнал событий содержимое custom fields не попадает — только факт
-  изменения (`"customFields": true`).
+- Validation uses the schema of **the type version the task pinned**, not
+  the newest one: the type the task was created under is its contract.
+- The schema can reference only itself (`$ref` of the form `#…`); external references
+  are rejected with `422 invalid_json_schema`.
+- The document is limited to 64 KiB, depth 20, and 5,000 nodes.
+- A schema violation — `422 custom_fields_invalid` with a list of errors and
+  JSON paths.
+- Keys that look like secrets (`password`, `token`, `apiKey`, `secret`,
+  `credential`, `authorization`, and so on) are rejected with
+  `422 secret_material_rejected`. For references to secrets, use the
+  `secretRef` key.
+- The contents of custom fields do not go into the event log — only the fact of
+  the change (`"customFields": true`).
 
-Пример типа с полями и задачи под ним:
+An example of a type with fields and a task under it:
 
 ```json
 {
@@ -297,120 +298,120 @@ Custom fields — поля, которые tenant объявляет сам в `
 ```
 
 ```json
-{"title": "Рост ошибок 5xx", "typeKey": "incident",
+{"title": "Spike in 5xx errors", "typeKey": "incident",
  "customFields": {"severity": "sev2", "service": "billing"}}
 ```
 
-## Плановые даты
+## Planned dates
 
-`startDate` и `dueDate` — типизированные колонки `timestamptz`, а не custom
-fields: по ним нужны индексы, фильтры и сортировка «ближайшие первыми».
+`startDate` and `dueDate` are typed `timestamptz` columns, not custom
+fields: they need indexes, filters, and "soonest first" sorting.
 
-- Время без часового пояса читается как UTC.
-- `startDate` позже `dueDate` — `422 invalid_planned_dates` (база проверяет
-  то же самое).
-- При изменении одного конца интервала новое значение сверяется с
-  сохранённым другим концом.
+- A time without a time zone is read as UTC.
+- `startDate` later than `dueDate` — `422 invalid_planned_dates` (the database checks
+  the same thing).
+- When one end of the interval changes, the new value is checked against the
+  stored other end.
 
-## Требования и eligibility
+## Requirements and eligibility
 
-`requirements` задачи — списки ролей, capabilities и skills, **все**
-обязательные для того, кто захватывает задачу:
+A task's `requirements` are lists of roles, capabilities, and skills, **all**
+mandatory for whoever claims the task:
 
 ```json
 {"requirements": {"roles": ["reviewer"], "capabilities": ["python"], "skills": ["repo.search@1.2.0"]}}
 ```
 
-Skill указывается как `name` или `name@version` (точная версия). Неизвестное
-требование — `422 unknown_requirement`. Требования **не дают** API-прав:
-они определяют eligibility — кто вообще может взять задачу. Захват разрешён
-только при одновременном выполнении четырёх условий:
+A skill is specified as `name` or `name@version` (exact version). An unknown
+requirement — `422 unknown_requirement`. Requirements **do not grant** API permissions:
+they define eligibility — who can take the task at all. A claim is allowed
+only when all four conditions hold at once:
 
 ```text
-API permission tasks.claim ∧ eligibility (требования) ∧ readiness (зависимости) ∧ concurrency (claim, fencing)
+API permission tasks.claim ∧ eligibility (requirements) ∧ readiness (dependencies) ∧ concurrency (claim, fencing)
 ```
 
-Текущие требования задачи — `GET /tasks/{ref}/requirements`; диагностика
-«почему я не могу взять задачу» — `GET /tasks/{ref}/claimability` (см.
-[Исполнение](execution.md)). Подробнее о ролях и capabilities — в
-[Авторизации и правах](authorization.md).
+The task's current requirements are at `GET /tasks/{ref}/requirements`; diagnostics for
+"why can't I claim this task" are at `GET /tasks/{ref}/claimability` (see
+[Execution](execution.md)). For more on roles and capabilities, see
+[Authorization and permissions](authorization.md).
 
-## Связи задач
+## Task relations
 
-Связь направленная: `from --type--> to`.
+A relation is directed: `from --type--> to`.
 
-| Тип | Смысл | Влияет на исполнение |
+| Type | Meaning | Affects execution |
 |---|---|---|
-| `parent` | `from` — подзадача `to` | Проверяется ацикличность |
-| `blocks` | `from` должна завершиться до захвата `to` | Да: `to` не готова, пока `from` не в `terminal_success` |
-| `depends_on` | `from` нельзя захватить, пока `to` не завершена | Да: `from` не готова, пока `to` не в `terminal_success` |
-| `spawned_by` | `from` создана как следствие `to` | Используется каскадом отмены child runs и выражениями исходов approval |
-| `related_to` | Свободная ассоциация | Нет |
+| `parent` | `from` is a subtask of `to` | Acyclicity is checked |
+| `blocks` | `from` must finish before `to` is claimed | Yes: `to` is not ready until `from` is in `terminal_success` |
+| `depends_on` | `from` cannot be claimed until `to` is finished | Yes: `from` is not ready until `to` is in `terminal_success` |
+| `spawned_by` | `from` was created as a consequence of `to` | Used by the child run cancellation cascade and by approval outcome expressions |
+| `related_to` | Free association | No |
 
 ```bash
-# TASK-000124 зависит от TASK-000123
+# TASK-000124 depends on TASK-000123
 curl -s -X POST "$CP/tasks/TASK-000124/relations" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"toTask": "TASK-000123", "type": "depends_on"}'
 
-# Все связи задачи (обе стороны)
+# All relations of the task (both sides)
 curl -s "$CP/tasks/TASK-000124/relations" -H "Authorization: Bearer $TOKEN"
 
-# Удалить связь
+# Delete a relation
 curl -s -X DELETE "$CP/tasks/TASK-000124/relations/<relation-id>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-- Для `parent`, `blocks`, `depends_on` ядро проверяет ацикличность под
-  per-tenant advisory lock: цикл — `422 dependency_cycle`.
-- Повтор существующей связи — `409 relation_exists`; связь задачи с собой —
+- For `parent`, `blocks`, `depends_on` the core checks acyclicity under a
+  per-tenant advisory lock: a cycle — `422 dependency_cycle`.
+- Repeating an existing relation — `409 relation_exists`; relating a task to itself —
   `422 invalid_relation`.
-- Готовность считается по **категории**: пререквизит выполнен только в
+- Readiness is computed by **category**: a prerequisite is satisfied only in
   `terminal_success`.
 
-!!! warning "Отменённая зависимость продолжает блокировать"
-    Пререквизит в категории `terminal_cancelled` **не** считается выполненным:
-    зависимая задача остаётся неготовой (`409 task_not_ready`), пока связь не
-    удалят. Это сознательное поведение — отмена предпосылки требует решения
-    человека, а не молчаливого разблокирования.
+!!! warning "A cancelled dependency keeps blocking"
+    A prerequisite in the `terminal_cancelled` category is **not** considered satisfied:
+    the dependent task stays not ready (`409 task_not_ready`) until the relation is
+    deleted. This is deliberate — cancelling a prerequisite requires a human
+    decision, not silent unblocking.
 
-## Выборки задач
+## Task queries
 
-`GET /tasks` — постраничный список с фильтрами. Все фильтры применяются до
-пагинации, поэтому страницы не пропускают и не дублируют записи.
+`GET /tasks` is a paginated list with filters. All filters are applied before
+pagination, so pages neither skip nor duplicate records.
 
-| Параметр | Описание |
+| Parameter | Description |
 |---|---|
-| `status` | Ключ статуса |
-| `systemStatusCategory` | Категория — предпочтительный фильтр, если важен смысл, а не подпись |
-| `typeKey` | Ключ типа задачи |
-| `priority` | Приоритет |
+| `status` | Status key |
+| `systemStatusCategory` | Category — the preferred filter when the meaning matters more than the label |
+| `typeKey` | Task type key |
+| `priority` | Priority |
 | `ownerId`, `assigneeId` | Principal |
-| `workspaceId` + `includeDescendants=true` | Workspace (и его поддерево) |
-| `projectId` + `includeSubprojects=true` | Проект (разворачивается в множество workspaces) |
-| `startFrom`, `startTo`, `dueFrom`, `dueTo` | Включающие границы по датам; задачи без даты под такой фильтр не попадают |
-| `goalId` | Задачи, привязанные к цели |
-| `sort` | `createdAt` (по умолчанию, новые первыми), `startDate`, `dueDate` |
-| `limit`, `cursor` | Пагинация (по умолчанию 50, максимум 200) |
+| `workspaceId` + `includeDescendants=true` | Workspace (and its subtree) |
+| `projectId` + `includeSubprojects=true` | Project (expands into a set of workspaces) |
+| `startFrom`, `startTo`, `dueFrom`, `dueTo` | Inclusive date bounds; tasks without a date do not match such a filter |
+| `goalId` | Tasks linked to a goal |
+| `sort` | `createdAt` (default, newest first), `startDate`, `dueDate` |
+| `limit`, `cursor` | Pagination (50 by default, maximum 200) |
 
 ```bash
-# Открытые задачи workspace и его поддерева, ближайший дедлайн первым
+# Open tasks of a workspace and its subtree, nearest deadline first
 curl -s "$CP/tasks?workspaceId=<workspace-id>&includeDescendants=true&systemStatusCategory=active&sort=dueDate" \
   -H "Authorization: Bearer $TOKEN"
 
-# Просроченные на конец месяца
+# Overdue as of the end of the month
 curl -s "$CP/tasks?dueTo=2026-09-30T23:59:59Z&systemStatusCategory=active" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Особенности сортировки по датам:
+Date sorting specifics:
 
-- «ближайшие первыми», задачи без даты — в хвосте, тай-брейк по `id`;
-- курсор привязан к порядку, под которым выдан: применённый к другому
+- "soonest first", tasks without a date go last, ties are broken by `id`;
+- the cursor is bound to the order it was issued under: applied to a different
   `sort` — `422 invalid_cursor`;
-- неизвестное значение `sort` — `422 invalid_sort`.
+- an unknown `sort` value — `422 invalid_sort`.
 
-Ответ:
+Response:
 
 ```json
 {
@@ -427,22 +428,22 @@ curl -s "$CP/tasks?dueTo=2026-09-30T23:59:59Z&systemStatusCategory=active" \
 }
 ```
 
-!!! tip "Discovery для исполнителей"
-    Для поиска работы исполнителю лучше подходит
-    `GET /work/available`: он отдаёт только то, что вызывающий может взять
-    прямо сейчас (eligible, ready, без живого claim и без gate), и поддерживает
-    `assignedToMe=true`. Выдача рекомендательная — авторитетен только сам
-    claim. Архивный проект новую работу не выдаёт. См. [Исполнение](execution.md).
+!!! tip "Discovery for executors"
+    To find work, an executor is better served by
+    `GET /work/available`: it returns only what the caller can claim
+    right now (eligible, ready, no live claim, and no gate), and supports
+    `assignedToMe=true`. The result is advisory — only the claim itself
+    is authoritative. An archived project does not hand out new work. See [Execution](execution.md).
 
-## Комментарии
+## Comments
 
-Обсуждение задачи — тред комментариев с append-only историей правок. Он
-описан вместе с артефактами в [Артефактах и комментариях](artifacts.md).
+Task discussion is a comment thread with an append-only edit history. It
+is described together with artifacts in [Artifacts and comments](artifacts.md).
 
-## См. также
+## See also
 
-- [Типы задач и статусы](task-types.md)
-- [Цели, приёмка и evidence](goals-and-evidence.md)
-- [Исполнение — claims и runs](execution.md)
-- [Авторизация и права](authorization.md)
-- [События](events.md) — какие события пишет каждая операция.
+- [Task types and statuses](task-types.md)
+- [Goals, acceptance, and evidence](goals-and-evidence.md)
+- [Execution — claims and runs](execution.md)
+- [Authorization and permissions](authorization.md)
+- [Events](events.md) — which events each operation writes.

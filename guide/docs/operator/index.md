@@ -1,69 +1,72 @@
-# Работа оператора
 
-Раздел для человека, который управляет работой в Control Plane: ставит задачи людям и
-агентам, берёт задачи сам, следит за прогонами, решает approvals и передаёт работу между
-харнессами. Здесь описаны рабочие поверхности и повседневные сценарии.
+# Operator guide
 
-## Кто такой оператор
+This section is for the person who manages work in Control Plane: assigns tasks to people
+and agents, claims tasks personally, monitors runs, decides approvals, and hands work off
+between harnesses. It describes the working surfaces and everyday workflows.
 
-Оператор — human principal Control Plane (kind `human`) с binding, дающим ему права на
-задачи, claims, runs, approvals и чтение событий. В отличие от агента, у человека могут быть
-`approvals.decide` и `admin`: именно человек решает gate'ы и меняет конфигурацию.
+## Who the operator is
 
-Главное правило работы оператора: **авторитетное состояние живёт в Control Plane**. Задачи,
-claims, runs, approvals, checkpoints, артефакты и события — единственный источник истины.
-Переписка с ассистентом, файлы репозитория и локальные заметки — нет. Если транскрипт
-говорит одно, а Control Plane другое, прав Control Plane.
+An operator is a Control Plane human principal (kind `human`) with a binding that grants
+permissions on tasks, claims, runs, approvals, and reading events. Unlike an agent, a person
+can hold `approvals.decide` and `admin`: it is a person who decides gates and changes
+configuration.
 
-## Поверхности
+The operator's main rule: **the authoritative state lives in Control Plane**. Tasks, claims,
+runs, approvals, checkpoints, artifacts, and events are the single source of truth.
+Conversations with an assistant, repository files, and local notes are not. If a transcript
+says one thing and Control Plane says another, Control Plane is right.
 
-| Поверхность | Для чего | Как говорит с Control Plane |
+## Surfaces
+
+| Surface | What it is for | How it talks to Control Plane |
 |---|---|---|
-| [MCP-плагин для Claude Code](mcp-plugin.md) | работа с задачами прямо из репозитория: взять задачу, сделать её в коде, записать evidence, передать | MCP-сервер `control-plane-mcp` (инструменты `cp_*`) |
-| [CLI `control-plane`](../control-plane/cli-and-mcp.md) | обзор из терминала и скриптов: очередь работы, задачи, claims и runs, список approvals | REST API ядра, PAT человека |
+| [MCP plugin for Claude Code](mcp-plugin.md) | working on tasks directly from a repository: claim a task, do it in code, record evidence, hand it off | the `control-plane-mcp` MCP server (`cp_*` tools) |
+| [`control-plane` CLI](../control-plane/cli-and-mcp.md) | an overview from the terminal and scripts: the work queue, tasks, claims and runs, the list of approvals | the core REST API, the person's PAT |
 
-Обе — клиенты одного API под одной identity человека. Очередь можно
-просмотреть из CLI, задачу взять и завершить в Claude Code, там же решить
-approval — сервер видит один principal и одни правила.
+Both are clients of the same API under the same human identity. You can review
+the queue from the CLI, then claim and complete a task in Claude Code and decide
+the approval there as well: the server sees one principal and one set of rules.
 
 ```mermaid
 flowchart TB
-    H(("Оператор"))
-    H ==> P["Claude Code + плагин<br/>control-plane-operator"]
-    H ==> L["CLI control-plane"]
+    H(("Operator"))
+    H ==> P["Claude Code + plugin<br/>control-plane-operator"]
+    H ==> L["control-plane CLI"]
     P == "MCP: control-plane-mcp<br/>PAT: IAM exchange" ==> CP["Control Plane"]
     L == "PAT: IAM exchange" ==> CP
-    R["Runner (агенты)"] == "PAT агента" ==> CP
+    R["Runner (agents)"] == "Agent PAT" ==> CP
 ```
 
-## Решения, которые принимает только человек
+## Decisions only a person makes
 
-Независимо от поверхности, ассистент или интерфейс не должен без явного решения человека:
+Regardless of the surface, an assistant or an interface must not, without an explicit
+decision by a person:
 
-- создавать и менять задачи, добавлять и удалять связи;
-- писать и править комментарии (они говорятся от имени человека);
-- захватывать задачу (claim) и начинать run;
-- готовить handoff;
-- одобрять и отклонять approvals;
-- завершать задачу или run.
+- create or change tasks, or add and remove relations;
+- write or edit comments (they speak on the person's behalf);
+- claim a task or start a run;
+- prepare a handoff;
+- approve or reject approvals;
+- complete a task or a run.
 
-Это правило интерфейса, а не граница безопасности: сервер в любом случае проверяет права,
-изоляцию tenant'а, версии и fencing token на каждом вызове. Но именно оно отличает
-операторский харнесс от автономного runner'а, который claim'ит сам.
+This is an interface rule, not a security boundary: the server checks permissions, tenant
+isolation, versions, and the fencing token on every call regardless. But it is exactly what
+distinguishes an operator harness from an autonomous runner, which claims tasks on its own.
 
-## Как начать
+## How to get started
 
-1. Получите у администратора human principal и binding (см.
-   [Tenants и principals](../iam/principals.md)).
-2. Для работы из репозитория — выпустите PAT и настройте
-   [MCP-плагин](mcp-plugin.md).
-3. Для обзора из терминала и скриптов — настройте
-   [CLI `control-plane`](../control-plane/cli-and-mcp.md).
-4. Прочитайте [Повседневные сценарии](workflows.md).
+1. Get a human principal and a binding from your administrator (see
+   [Tenants and principals](../iam/principals.md)).
+2. To work from a repository, issue a PAT and set up the
+   [MCP plugin](mcp-plugin.md).
+3. For an overview from the terminal and scripts, set up the
+   [`control-plane` CLI](../control-plane/cli-and-mcp.md).
+4. Read [Everyday workflows](workflows.md).
 
-## См. также
+## See also
 
-- [Ключевые понятия](../overview/concepts.md)
-- [Модель работы](../control-plane/work-model.md)
+- [Key concepts](../overview/concepts.md)
+- [Work model](../control-plane/work-model.md)
 - [Approvals](../control-plane/approvals.md)
-- [Агенты и runner](../runner/index.md)
+- [Agents and runner](../runner/index.md)

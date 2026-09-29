@@ -1,48 +1,50 @@
-# Модель знаний
 
-Статья описывает, как memory-service хранит знания: граф на Apache AGE, чанки в
-pgvector, наблюдения, temporal-факты, provenance и аудит. Она нужна интеграторам,
-которые проектируют, что и как класть в память, и администраторам, которым важно
-понимать, что лежит в базе.
+# Knowledge model
 
-Коротко о модели:
+This article describes how memory-service stores knowledge: a graph on Apache
+AGE, chunks in pgvector, observations, temporal facts, provenance, and audit.
+It is for integrators who design what to put into memory and how, and for
+administrators who need to understand what is in the database.
 
-> **Observations — свидетельства. Facts — интерпретации. Documents — источники.
-> Граф выражает связи. Retrieval находит кандидатов. Context Compiler решает, что
-> полезно сейчас.**
+The model in brief:
 
-## Хранилище
+> **Observations are evidence. Facts are interpretations. Documents are sources.
+> The graph expresses relations. Retrieval finds candidates. The Context
+> Compiler decides what is useful right now.**
 
-Вся память живёт в одной базе PostgreSQL 16 с расширениями `age` (граф, openCypher),
-`vector` (pgvector) и `pg_trgm` (триграммы). Расширения и граф создаёт init-скрипт
-образа `memory-db`; остальную схему сервис создаёт сам при старте — идемпотентно
-(если БД на старте недоступна, схема досоздаётся при первом обращении или командой
-`cb init-db`). Сам сервис stateless.
+## Storage
 
-| Объект | Где | Имя по умолчанию | Переменная |
+All of memory lives in a single PostgreSQL 16 database with the extensions
+`age` (graph, openCypher), `vector` (pgvector), and `pg_trgm` (trigrams). The
+init script of the `memory-db` image creates the extensions and the graph; the
+service creates the rest of the schema itself on startup, idempotently (if the
+database is unavailable at startup, the schema is completed on first access or
+with the `cb init-db` command). The service itself is stateless.
+
+| Object | Where | Default name | Variable |
 |---|---|---|---|
-| Граф знаний (узлы и рёбра) | схема AGE | `company_brain` | `CB_GRAPH_NAME` |
-| Чанки с эмбеддингами | `public.<table>` | `chunks` | `CB_CHUNKS_TABLE` |
-| Наблюдения (observations) | таблица | `observations` | `CB_OBSERVATIONS_TABLE` |
-| Трейсы компиляции контекста | таблица | `context_traces` | `CB_CONTEXT_TRACES_TABLE` |
-| Реестр доменных пакетов | таблица | `domain_packs` | `CB_DOMAIN_PACKS_TABLE` |
-| Настройки видов namespace | таблица | `namespace_settings` | `CB_NAMESPACE_SETTINGS_TABLE` |
-| Журнал снимков источников | таблицы | `source_snapshots`, `source_snapshots_items` | `CB_SNAPSHOTS_TABLE` |
+| Knowledge graph (nodes and edges) | AGE schema | `company_brain` | `CB_GRAPH_NAME` |
+| Chunks with embeddings | `public.<table>` | `chunks` | `CB_CHUNKS_TABLE` |
+| Observations | table | `observations` | `CB_OBSERVATIONS_TABLE` |
+| Context compilation traces | table | `context_traces` | `CB_CONTEXT_TRACES_TABLE` |
+| Domain pack registry | table | `domain_packs` | `CB_DOMAIN_PACKS_TABLE` |
+| Namespace kind settings | table | `namespace_settings` | `CB_NAMESPACE_SETTINGS_TABLE` |
+| Source snapshot journal | tables | `source_snapshots`, `source_snapshots_items` | `CB_SNAPSHOTS_TABLE` |
 
-Все namespaces одного инстанса лежат в **одном** графе и одних таблицах; изоляция
-обеспечивается свойством/колонкой `namespace` и предикатом в каждом запросе (см.
-[Namespaces и доступ](namespaces.md)).
+All namespaces of one instance live in **one** graph and the same tables;
+isolation is provided by the `namespace` property/column and a predicate in
+every query (see [Namespaces and access](namespaces.md)).
 
 ```mermaid
 flowchart TB
-    SRC[Внешний источник] --> OBS[Observation<br/>таблица observations]
-    OBS -- provenance --> EP[Episode<br/>узел type=episode]
-    OBS --> ENT[Entity<br/>узел графа]
-    OBS --> FACT[Fact<br/>ребро с fact_id и интервалом]
-    OBS --> TXT[Text-фрагмент<br/>узел + чанк]
-    DOC[Документ / статья] --> NODE[Узел документа] --> CH[Чанки<br/>pgvector + FTS + trgm]
+    SRC[External source] --> OBS[Observation<br/>observations table]
+    OBS -- provenance --> EP[Episode<br/>node type=episode]
+    OBS --> ENT[Entity<br/>graph node]
+    OBS --> FACT[Fact<br/>edge with fact_id and interval]
+    OBS --> TXT[Text fragment<br/>node + chunk]
+    DOC[Document / article] --> NODE[Document node] --> CH[Chunks<br/>pgvector + FTS + trgm]
     ENT --- FACT
-    subgraph G[Граф AGE]
+    subgraph G[AGE graph]
         EP
         ENT
         FACT
@@ -54,259 +56,278 @@ flowchart TB
     CC --> PACK[ContextPack]
 ```
 
-## Узлы графа
+## Graph nodes
 
-Узел — типизированная сущность, уникальная в паре `(namespace, natural_key)`.
-Повторная запись того же ключа обновляет узел (upsert через `MERGE`), а не создаёт
-новый.
+A node is a typed entity, unique within the `(namespace, natural_key)` pair.
+Writing the same key again updates the node (upsert via `MERGE`) rather than
+creating a new one.
 
-| Свойство | Назначение |
+| Property | Purpose |
 |---|---|
-| `natural_key` | Стабильный ключ узла: URL статьи, `doc:<id>`, `person:alice`, идентификатор задачи трекера и т. п. |
-| `namespace` | База знаний, которой принадлежит узел |
-| `type` | Вид сущности: `article`, `document`, `note`, `episode`, `entity`, виды доменных пакетов |
-| `title` | Заголовок (по умолчанию — сам ключ) |
-| `source_path` | Цель цитаты: путь файла, URI, `agent:run/<run_id>` |
-| `source_id` | Идентификатор источника или прогона |
-| `confidence` | Уверенность (сигнал ранжирования и аудита) |
-| `last_seen` | Когда узел последний раз видели при записи |
-| `origin` | `vault` — проекция документного vault, `agent` — запись через API |
-| `props` | Карта свободных свойств: `content` (оригинал статьи), `provenance`, `pii`, `pii_categories`, `scopes`, `meta` и др. |
+| `natural_key` | Stable node key: article URL, `doc:<id>`, `person:alice`, a tracker issue identifier, etc. |
+| `namespace` | The knowledge base the node belongs to |
+| `type` | Entity kind: `article`, `document`, `note`, `episode`, `entity`, kinds from domain packs |
+| `title` | Title (the key itself by default) |
+| `source_path` | Citation target: file path, URI, `agent:run/<run_id>` |
+| `source_id` | Identifier of the source or run |
+| `confidence` | Confidence (a ranking and audit signal) |
+| `last_seen` | When the node was last seen during a write |
+| `origin` | `vault`: projection of the document vault; `agent`: written through the API |
+| `props` | Map of free-form properties: `content` (original article), `provenance`, `pii`, `pii_categories`, `scopes`, `meta`, and others |
 
-**Метка AGE** узла — это его `type`, приведённый к допустимому идентификатору
-(`[A-Za-z_][A-Za-z0-9_]*`; прочие символы заменяются на `_`, пустой тип становится
-`entity`). Для каждой метки движок заводит GIN-индекс по свойствам и hash-индекс по
-`natural_key`, чтобы сверка снимков и поиск по ключу не сканировали таблицу.
+A node's **AGE label** is its `type` converted to a valid identifier
+(`[A-Za-z_][A-Za-z0-9_]*`; other characters are replaced with `_`, and an empty
+type becomes `entity`). For each label, the engine creates a GIN index on
+properties and a hash index on `natural_key`, so that snapshot reconciliation
+and lookup by key do not scan the table.
 
-!!! note "Оригинал статьи хранится в узле"
-    `POST /api/brain/retain` кладёт полный текст в `props.content`. Поэтому
-    `GET /api/brain/sources/{natural_key}` возвращает статью ровно в том виде, в каком
-    её загрузили (`content_source: "original"`). Если оригинала в узле нет
-    (например, документ загружен готовыми чанками), текст восстанавливается склейкой
-    чанков по порядку (`content_source: "chunks"`).
+!!! note "The original article is stored in the node"
+    `POST /api/brain/retain` puts the full text into `props.content`. That is
+    why `GET /api/brain/sources/{natural_key}` returns the article exactly as
+    it was loaded (`content_source: "original"`). If the node has no original
+    (for example, a document loaded as ready-made chunks), the text is
+    reconstructed by joining the chunks in order (`content_source: "chunks"`).
 
-### Происхождение: vault и agent
+### Origin: vault and agent
 
-Движок различает два происхождения данных:
+The engine distinguishes two origins of data:
 
-- **`vault`** — узлы и рёбра, спроецированные командой `cb ingest` из каталога
-  Markdown-документов. Повторный полный ingest работает по схеме mark-and-sweep:
-  всё vault-происхождение namespace, не встреченное в текущем прогоне, удаляется.
-- **`agent`** — всё, что записано через HTTP API (`retain`, `facts`, `documents`,
-  наблюдения, снимки). Такие данные ре-ingest vault **не подметает**.
+- **`vault`**: nodes and edges projected by the `cb ingest` command from a
+  directory of Markdown documents. A repeated full ingest works as
+  mark-and-sweep: everything of vault origin in the namespace that was not
+  encountered in the current run is deleted.
+- **`agent`**: everything written through the HTTP API (`retain`, `facts`,
+  `documents`, observations, snapshots). A vault re-ingest **does not sweep**
+  such data.
 
-HTTP-сервис никогда не пишет в сами документы-источники: запись через API попадает
-только в граф и индекс.
+The HTTP service never writes to the source documents themselves: an API write
+goes only into the graph and the index.
 
-## Рёбра и связи
+## Edges and relations
 
-Ребро соединяет два узла **одного** namespace (рёбра не пересекают namespaces).
-Служебные типы рёбер:
+An edge connects two nodes of the **same** namespace (edges do not cross
+namespaces). System edge types:
 
-| Тип | Кто создаёт | Смысл |
+| Type | Who creates it | Meaning |
 |---|---|---|
-| `LINKS_TO` | `retain`, `facts`, `documents` (поле `links`), vault-ссылки | Узел ссылается на существующий узел-цель |
-| `IN_TRACE` | запись с `trace_id` | Факт относится к трейсу задачи или прогона |
-| типы из frontmatter vault | `cb ingest` | Связи документов (`SUPERSEDED_BY`, `PART_OF_PROJECT` и т. п.) |
-| предикаты фактов | наблюдения, снимки | Temporal-факты (см. ниже) |
+| `LINKS_TO` | `retain`, `facts`, `documents` (`links` field), vault links | The node refers to an existing target node |
+| `IN_TRACE` | a write with a `trace_id` | The fact belongs to a task or run trace |
+| types from vault frontmatter | `cb ingest` | Document relations (`SUPERSEDED_BY`, `PART_OF_PROJECT`, etc.) |
+| fact predicates | observations, snapshots | Temporal facts (see below) |
 
-Ссылка `links` на несуществующий узел молча пропускается: ребро создаётся только
-между существующими узлами.
+A `links` reference to a nonexistent node is silently skipped: an edge is
+created only between existing nodes.
 
-## Факты: время и свидетельства {#facts}
+## Facts: time and evidence {#facts}
 
-Факт — ребро графа с уникальным `fact_id` и интервалом валидности. Несколько рёбер
-одного типа между одной парой узлов могут сосуществовать, различаясь интервалами.
+A fact is a graph edge with a unique `fact_id` and a validity interval. Several
+edges of the same type between the same pair of nodes can coexist, differing
+in their intervals.
 
 ```text
 person:alice  WORKS_ON  project:alpha
   fact_id        = fact-<sha256(namespace|subject|predicate|object|valid_from)[:24]>
   valid_from     = 2026-08-01T00:00:00Z
-  valid_to       = (нет — факт действует)
+  valid_to       = (none: the fact is in effect)
   evidence       = asserted        confidence = 0.9
-  observation_ids = [obs-…]        (чем доказан)
+  observation_ids = [obs-…]        (what proves it)
 ```
 
-Свойства ребра факта: `namespace`, `observed_at`, `valid_from`, `valid_to`,
+Fact edge properties: `namespace`, `observed_at`, `valid_from`, `valid_to`,
 `evidence`, `confidence`, `observation_ids`, `supersedes`, `superseded_by`,
-`source_path`, `scopes`, `origin`; у фактов из снимков — ещё `attributes`,
+`source_path`, `scopes`, `origin`; facts from snapshots also have `attributes`,
 `snapshot_source`, `snapshot_scope`, `snapshot_id`.
 
-Правила:
+Rules:
 
-- **Три времени различаются явно:** `occurred_at` наблюдения (когда произошло),
-  время приёма (когда узнала память) и `valid_from`/`valid_to` (когда факт истинен).
-  Все метки нормализуются к ISO-8601 UTC — на лексикографическом сравнении строк
-  стоит вся temporal-фильтрация.
-- **Идемпотентность.** `fact_id` детерминирован: повтор того же утверждения из нового
-  наблюдения не создаёт ребро, а **усиливает** факт — дописывает `observation_ids` и
-  поднимает `confidence` до максимума.
-- **Supersession.** Новый факт с `supersedes` закрывает `valid_to` старого и связывает
-  его `superseded_by`. История не удаляется: «больше не работает над X» — это
-  закрытие интервала.
-- **Конфликты не разрешаются автоматически.** Перекрывающиеся версии одного
-  `(subject, predicate)` остаются обе; при сборке контекста они помечаются
-  `conflict: true`, решение за потребителем.
-- **Класс свидетельства** (`evidence`) — сигнал ранжирования, не истина:
+- **Three times are kept distinct:** the observation's `occurred_at` (when it
+  happened), the ingestion time (when memory learned about it), and
+  `valid_from`/`valid_to` (when the fact is true). All timestamps are
+  normalized to ISO-8601 UTC; all temporal filtering relies on lexicographic
+  string comparison.
+- **Idempotency.** `fact_id` is deterministic: repeating the same assertion
+  from a new observation does not create an edge but **reinforces** the fact,
+  appending to `observation_ids` and raising `confidence` to the maximum.
+- **Supersession.** A new fact with `supersedes` closes the `valid_to` of the
+  old one and links it via `superseded_by`. History is not deleted: "no longer
+  works on X" is the closing of an interval.
+- **Conflicts are not resolved automatically.** Overlapping versions of the
+  same `(subject, predicate)` both remain; during context assembly they are
+  marked `conflict: true`, and the consumer decides.
+- **The evidence class** (`evidence`) is a ranking signal, not truth:
 
-| Класс | Ранг | Откуда |
+| Class | Rank | Source |
 |---|---|---|
-| `asserted` | 3 | Структурированное утверждение источника (assertions наблюдения, снимок) |
-| `extracted` | 2 | Детерминированное правило |
-| `inferred` | 1 | Вывод LLM из неструктурированного текста |
-| `derived` | 1 | Производное consolidation (сводка, слияние) |
+| `asserted` | 3 | A structured assertion by the source (observation assertions, snapshot) |
+| `extracted` | 2 | A deterministic rule |
+| `inferred` | 1 | An LLM inference from unstructured text |
+| `derived` | 1 | Derived by consolidation (summary, merge) |
 
-- **Потеря свидетельства.** Если наблюдение, на котором держался факт, удалено
-  (`redact`/`purge`), свидетельство вычёркивается из `observation_ids`; факт без
-  оставшихся свидетельств получает `evidence_lost` и выпадает из выдачи, оставаясь в
-  графе для аудита.
+- **Loss of evidence.** If an observation that supported a fact is deleted
+  (`redact`/`purge`), the evidence is removed from `observation_ids`; a fact
+  with no remaining evidence gets `evidence_lost` and drops out of results,
+  staying in the graph for audit.
 
-## Наблюдения (observations)
+## Observations
 
-Наблюдение — **неизменяемая** запись того, что сообщил внешний источник: событие
-трекера, письмо, доменное событие ядра. Хранится в реляционной таблице, а не в графе.
-Движок никогда не переписывает наблюдение; меняется только статус его обработки (и
-содержимое при redaction).
+An observation is an **immutable** record of what an external source reported:
+a tracker event, an email, a core domain event. It is stored in a relational
+table, not in the graph. The engine never rewrites an observation; only its
+processing status changes (and its content, on redaction).
 
-| Поле | Смысл |
+| Field | Meaning |
 |---|---|
-| `observation_id` | `obs-<sha256[:24]>` от `namespace` и source identity — клиент может вычислить заранее |
-| `source.system`, `source.stream`, `source.external_id` | Source identity: повтор того же события не создаёт дубликат |
-| `kind` | Вид события (`task.completed`, `work.completed`…), `[a-z0-9][a-z0-9._-]{0,127}` |
-| `occurred_at` | Время события |
-| `actor`, `subject` | Участники, `{type, id}` |
-| `scopes` | Метки видимости `type:id` (до 20) |
-| `content` | Человекочитаемый текст (до 1 МиБ) |
-| `data` | Структурированный payload (до 1 МиБ) |
-| `assertions` | Структурированные утверждения для проекции (до 200) |
-| `provenance` | `{uri, …}` — ссылка на исходное событие |
+| `observation_id` | `obs-<sha256[:24]>` of `namespace` and the source identity; the client can compute it in advance |
+| `source.system`, `source.stream`, `source.external_id` | Source identity: repeating the same event does not create a duplicate |
+| `kind` | Event kind (`task.completed`, `work.completed`…), `[a-z0-9][a-z0-9._-]{0,127}` |
+| `occurred_at` | Event time |
+| `actor`, `subject` | Participants, `{type, id}` |
+| `scopes` | Visibility labels `type:id` (up to 20) |
+| `content` | Human-readable text (up to 1 MiB) |
+| `data` | Structured payload (up to 1 MiB) |
+| `assertions` | Structured assertions for projection (up to 200) |
+| `provenance` | `{uri, …}`: a link to the original event |
 
-Без `external_id` дубликаты отсекаются по хешу канонической формы содержимого.
-Статусы обработки: `received`, `processed`, `partially_processed`, `failed`,
-`redacted`. Проекция в граф описана в [Загрузке знаний](ingestion.md#observations).
+Without an `external_id`, duplicates are filtered by a hash of the canonical
+form of the content. Processing statuses: `received`, `processed`,
+`partially_processed`, `failed`, `redacted`. Projection into the graph is
+described in [Knowledge ingestion](ingestion.md#observations).
 
-## Эпизоды и сущности
+## Episodes and entities
 
-- **Entity** — узел графа произвольного вида. Assertion `entity` создаёт или
-  обновляет его; концы факта, которых ещё нет, создаются placeholder-узлами, так что
-  порядок доставки не важен. Ключ сущности — строка или `{type, id}` (ключ
-  `type:id`).
-- **Episode** — осмысленный фрагмент опыта («деплой упал», «решение принято»).
-  Физически — узел `type=episode` с provenance до наблюдений; отдельной таблицы нет.
+- **Entity** is a graph node of any kind. An `entity` assertion creates or
+  updates it; fact endpoints that do not exist yet are created as placeholder
+  nodes, so delivery order does not matter. An entity key is a string or
+  `{type, id}` (key `type:id`).
+- **Episode** is a meaningful fragment of experience ("the deploy failed", "a
+  decision was made"). Physically, it is a node with `type=episode` and
+  provenance leading to observations; there is no separate table.
 
-## Чанки и документы {#chunks}
+## Chunks and documents {#chunks}
 
-Чанк — фрагмент текста в таблице `chunks`, по которому идёт поиск.
+A chunk is a text fragment in the `chunks` table that search runs over.
 
-| Колонка | Назначение |
+| Column | Purpose |
 |---|---|
-| `node_key` | Узел-владелец |
-| `namespace` | База знаний |
-| `chunk_order` | Порядковый номер фрагмента в документе |
-| `source_path` | Цель цитаты |
-| `title`, `heading` | Заголовок узла и раздел внутри документа |
-| `text` | Текст фрагмента |
-| `embedding` | Вектор `vector(CB_EMBEDDING_DIM)` |
-| `meta` | `jsonb`: теги потребителя (`collection` и т. п.), `observation_id`, `scopes` |
-| `seen_run` | Метка прогона vault-ingest; пустая у записей через API |
+| `node_key` | Owning node |
+| `namespace` | Knowledge base |
+| `chunk_order` | Sequence number of the fragment within the document |
+| `source_path` | Citation target |
+| `title`, `heading` | Node title and section within the document |
+| `text` | Fragment text |
+| `embedding` | Vector `vector(CB_EMBEDDING_DIM)` |
+| `meta` | `jsonb`: consumer tags (`collection`, etc.), `observation_id`, `scopes` |
+| `seen_run` | Vault ingest run mark; empty for records written through the API |
 
-Уникальность — `(namespace, node_key, chunk_order)`: повторная запись того же
-порядкового номера заменяет фрагмент. Индексы: HNSW по косинусному расстоянию
-эмбеддинга, GIN по полнотекстовому документу на русской конфигурации
-(`title + heading + text`), GIN по `meta`, B-tree по `namespace` и, если есть права
-на `CREATE EXTENSION`, триграммный GIN по `text` для поиска точных идентификаторов.
+Uniqueness is `(namespace, node_key, chunk_order)`: writing the same sequence
+number again replaces the fragment. Indexes: HNSW on the cosine distance of the
+embedding, GIN on the full-text document with the Russian configuration
+(`title + heading + text`), GIN on `meta`, B-tree on `namespace`, and, if you
+have the right to `CREATE EXTENSION`, a trigram GIN on `text` for searching
+exact identifiers.
 
-В эмбеддинг уходит не голый текст, а текст с заголовком: `"<title> — <heading>\n<text>"`.
-Так короткий фрагмент сохраняет контекст документа.
+The embedding is computed not from the bare text but from the text with its
+title: `"<title> — <heading>\n<text>"`. This way a short fragment keeps the
+document's context.
 
-!!! warning "Размерность эмбеддинга фиксируется при создании таблицы"
-    Колонка `embedding` создаётся с размерностью `CB_EMBEDDING_DIM`. Если позже
-    поменять модель или размерность, сервис откажется работать с понятной ошибкой —
-    нужен переиндекс (см. [Конфигурацию](configuration.md#reindex)).
+!!! warning "The embedding dimension is fixed when the table is created"
+    The `embedding` column is created with dimension `CB_EMBEDDING_DIM`. If you
+    later change the model or the dimension, the service refuses to work with a
+    clear error, and you need a reindex (see
+    [Configuration](configuration.md#reindex)).
 
-## Provenance: путь до источника
+## Provenance: the path to the source
 
-Каждый значимый элемент выдачи восстановим до исходного события или документа:
+Every significant result element can be traced back to the original event or
+document:
 
 ```text
 ContextItem
   → Fact (observation_ids) / Chunk (node_key, meta.observation_id) / Observation
     → Observation (source.system / stream / external_id, provenance.uri)
-      → исходное событие внешней системы
+      → the original event in the external system
 ```
 
-Для статей, записанных через `retain`, поле `provenance` запроса сохраняется целиком
-в `props.provenance` и возвращается source-view как `provenance.metadata`. Для
-индексации Git-репозиториев в нём принято передавать `repository`, `branch`,
-`commit_sha`, `path`, `content_hash`, `author`, `committed_at`, `indexed_at`.
+For articles written through `retain`, the request's `provenance` field is
+stored as a whole in `props.provenance` and returned by the source view as
+`provenance.metadata`. For indexing Git repositories, the convention is to
+pass `repository`, `branch`, `commit_sha`, `path`, `content_hash`, `author`,
+`committed_at`, `indexed_at` in it.
 
-## Аудит-контур
+## Audit trail
 
-События аудита — это узлы графа `audit_event`, привязанные ребром к якорю трейса
-`pc_trace`. Их пишут:
+Audit events are graph nodes of type `audit_event`, linked by an edge to a
+`pc_trace` trace anchor. They are written by:
 
-- явный вызов `POST /api/brain/audit`;
-- каждое удаление (`action="delete"` со снимком удалённого: тип, заголовок, число
-  чанков);
-- выдача немаскированных ПДн токену с допуском (`action="pii_access"`, если защита
-  ПДн включена).
+- an explicit call to `POST /api/brain/audit`;
+- every deletion (`action="delete"` with a snapshot of what was deleted: type,
+  title, number of chunks);
+- a release of unmasked personal data to a token with clearance
+  (`action="pii_access"`, if personal data protection is on).
 
-Аудит ведётся **в namespace той базы знаний**, где произошло событие. Узлы типов
-`audit_event` и `pc_trace` защищены: механизм удаления отвечает на них `400`, чтобы
-нельзя было стереть след удаления тем же механизмом. След читается через
+Audit is kept **in the namespace of the knowledge base** where the event
+occurred. Nodes of types `audit_event` and `pc_trace` are protected: the
+deletion mechanism responds to them with `400`, so the trace of a deletion
+cannot be erased by the same mechanism. The trace is read through
 `GET /api/brain/trace/{trace_id}?namespace=…`.
 
-## Видимость внутри namespace
+## Visibility inside a namespace
 
-Помимо namespace, у узла, чанка, наблюдения или факта может быть список **scopes** —
-меток `type:id`. Особое значение имеют префиксы `workspace:` и `principal:`: элемент
-с такими scopes виден только вызывающему, чьи разрешённые scopes его пересекают.
-Элемент без scopes (или только со scopes релевантности вроде `task:`/`project:`)
-видят все, кто может читать namespace. Правила — в
-[Namespaces и доступ](namespaces.md#visibility).
+Besides the namespace, a node, chunk, observation, or fact can have a list of
+**scopes**, labels of the form `type:id`. The prefixes `workspace:` and
+`principal:` have special meaning: an element with such scopes is visible only
+to a caller whose allowed scopes intersect them. An element without scopes (or
+only with relevance scopes such as `task:`/`project:`) is visible to everyone
+who can read the namespace. The rules are in
+[Namespaces and access](namespaces.md#visibility).
 
-## Персональные данные
+## Personal data
 
-При `CB_PII_PROTECTION=true` запись маркирует узел `pii: true` и `pii_categories` по
-результатам автодетекции (`phone`, `email`, `passport_rf`, `snils`, `card`, `inn`) и
-явной метке запроса. ФИО и адреса детектор не распознаёт — их нужно помечать явно
-(`"pii": true, "pii_categories": ["fio"]`). Маскирование на выдаче работает и без
-маркировки — по тем же шаблонам. Подробнее — в [API](api.md#pii).
+With `CB_PII_PROTECTION=true`, a write marks the node with `pii: true` and
+`pii_categories` based on automatic detection (`phone`, `email`,
+`passport_rf`, `snils`, `card`, `inn`) and on an explicit label in the
+request. The detector does not recognize full names or addresses; you must
+label them explicitly (`"pii": true, "pii_categories": ["fio"]`). Masking in
+results works even without labeling, using the same patterns. Details are in
+[API](api.md#pii).
 
-## Доменные пакеты и строгий режим {#domain-packs}
+## Domain packs and strict mode {#domain-packs}
 
-Движок не содержит доменных видов в коде. Виды сущностей, связи и шаблоны
-идентификаторов предметной области описываются **доменным пакетом** — версионируемым
-JSON, который регистрируется через `POST /api/memory/packages`:
+The engine contains no domain kinds in its code. The entity kinds, relations,
+and identifier patterns of a subject area are described by a **domain pack**, a
+versioned JSON that is registered through `POST /api/memory/packages`:
 
-| Элемент пакета | Смысл |
+| Pack element | Meaning |
 |---|---|
-| `kinds[].kind` | Имя вида (`endpoint`, `component`, `issue`…) |
-| `kinds[].naturalKey` | JSON Schema ключа или шаблон ключа с плейсхолдерами `<name>` / `{name}` |
-| `kinds[].aliases` | Альтернативные формы ключа (по ним разрешаются якоря обхода) |
-| `kinds[].kindAliases` | Синонимы имени вида |
-| `kinds[].idPatterns` | Регулярные выражения для извлечения идентификаторов вида из текста |
-| `kinds[].attributes` | JSON Schema атрибутов |
-| `relations[]` | `relation`, `fromKinds`, `toKinds`, `temporal` (по умолчанию `true`), `cardinality` (`many`/`one`) |
+| `kinds[].kind` | Kind name (`endpoint`, `component`, `issue`…) |
+| `kinds[].naturalKey` | JSON Schema of the key, or a key template with `<name>` / `{name}` placeholders |
+| `kinds[].aliases` | Alternative key forms (traversal anchors are resolved by them) |
+| `kinds[].kindAliases` | Synonyms of the kind name |
+| `kinds[].idPatterns` | Regular expressions for extracting identifiers of the kind from text |
+| `kinds[].attributes` | JSON Schema of attributes |
+| `relations[]` | `relation`, `fromKinds`, `toKinds`, `temporal` (`true` by default), `cardinality` (`many`/`one`) |
 
-Базовые виды `document`, `entity`, `fact` есть всегда; встроенный пакет `default`
-зарезервирован. Версия пакета неизменяема: регистрация той же версии с другим
-содержимым даёт `409`.
+The base kinds `document`, `entity`, `fact` always exist; the built-in pack
+`default` is reserved. A pack version is immutable: registering the same
+version with different content returns `409`.
 
-Пакет действует **только в namespaces, где явно включён**
-(`PUT /api/memory/namespaces/{ns}/kinds`). В **строгом режиме** (`strict: true`)
-запись сущности неизвестного вида или с ключом/атрибутами вне схемы отвергается
-ответом `422`; при сверке снимка проверяются и связи. Без строгого режима неизвестные
-виды сохраняются как свободные узлы.
+A pack takes effect **only in namespaces where it is explicitly enabled**
+(`PUT /api/memory/namespaces/{ns}/kinds`). In **strict mode** (`strict: true`),
+writing an entity of an unknown kind, or with a key/attributes outside the
+schema, is rejected with `422`; during snapshot reconciliation, relations are
+checked as well. Without strict mode, unknown kinds are stored as free-form
+nodes.
 
-Пакеты используются вместе со сверкой снимков источников (`POST /api/memory/reconcile`)
-и типизированным обходом (`POST /api/memory/context/typed`) — см.
-[Загрузку знаний](ingestion.md#reconcile) и [Поиск и контекст](retrieval.md#typed).
+Packs are used together with source snapshot reconciliation
+(`POST /api/memory/reconcile`) and typed traversal
+(`POST /api/memory/context/typed`); see
+[Knowledge ingestion](ingestion.md#reconcile) and
+[Search and context](retrieval.md#typed).
 
-## См. также
+## See also
 
-- [Namespaces и доступ](namespaces.md)
-- [Загрузка знаний](ingestion.md)
-- [Поиск и сборка контекста](retrieval.md)
+- [Namespaces and access](namespaces.md)
+- [Knowledge ingestion](ingestion.md)
+- [Search and context assembly](retrieval.md)
 - [API](api.md)
-- [Глоссарий](../reference/glossary.md)
+- [Glossary](../reference/glossary.md)

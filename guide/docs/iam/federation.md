@@ -1,44 +1,47 @@
-# Федерация identity
+
+# Identity federation
 
 
-IAM не хранит паролей и не показывает форму входа: человека аутентифицирует
-внешний OIDC Identity Provider, а IAM проверяет его
-токен, связывает учётную запись с principal и выпускает credentials
-платформы. Статья описывает регистрацию IdP, вход через `federation:authenticate`
-и `federation:exchange`, привязку identities, проекцию групп и
-SCIM-провижининг. Для администраторов, подключающих корпоративный вход.
+IAM stores no passwords and shows no sign-in form: an external OIDC Identity
+Provider authenticates the person, and IAM verifies its token, links the
+account to a principal, and issues platform credentials. This article
+describes IdP registration, sign-in through `federation:authenticate` and
+`federation:exchange`, identity linking, group projection, and SCIM
+provisioning. It is for administrators who connect corporate sign-in.
 
 
-Федерацию использует клиент, который проводит человека через вход в IdP
-(например, веб-приложение), и обменивает его токен через `federation:exchange`.
+Federation is used by a client that takes a person through IdP sign-in (for
+example, a web application) and exchanges their token through
+`federation:exchange`.
 
-## Как это работает
+## How it works
 
 
 ```mermaid
 sequenceDiagram
-    participant U as Браузер
+    participant U as Browser
     participant KC as IdP
-    participant L as Веб-клиент
+    participant L as Web client
     participant IAM as iam-service
-    U->>L: открыть приложение
-    L->>KC: вход (Authorization Code + PKCE)
-    KC->>L: upstream token (aud включает iam-service)
+    U->>L: open the application
+    L->>KC: sign-in (Authorization Code + PKCE)
+    KC->>L: upstream token (aud includes iam-service)
     L->>IAM: POST /api/v1/tenants/{t}/federation:exchange<br/>{identityProvider, token, audience}
-    IAM->>KC: discovery + JWKS (кэш)
-    IAM->>IAM: проверка подписи, iss, aud, exp<br/>linking, проекция групп,<br/>authentication context
+    IAM->>KC: discovery + JWKS (cached)
+    IAM->>IAM: check signature, iss, aud, exp<br/>linking, group projection,<br/>authentication context
     IAM->>L: {accessToken, principalId, groups, …}
-    L->>L: сессия этого principal'а
+    L->>L: session of this principal
 ```
 
-Федерация подтверждает **identity и группы**. Она не выдаёт лицензий и
-доменных прав: доступ к ресурсу по-прежнему решает resource service (для
-Control Plane — binding principal, см. [Авторизация и права](../control-plane/authorization.md)).
+Federation confirms **identity and groups**. It grants no licenses and no
+domain permissions: access to a resource is still decided by the resource
+service (for Control Plane, by the principal binding; see
+[Authorization and permissions](../control-plane/authorization.md)).
 
-## Регистрация identity provider
+## Registering an identity provider
 
 
-Провайдер регистрируется в tenant административным вызовом:
+A provider is registered in a tenant by an administrative call:
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/identity-providers" \
@@ -53,173 +56,180 @@ curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/identity-providers" \
       }'
 ```
 
-!!! note "Шаг выполняется вручную"
-    `make bootstrap` identity provider не регистрирует. Ключ `corp-idp` —
-    имя провайдера, которое клиент передаёт в `federation:exchange`
-    как `identityProvider`.
+!!! note "This step is manual"
+    `make bootstrap` does not register an identity provider. The key
+    `corp-idp` is the provider name that the client passes to
+    `federation:exchange` as `identityProvider`.
 
-### Параметры провайдера
+### Provider parameters
 
-| Поле | По умолчанию | Описание |
+| Field | Default | Description |
 |---|---|---|
-| `key` | — | Имя провайдера в tenant, `^[a-z0-9][a-z0-9._-]{1,118}[a-z0-9]$`; передаётся клиентами как `identityProvider` |
-| `issuer` | — | Точный `iss` upstream-токенов; только `http(s)://`, конечный `/` отбрасывается |
-| `audience` | — | Какой `aud` IAM требует в upstream-токене (в Keycloak — клиент `iam-service` и audience-маппер) |
-| `jwksUri` | `""` | Адрес JWKS. Пусто — берётся из discovery `<issuer>/.well-known/openid-configuration` |
-| `subjectClaim` | `sub` | Claim со стабильным subject |
-| `externalIdClaim` | `sub` | Claim со стабильным внешним ID (для LDAP — например `entryUUID`); пусто в токене → берётся subject |
-| `groupClaim` | `groups` | Claim со списком групп |
-| `groupMappings` | `{}` | Allowlist: upstream-группа → ключ группы IAM |
-| `requiredAcrValues` | `[]` | Допустимые `acr`; непусто — вход без подходящего `acr` запрещён |
-| `requiredAmrValues` | `[]` | Методы, **все** из которых должны быть в `amr` |
-| `lifecycleProfile` | `read_only` | Кто ведёт жизненный цикл identities, см. ниже |
-| `jwksCacheTtlSeconds` | 300 | Сколько JWKS считается свежим (0–86400) |
-| `jwksStaleGraceSeconds` | 900 | Сколько после TTL можно работать на старом JWKS, если IdP недоступен (0–86400) |
+| `key` | — | Provider name in the tenant, `^[a-z0-9][a-z0-9._-]{1,118}[a-z0-9]$`; clients pass it as `identityProvider` |
+| `issuer` | — | Exact `iss` of upstream tokens; `http(s)://` only, a trailing `/` is dropped |
+| `audience` | — | Which `aud` IAM requires in the upstream token (in Keycloak, the `iam-service` client and an audience mapper) |
+| `jwksUri` | `""` | JWKS address. If empty, it is taken from discovery `<issuer>/.well-known/openid-configuration` |
+| `subjectClaim` | `sub` | Claim with the stable subject |
+| `externalIdClaim` | `sub` | Claim with the stable external ID (for LDAP, for example `entryUUID`); if empty in the token, the subject is used |
+| `groupClaim` | `groups` | Claim with the list of groups |
+| `groupMappings` | `{}` | Allowlist: upstream group → IAM group key |
+| `requiredAcrValues` | `[]` | Allowed `acr` values; if non-empty, sign-in without a matching `acr` is denied |
+| `requiredAmrValues` | `[]` | Methods, **all** of which must be present in `amr` |
+| `lifecycleProfile` | `read_only` | Who manages the lifecycle of identities; see below |
+| `jwksCacheTtlSeconds` | 300 | How long JWKS is considered fresh (0–86400) |
+| `jwksStaleGraceSeconds` | 900 | How long after the TTL IAM may keep using the old JWKS if the IdP is unavailable (0–86400) |
 
-В IAM хранится только несекретная конфигурация доверия. Client secrets,
-пароли и LDAP bind credentials остаются в конфигурации самого IdP. Лишние
-поля в запросе запрещены (`422`).
+IAM stores only the non-secret trust configuration. Client secrets, passwords,
+and LDAP bind credentials stay in the IdP's own configuration. Extra fields in
+the request are rejected (`422`).
 
-Ошибки регистрации: `404 tenant_not_found`, `422 invalid_issuer`,
-`409 identity_provider_exists` (тот же `key` или тот же `issuer` в tenant).
+Registration errors: `404 tenant_not_found`, `422 invalid_issuer`,
+`409 identity_provider_exists` (the same `key` or the same `issuer` in the tenant).
 
-!!! warning "Изменить провайдера через API нельзя"
-    Эндпоинтов чтения, изменения и отключения identity provider нет. Проверьте
-    параметры до регистрации; исправление — только в базе IAM.
+!!! warning "You cannot change a provider through the API"
+    There are no endpoints to read, change, or disable an identity provider.
+    Check the parameters before registration; a fix is possible only in the
+    IAM database.
 
-### Профили жизненного цикла {#lifecycle-profiles}
+### Lifecycle profiles {#lifecycle-profiles}
 
-| `lifecycleProfile` | Кто ведёт identities | Ручная привязка external identity для этого issuer | SCIM-источник |
+| `lifecycleProfile` | Who manages identities | Manual external identity linking for this issuer | SCIM source |
 |---|---|---|---|
-| `read_only` | каталог (LDAP/AD через IdP) | запрещена: `409 identity_provider_managed` | не регистрируется: `409 population_managed_by_directory` |
-| `managed` | администратор / SCIM | разрешена | разрешён |
+| `read_only` | the directory (LDAP/AD through the IdP) | denied: `409 identity_provider_managed` | cannot be registered: `409 population_managed_by_directory` |
+| `managed` | administrator / SCIM | allowed | allowed |
 
-Выбирайте `managed`, если principals уже существуют в IAM (например, оператор
-создан bootstrap-скриптом) и их нужно привязать к учётным записям IdP вручную.
+Choose `managed` if principals already exist in IAM (for example, an operator
+created by the bootstrap script) and you need to link them to IdP accounts
+manually.
 
-## Проверка upstream-токена
+## Upstream token verification
 
-IAM проверяет upstream-токен строго, без «мягких» режимов:
+IAM verifies the upstream token strictly, with no "lenient" modes:
 
-| Проверка | Отказ |
+| Check | Refusal |
 |---|---|
-| Токен разбирается как JWT | `401 invalid_token` |
-| `alg` ∈ `RS256`, `RS384`, `RS512`, `ES256`, `ES384` (симметричные и `none` отклоняются до обращения к ключу) | `401 unsupported_algorithm` |
-| Есть `kid`, и он есть в JWKS провайдера | `401 unknown_signing_key` |
-| Подпись | `401 invalid_signature` |
-| `iss` точно равен `issuer` провайдера | `401 invalid_issuer` |
-| `aud` содержит `audience` провайдера | `401 invalid_audience` |
-| `exp` не истёк; обязательны `iss`, `sub`, `aud`, `exp`, `iat` | `401 token_expired` / `401 invalid_token` |
-| Claim `subjectClaim` непуст | `401 missing_subject_claim` |
-| `acr`/`amr` удовлетворяют требованиям провайдера | `403 step_up_required` |
+| The token parses as a JWT | `401 invalid_token` |
+| `alg` ∈ `RS256`, `RS384`, `RS512`, `ES256`, `ES384` (symmetric algorithms and `none` are rejected before the key is consulted) | `401 unsupported_algorithm` |
+| A `kid` is present and exists in the provider's JWKS | `401 unknown_signing_key` |
+| Signature | `401 invalid_signature` |
+| `iss` exactly equals the provider's `issuer` | `401 invalid_issuer` |
+| `aud` contains the provider's `audience` | `401 invalid_audience` |
+| `exp` has not passed; `iss`, `sub`, `aud`, `exp`, `iat` are required | `401 token_expired` / `401 invalid_token` |
+| The `subjectClaim` claim is non-empty | `401 missing_subject_claim` |
+| `acr`/`amr` satisfy the provider's requirements | `403 step_up_required` |
 
-Недостаточный authentication context **закрывает** вход, а не понижает
-требования (step-up).
+An insufficient authentication context **closes** sign-in rather than lowering
+the requirements (step-up).
 
-### JWKS провайдера и деградация
+### Provider JWKS and degradation
 
-IAM кеширует JWKS каждого провайдера в памяти процесса:
+IAM caches each provider's JWKS in process memory:
 
 ```mermaid
 flowchart LR
-    R["Запрос входа"] --> F{"кэш моложе<br/>jwksCacheTtlSeconds?"}
-    F -- да --> OK["проверка на кэше"]
-    F -- нет --> N["discovery/JWKS у IdP"]
-    N -- успех --> OK2["обновить кэш,<br/>проверка"]
-    N -- ошибка --> G{"кэш в пределах<br/>TTL + grace?"}
-    G -- да --> ST["проверка на старом кэше<br/>identityProviderStale: true"]
-    G -- нет / кэша нет --> D["503 identity_provider_unavailable"]
+    R["Sign-in request"] --> F{"cache younger than<br/>jwksCacheTtlSeconds?"}
+    F -- yes --> OK["verify against the cache"]
+    F -- no --> N["discovery/JWKS from the IdP"]
+    N -- success --> OK2["refresh the cache,<br/>verify"]
+    N -- error --> G{"cache within<br/>TTL + grace?"}
+    G -- yes --> ST["verify against the stale cache<br/>identityProviderStale: true"]
+    G -- no / no cache --> D["503 identity_provider_unavailable"]
 ```
 
-- Discovery-документ должен содержать `issuer`, точно равный настроенному, и
-  непустой `jwks_uri`. Таймаут запроса к IdP — 5 с.
-- При работе на устаревшем кэше ответ содержит `identityProviderStale: true`,
-  а в audit добавляется пометка `jwks:stale`.
-- После окна grace вход закрывается (fail closed), а не продолжает доверять
-  старым ключам.
+- The discovery document must contain an `issuer` exactly equal to the
+  configured one and a non-empty `jwks_uri`. The request timeout to the IdP
+  is 5 s.
+- When working from a stale cache, the response contains
+  `identityProviderStale: true`, and the audit record gets the `jwks:stale`
+  mark.
+- After the grace window, sign-in closes (fail closed) instead of continuing
+  to trust old keys.
 
-!!! tip "IAM должен видеть IdP по адресу issuer"
-    Discovery идёт по `<issuer>/.well-known/openid-configuration`, то есть по
-    публичному адресу. В `compose.yml` периметр Caddy имеет в сети сервисов
+!!! tip "IAM must reach the IdP at the issuer address"
+    Discovery goes to `<issuer>/.well-known/openid-configuration`, that is, to
+    the public address. In `compose.yml`, the Caddy edge has, in the services
+    network,
 
-    псевдоним `${TAIMEN_PUBLIC_HOST}`, поэтому контейнер IAM достигает
-    IdP, опубликованного за тем же периметром, по публичному имени. Если IAM
-    в вашей топологии не может разрешить публичное имя, задайте `jwksUri`
-    явно на внутренний адрес.
+    the alias `${TAIMEN_PUBLIC_HOST}`, so the IAM container reaches an IdP
+    published behind the same edge by its public name. If IAM cannot resolve
+    the public name in your topology, set `jwksUri` explicitly to an internal
+    address.
 
-## Связывание с principal (linking)
+## Linking to a principal
 
-После проверки токена IAM ищет external identity:
+After verifying the token, IAM looks up the external identity:
 
-1. по паре `(issuer, subject)`;
-2. по паре `(identity provider, externalId)`.
+1. by the `(issuer, subject)` pair;
+2. by the `(identity provider, externalId)` pair.
 
 ```mermaid
 flowchart TD
-    A["upstream claims:<br/>subject, externalId"] --> B{"найдено по subject<br/>и по externalId,<br/>но это разные записи?"}
-    B -- да --> X1["409 external_identity_conflict"]
-    B -- нет --> C{"запись найдена?"}
-    C -- нет --> J["JIT: новый human principal<br/>displayName = key:externalId,<br/>membership, external identity (federated)"]
-    C -- да --> D{"identity и principal активны,<br/>membership в tenant активен?"}
+    A["upstream claims:<br/>subject, externalId"] --> B{"found by subject<br/>and by externalId,<br/>but these are different records?"}
+    B -- yes --> X1["409 external_identity_conflict"]
+    B -- no --> C{"record found?"}
+    C -- no --> J["JIT: new human principal<br/>displayName = key:externalId,<br/>membership, external identity (federated)"]
+    C -- yes --> D{"identity and principal active,<br/>membership in tenant active?"}
     D -- identity disabled --> X2["403 identity_disabled"]
     D -- principal disabled --> X3["403 principal_disabled"]
-    D -- нет membership --> X4["403 principal_not_in_tenant"]
-    D -- да --> E["усыновить ручную запись провайдером,<br/>дописать externalId,<br/>обновить subject при смене"]
+    D -- no membership --> X4["403 principal_not_in_tenant"]
+    D -- yes --> E["provider adopts the manual record,<br/>add externalId,<br/>update subject if it changed"]
 ```
 
-- **JIT-создание.** Неизвестная учётная запись создаёт новый principal вида
-  `human` с именем `<key провайдера>:<externalId>`, membership в tenant и
-  external identity с `source = federated`. Публикуются события
-  `principal.created` и `external_identity.linked`.
-- **Усыновление.** Запись, привязанная вручную (без провайдера), при первом
-  входе получает ссылку на провайдера (`federation.identity_adopted` в audit).
-- **Смена subject.** Если IdP пересоздал пользователя, но стабильный
-  `externalId` тот же, subject записи обновляется
-  (`federation.subject_rotated` в audit), второй principal не появляется.
-- **Конфликт.** Если `externalId` в токене расходится с уже записанным для
-  этого subject — `409 external_identity_conflict`.
+- **JIT creation.** An unknown account creates a new principal of kind
+  `human` named `<provider key>:<externalId>`, a membership in the tenant,
+  and an external identity with `source = federated`. The events
+  `principal.created` and `external_identity.linked` are published.
+- **Adoption.** A manually linked record (without a provider) gets a reference
+  to the provider on the first sign-in (`federation.identity_adopted` in audit).
+- **Subject change.** If the IdP recreated the user but the stable
+  `externalId` is the same, the record's subject is updated
+  (`federation.subject_rotated` in audit), and no second principal appears.
+- **Conflict.** If the `externalId` in the token differs from the one already
+  recorded for this subject, you get `409 external_identity_conflict`.
 
-!!! warning "Principal для существующего человека — заранее"
-    Если человек уже работает в платформе как principal (например, получил
-    PAT), а затем входит через IdP впервые, без предварительной привязки будет
-    создан **второй** principal. Чтобы вход через браузер шёл под тем же
-    `principal_id`, привяжите external identity заранее
-    (`POST …/principals/{id}/external-identities`, провайдер с профилем
-    `managed`) — см. [Tenants и principals](principals.md#external-identity).
+!!! warning "Link the principal of an existing person in advance"
+    If a person already works on the platform as a principal (for example,
+    they have a PAT) and then signs in through the IdP for the first time,
+    a **second** principal is created unless you linked them beforehand. For
+    browser sign-in to use the same `principal_id`, link the external
+    identity in advance (`POST …/principals/{id}/external-identities`, a
+    provider with the `managed` profile); see
+    [Tenants and principals](principals.md#external-identity).
 
-## Проекция групп {#group-projection}
+## Group projection {#group-projection}
 
-Группы из claim `groupClaim` проецируются в группы IAM **только** по
-allowlist `groupMappings`:
+Groups from the `groupClaim` claim are projected into IAM groups **only**
+through the `groupMappings` allowlist:
 
-- ведущий `/` и пробелы в имени upstream-группы игнорируются
+- a leading `/` and spaces in the upstream group name are ignored
   (`/platform-operators` = `platform-operators`);
-- группа без явного маппинга не создаёт членства;
-- отсутствующая группа IAM создаётся с `source = federated`;
-- при каждом входе federated-членства этого провайдера приводятся к
-  текущему токену: лишние удаляются, недостающие добавляются. Локальные
-  членства и членства других провайдеров не затрагиваются.
+- a group without an explicit mapping creates no membership;
+- a missing IAM group is created with `source = federated`;
+- on each sign-in, this provider's federated memberships are brought in line
+  with the current token: extra ones are removed, missing ones are added.
+  Local memberships and memberships from other providers are not affected.
 
-События: `group.created`, `group_membership.added`, `group_membership.removed`.
+Events: `group.created`, `group_membership.added`, `group_membership.removed`.
 
 ## Authentication context
 
-Каждый успешный федеративный вход в той же транзакции записывает
-authentication context человека (`source = federation`) с `issuer`, `acr`,
-`amr` и `auth_time` из upstream-токена. Он:
+Every successful federated sign-in records, in the same transaction, the
+person's authentication context (`source = federation`) with `issuer`, `acr`,
+`amr`, and `auth_time` from the upstream token. It:
 
-- открывает человеку выпуск PAT в течение `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`
-  (см. [Credentials и PAT](credentials.md));
-- даёт значения `auth_time` и `acr` для токена `federation:exchange`.
+- allows PAT issuance to the person for
+  `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`
+  (see [Credentials and PAT](credentials.md));
+- provides the `auth_time` and `acr` values for the `federation:exchange` token.
 
-`auth_time` из будущего подрезается до серверного времени.
+An `auth_time` in the future is clamped to server time.
 
-## `federation:authenticate` — только подтверждение
+## `federation:authenticate`: confirmation only
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/federation:authenticate" \
   -H 'Content-Type: application/json' \
-  -d '{"identityProvider":"corp-idp","token":"<access token IdP>"}'
+  -d '{"identityProvider":"corp-idp","token":"<IdP access token>"}'
 ```
 
 ```json
@@ -232,22 +242,22 @@ curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/federation:authenticate" \
 }
 ```
 
-Credential не выпускается. Эндпоинт не требует bootstrap-токена —
-доказательством служит сам upstream-токен. Тело принимает **только**
-`identityProvider` и `token`: поля `username`/`password` запрещены контрактом,
-пароль каталога проверяет исключительно IdP.
+No credential is issued. The endpoint does not require the bootstrap token;
+the upstream token itself is the proof. The body accepts **only**
+`identityProvider` and `token`: the fields `username`/`password` are forbidden
+by the contract, and only the IdP verifies the directory password.
 
-## `federation:exchange` — вход и токен одним запросом
+## `federation:exchange`: sign-in and token in one request
 
 
-Для человека в браузере: у веб-клиента есть только upstream-токен пользователя,
-PAT через веб-сессию не проходит, а общий сервисный credential потерял бы
-человека в audit.
+This is for a person in a browser: the web client has only the user's upstream
+token, a PAT does not pass through a web session, and a shared service
+credential would lose the person in audit.
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/federation:exchange" \
   -H 'Content-Type: application/json' \
-  -d '{"identityProvider":"corp-idp","token":"<access token IdP>",
+  -d '{"identityProvider":"corp-idp","token":"<IdP access token>",
        "audience":"control-plane","scopes":[]}'
 ```
 
@@ -267,86 +277,89 @@ curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/federation:exchange" \
 }
 ```
 
-Отличия от обмена PAT:
+Differences from PAT exchange:
 
 | | `federation:exchange` | PAT `:exchange` |
 |---|---|---|
-| Потолок | `allowedScopes` audience — собственного потолка у веб-входа нет | `scopeCeiling` PAT ∩ `allowedScopes` |
-| Пустой `scopes` | весь `allowedScopes` audience | весь потолок |
-| `credential_id` в токене | id external identity: её отключение закрывает следующий обмен | id PAT |
-| Кому доступно | только `human` (`422 human_principal_required`) | `human`, `agent` |
-| `auth_time`, `acr` | из текущего upstream-токена | из снимка при выпуске PAT |
+| Ceiling | the audience's `allowedScopes`; web sign-in has no ceiling of its own | the PAT's `scopeCeiling` ∩ `allowedScopes` |
+| Empty `scopes` | the audience's entire `allowedScopes` | the whole ceiling |
+| `credential_id` in the token | id of the external identity: disabling it closes the next exchange | id of the PAT |
+| Available to | `human` only (`422 human_principal_required`) | `human`, `agent` |
+| `auth_time`, `acr` | from the current upstream token | from the snapshot taken at PAT issuance |
 
-Форма токена та же, что при обмене PAT (`principal_type`, `scope_ceiling`,
-`session_id`, `auth_time`, `acr`) — resource service разницы не видит.
+The token shape is the same as for PAT exchange (`principal_type`,
+`scope_ceiling`, `session_id`, `auth_time`, `acr`); the resource service sees
+no difference.
 
-Отказ по audience или scope пишется в audit как `federation.exchange` с
-`outcome = denied`; сам вход (linking, группы, context) при этом остаётся
-зафиксированным.
+A refusal by audience or scope is written to audit as `federation.exchange`
+with `outcome = denied`; the sign-in itself (linking, groups, context) stays
+recorded.
 
-!!! note "Права решает сервис, а не scope"
-    Пустой `scopes` даёт весь реестр audience, включая `control-plane:admin`.
-    Это потолок, а не право: что человек реально может, определяет binding
-    его principal в Control Plane.
+!!! note "The service decides permissions, not the scope"
+    An empty `scopes` yields the audience's entire registry, including
+    `control-plane:admin`. This is a ceiling, not a permission: what the
+    person can actually do is determined by the binding of their principal
+    in Control Plane.
 
 
 
-## Подключение IdP: чек-лист
+## Connecting an IdP: checklist
 
-1. `aud` **access token** клиента, через который входят люди, содержит
-   `audience` провайдера (например, `iam-service`). В IAM передаётся именно
-   access token IdP, не ID token.
-   Пример: в Keycloak — клиент `iam-service` (bearer-only) и audience-маппер.
-2. Issuer IdP совпадает с `issuer` провайдера в IAM символ в символ
-   (схема, хост, путь).
-3. Провайдер зарегистрирован в IAM (`POST …/identity-providers`) с тем же
-   `key`, что клиент передаёт в `identityProvider`.
-4. Для людей, уже существующих как principals, external identities
-   привязаны заранее (`subject` = значение `subjectClaim` пользователя в IdP).
-5. Для каждого человека, который будет работать в Control Plane, создан
-   binding его IAM principal в Control Plane **до** первого запроса.
-6. Проверка: `federation:authenticate` с токеном тестового пользователя
-   возвращает ожидаемый `principalId` и группы.
+1. The `aud` of the **access token** of the client through which people sign
+   in contains the provider's `audience` (for example, `iam-service`). IAM
+   receives the IdP access token, not the ID token.
+   Example: in Keycloak, the `iam-service` client (bearer-only) and an
+   audience mapper.
+2. The IdP issuer matches the provider's `issuer` in IAM character for
+   character (scheme, host, path).
+3. The provider is registered in IAM (`POST …/identity-providers`) with the
+   same `key` that the client passes in `identityProvider`.
+4. For people who already exist as principals, external identities are linked
+   in advance (`subject` = the value of the user's `subjectClaim` in the IdP).
+5. For each person who will work in Control Plane, a binding of their IAM
+   principal is created in Control Plane **before** the first request.
+6. Check: `federation:authenticate` with a test user's token returns the
+   expected `principalId` and groups.
 
-## SCIM-провижининг
+## SCIM provisioning
 
-IAM принимает входящий SCIM 2.0 из HR-системы или IGA и проецирует его на
-principals, external identities и группы. Это не способ входа: SCIM
-управляет чужим жизненным циклом.
+IAM accepts inbound SCIM 2.0 from an HR system or an IGA and projects it onto
+principals, external identities, and groups. This is not a way to sign in:
+SCIM manages a lifecycle owned by someone else.
 
-### Источник провижининга
+### Provisioning source
 
-Каждая population (upstream identity provider) имеет ровно один
-authoritative источник. Источник регистрируется административно:
+Each population (upstream identity provider) has exactly one authoritative
+source. The source is registered administratively:
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/provisioning-sources" \
   -H "X-IAM-Bootstrap-Token: $IAM_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' \
   -d '{"key":"hr","kind":"scim","identityProvider":"corp-idp",
-       "servicePrincipalId":"<principal-id service account>",
+       "servicePrincipalId":"<service account principal-id>",
        "upstreamMode":"off","staleAfterSeconds":86400}'
 ```
 
-| Поле | По умолчанию | Описание |
+| Field | Default | Description |
 |---|---|---|
-| `key` | — | Имя источника |
-| `kind` | `scim` | `scim` или `ldap` |
-| `identityProvider` | — | `key` провайдера-population; для `read_only` SCIM запрещён |
-| `servicePrincipalId` | — | Principal вида `service_account`, от имени которого ходит SCIM-клиент (обязателен для `scim`) |
-| `upstreamMode` | `off` | Запись в IdP: `off` — только проекция IAM; `scim` — нативный SCIM Keycloak; `admin` — Admin API; `auto` — SCIM с откатом на Admin API |
-| `upstreamBaseUrl`, `upstreamRealm` | `""` | Адрес и realm IdP для записи |
-| `staleAfterSeconds` | 86400 | Через сколько без синхронизации источник считается устаревшим (60–2 592 000) |
+| `key` | — | Source name |
+| `kind` | `scim` | `scim` or `ldap` |
+| `identityProvider` | — | `key` of the population provider; SCIM is not allowed for `read_only` |
+| `servicePrincipalId` | — | Principal of kind `service_account` on whose behalf the SCIM client works (required for `scim`) |
+| `upstreamMode` | `off` | Writing to the IdP: `off`, IAM projection only; `scim`, native Keycloak SCIM; `admin`, Admin API; `auto`, SCIM with fallback to the Admin API |
+| `upstreamBaseUrl`, `upstreamRealm` | `""` | IdP address and realm for writing |
+| `staleAfterSeconds` | 86400 | Time without synchronization after which the source is considered stale (60–2,592,000) |
 
-`GET …/provisioning-sources` возвращает источники с флагом `stale`; первое
-обнаружение устаревания публикует событие `provisioning_source.stale` —
-по нему удобно строить alert.
+`GET …/provisioning-sources` returns sources with a `stale` flag; the first
+detection of staleness publishes a `provisioning_source.stale` event, which is
+convenient to build an alert on.
 
-### Доступ SCIM-клиента
+### SCIM client access
 
-SCIM-клиент — service account с audience `IAM_SCIM_AUDIENCE` (по умолчанию
-`iam-scim`) и scope `IAM_SCIM_SCOPE` (`scim:write`). Audience нужно завести в
-tenant, service account — создать с этим audience и потолком, а его
-`principalId` указать в источнике.
+The SCIM client is a service account with audience `IAM_SCIM_AUDIENCE`
+(`iam-scim` by default) and scope `IAM_SCIM_SCOPE` (`scim:write`). Create the
+audience in the tenant, create the service account with this audience and
+ceiling, and specify its `principalId` in the source.
 
 ```bash
 TOKEN=$(curl -s -X POST "$IAM_URL/api/v1/tokens/exchange" -H 'Content-Type: application/json' \
@@ -356,58 +369,60 @@ curl -s "$IAM_URL/scim/v2/Users?filter=externalId%20eq%20%22E-1001%22" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Токен человека на `/scim/v2` не принимается (`403`): требуется
-`principal_type = service_account`. Tenant и источник определяются по
-identity из токена — объявить чужой tenant клиент не может.
+A human's token is not accepted on `/scim/v2` (`403`):
+`principal_type = service_account` is required. The tenant and source are
+determined from the identity in the token; the client cannot declare another
+tenant.
 
-### Поведение SCIM
+### SCIM behavior
 
-- `Users` и `Groups`: `GET` (список с фильтром и пагинацией, до
+- `Users` and `Groups`: `GET` (list with filter and pagination, up to
   `IAM_SCIM_MAX_PAGE_SIZE` = 200), `POST`, `GET/{id}`, `PUT`, `PATCH`, `DELETE`;
   `ServiceProviderConfig`, `ResourceTypes`, `Schemas`.
-- Сопоставление — по обязательному `externalId`; `userName` может меняться.
-- Профильные атрибуты (`name`, `emails`, телефоны) принимаются и
-  отбрасываются — IAM не каталог персональных данных.
-- Фильтр поддерживает только `eq` и `and`; прочее — `invalidFilter`.
-- `ETag`/`If-Match` защищают от гонки двух проходов синхронизации.
-- `active: false` и `DELETE` отключают principal и **немедленно** отзывают
-  все его PAT.
-- Пока настоящего OIDC `sub` нет, в `subject` лежит временное значение; при
-  первом федеративном входе запись находится по `externalId`, и `subject`
-  заменяется настоящим.
-- Недоступность записи в IdP при `upstreamMode` ≠ `off` закрывает запись
-  целиком (`502`): расхождение проекции и каталога опаснее отказа.
-- Ошибки — документ `urn:ietf:params:scim:api:messages:2.0:Error`.
+- Matching is by the required `externalId`; `userName` may change.
+- Profile attributes (`name`, `emails`, phone numbers) are accepted and
+  discarded: IAM is not a directory of personal data.
+- The filter supports only `eq` and `and`; anything else gives `invalidFilter`.
+- `ETag`/`If-Match` protect against a race between two synchronization passes.
+- `active: false` and `DELETE` disable the principal and **immediately**
+  revoke all of its PATs.
+- Until a real OIDC `sub` exists, `subject` holds a temporary value; on the
+  first federated sign-in, the record is found by `externalId`, and `subject`
+  is replaced with the real one.
+- If writing to the IdP is unavailable while `upstreamMode` ≠ `off`, the whole
+  write is refused (`502`): a divergence between the projection and the
+  directory is more dangerous than a refusal.
+- Errors are returned as a `urn:ietf:params:scim:api:messages:2.0:Error` document.
 
-## Ошибки федерации {#federation-errors}
+## Federation errors {#federation-errors}
 
-| HTTP | `detail` | Причина |
+| HTTP | `detail` | Cause |
 |---|---|---|
-| 401 | `invalid_token` | токен не разбирается или не прошёл общую проверку |
-| 401 | `unsupported_algorithm` | алгоритм вне allowlist |
-| 401 | `unknown_signing_key` | нет `kid` или его нет в JWKS |
-| 401 | `invalid_signature` | подпись не сходится |
-| 401 | `invalid_issuer` | `iss` не равен issuer провайдера |
-| 401 | `invalid_audience` | в `aud` нет audience провайдера |
-| 401 | `token_expired` | upstream-токен истёк |
-| 401 | `missing_subject_claim` | пуст claim `subjectClaim` |
-| 403 | `step_up_required` | `acr`/`amr` не удовлетворяют требованиям |
-| 403 | `identity_disabled` | external identity отключена |
-| 403 | `principal_disabled` | principal не активен |
-| 403 | `principal_not_in_tenant` | нет активного membership в tenant |
-| 403 | `audience_not_allowed` | (`exchange`) audience не зарегистрирован или выключен |
-| 403 | `scope_not_allowed` | (`exchange`) scope вне `allowedScopes` |
-| 404 | `identity_provider_not_found` | нет активного провайдера с таким `key` |
-| 409 | `external_identity_conflict` | subject и externalId указывают на разные записи |
-| 422 | `human_principal_required` | (`exchange`) identity привязана к не-человеку |
-| 503 | `identity_provider_unavailable` | IdP недоступен, окно grace исчерпано |
+| 401 | `invalid_token` | the token does not parse or failed the general check |
+| 401 | `unsupported_algorithm` | algorithm outside the allowlist |
+| 401 | `unknown_signing_key` | no `kid`, or it is not in JWKS |
+| 401 | `invalid_signature` | the signature does not match |
+| 401 | `invalid_issuer` | `iss` does not equal the provider's issuer |
+| 401 | `invalid_audience` | `aud` does not contain the provider's audience |
+| 401 | `token_expired` | the upstream token has expired |
+| 401 | `missing_subject_claim` | the `subjectClaim` claim is empty |
+| 403 | `step_up_required` | `acr`/`amr` do not satisfy the requirements |
+| 403 | `identity_disabled` | the external identity is disabled |
+| 403 | `principal_disabled` | the principal is not active |
+| 403 | `principal_not_in_tenant` | no active membership in the tenant |
+| 403 | `audience_not_allowed` | (`exchange`) the audience is not registered or is disabled |
+| 403 | `scope_not_allowed` | (`exchange`) scope outside `allowedScopes` |
+| 404 | `identity_provider_not_found` | no active provider with this `key` |
+| 409 | `external_identity_conflict` | subject and externalId point to different records |
+| 422 | `human_principal_required` | (`exchange`) the identity is linked to a non-human |
+| 503 | `identity_provider_unavailable` | the IdP is unavailable and the grace window is exhausted |
 
-Отказы пишутся в audit IAM (`federation.authenticate` / `federation.exchange`,
-`outcome = denied`, причина — код ошибки); upstream-токен и subject в audit не
-попадают.
+Refusals are written to the IAM audit (`federation.authenticate` /
+`federation.exchange`, `outcome = denied`, with the error code as the reason);
+the upstream token and the subject are not written to audit.
 
-## См. также
+## See also
 
-- [Tenants и principals](principals.md)
-- [Токены, audiences, scopes](tokens.md)
-- [API IAM](api.md#federation)
+- [Tenants and principals](principals.md)
+- [Tokens, audiences, scopes](tokens.md)
+- [IAM API](api.md#federation)

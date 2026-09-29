@@ -1,147 +1,150 @@
-# Состав поставки
 
-Статья перечисляет компоненты платформы Taimen, показывает, как они
-раскладываются по профилям корневого `compose.yml`, и фиксирует статус каждого
-профиля: что входит в набор по умолчанию, что экспериментально, что заморожено.
-Она нужна при планировании стенда и при выборе, какие профили включать.
+# Delivery contents
 
-## Устройство репозитория
+This page lists the components of the Taimen platform, shows how they map to
+the profiles of the root `compose.yml`, and records the status of each profile:
+what is in the default set, what is experimental, and what is frozen. Use it
+when you plan a deployment and choose which profiles to enable.
 
-Платформа собирается в **суперпроекте** — репозитории-зонтике, к которому
-компоненты подключены git-сабмодулями **плоско в корне**:
+## Repository layout
+
+The platform is assembled in a **superproject**, an umbrella repository to
+which the components are attached as git submodules, **flat at the root**:
 
 ```text
-<суперпроект>/
-├── control-plane/          # сабмодуль
-├── iam-service/            # сабмодуль
-├── memory-service/         # сабмодуль
-├── notification-service/   # сабмодуль (профиль notify)
-├── platform-auth-sdk/      # сабмодуль (библиотека)
-├── skill-sdk/              # сабмодуль (библиотека)
-├── platform-llm/           # сабмодуль (библиотека)
+<superproject>/
+├── control-plane/          # submodule
+├── iam-service/            # submodule
+├── memory-service/         # submodule
+├── notification-service/   # submodule (notify profile)
+├── platform-auth-sdk/      # submodule (library)
+├── skill-sdk/              # submodule (library)
+├── platform-llm/           # submodule (library)
 ├── compose.yml  .env.example  Makefile
 ├── deploy/                 # bootstrap.py, Caddyfile
 ├── tools/                  # smoke, fill_secrets, cp_packages, …
-└── docs/                   # архитектура и ADR
+└── docs/                   # architecture and ADRs
 ```
 
-!!! warning "Плоская раскладка обязательна"
-    `control-plane`, `memory-service` и другие сервисы подключают
-    `platform-auth-sdk` **path-зависимостью соседней папкой**
-    (`../platform-auth-sdk`), поэтому их образы собираются с контекстом — корнем
-    суперпроекта. Переносить сабмодули в подкаталоги нельзя: сборка сломается.
+!!! warning "The flat layout is mandatory"
+    `control-plane`, `memory-service`, and other services include
+    `platform-auth-sdk` as a **path dependency in a sibling directory**
+    (`../platform-auth-sdk`), so their images are built with the superproject
+    root as the build context. Do not move submodules into subdirectories: the
+    build will break.
 
-Изменение в компоненте коммитится в его репозитории, а указатель сабмодуля в
-суперпроекте обновляется отдельным коммитом. `make submodules` поднимает
-сабмодули на закреплённых ревизиях, `make status` показывает указатели.
+A change to a component is committed in that component's repository, and the
+submodule pointer in the superproject is updated in a separate commit.
+`make submodules` checks out the submodules at their pinned revisions, and
+`make status` shows the pointers.
 
-## Компоненты
+## Components
 
-### Сервисы ядра
+### Core services
 
-| Компонент | Что делает | Процессы в compose | Хранилище |
+| Component | What it does | Processes in compose | Storage |
 |---|---|---|---|
-| **control-plane** | Авторитетное операционное состояние: задачи, типы, claims, runs, approvals, артефакты, цели, журнал событий, харнесс-протокол; CLI `control-plane`, MCP-сервер `control-plane-mcp`, демон исполнителя `control-plane-agent` | `control-plane-api`, `control-plane-worker`, `context-adapter` (один образ) | PostgreSQL 16 (`control-plane-db`) |
-| **iam-service** | Tenants, principals, audiences, PAT, service accounts, федерация внешних IdP, SCIM, выпуск RS256-токенов, JWKS | `iam-service` | PostgreSQL 16 (`iam-db`) |
-| **memory-service** | Граф знаний с временными фактами и provenance, документы, гибридный поиск (векторный + лексический + графовый), Context Compiler; HTTP API, MCP-сервер, CLI | `memory-service` | PostgreSQL 16 с Apache AGE и pgvector (`memory-db`, свой образ) |
+| **control-plane** | Authoritative operational state: tasks, types, claims, runs, approvals, artifacts, goals, event log, harness protocol; the `control-plane` CLI, the `control-plane-mcp` MCP server, the `control-plane-agent` executor daemon | `control-plane-api`, `control-plane-worker`, `context-adapter` (one image) | PostgreSQL 16 (`control-plane-db`) |
+| **iam-service** | Tenants, principals, audiences, PAT, service accounts, federation with external IdPs, SCIM, RS256 token issuance, JWKS | `iam-service` | PostgreSQL 16 (`iam-db`) |
+| **memory-service** | Knowledge graph with temporal facts and provenance, documents, hybrid search (vector + lexical + graph), Context Compiler; HTTP API, MCP server, CLI | `memory-service` | PostgreSQL 16 with Apache AGE and pgvector (`memory-db`, its own image) |
 
-### Библиотеки
+### Libraries
 
-| Компонент | Назначение |
+| Component | Purpose |
 |---|---|
-| **platform-auth-sdk** | Общий Policy Enforcement Point: проверка токенов IAM по JWKS, trusted auth context, отзыв, проверки entitlement и policy, единый контракт отказа, аудит. Используют все resource services |
-| **skill-sdk** | Скилл пишется один раз в коде; SDK даёт контракт, контекст вызова, хостинг по протоколам `local`, `http`, `mcp` и экспорт YAML в пакет каталога |
-| **platform-llm** | Общий LLM-клиент: любой OpenAI-совместимый `/chat/completions`, ответы по JSON-схеме, ретраи и переключение моделей |
-| **control-plane-client** | Клиент Control Plane (дистрибутив в `control-plane/client`): обмен PAT на токен, ретраи, типизированные вызовы. См. [Клиенты сервисов](../sdk/clients.md) |
+| **platform-auth-sdk** | The shared Policy Enforcement Point: IAM token verification against JWKS, trusted auth context, revocation, entitlement and policy checks, a single denial contract, audit. Used by all resource services |
+| **skill-sdk** | You write a skill once, in code; the SDK provides the contract, the invocation context, hosting over the `local`, `http`, and `mcp` protocols, and YAML export into a catalog package |
+| **platform-llm** | A shared LLM client: any OpenAI-compatible `/chat/completions`, responses constrained by a JSON schema, retries, and model fallback |
+| **control-plane-client** | The Control Plane client (distribution in `control-plane/client`): PAT-to-token exchange, retries, typed calls. See [Service clients](../sdk/clients.md) |
 
-### Периферия
+### Peripheral components
 
-| Компонент | Что делает | Статус |
+| Component | What it does | Status |
 |---|---|---|
-| **notification-service** | Уведомления людей по правилам: читает журнал событий Control Plane и доставляет сообщения в каналы (Telegram) | опционально, профиль `notify` |
+| **notification-service** | Rule-based notifications for people: reads the Control Plane event log and delivers messages to channels (Telegram) | optional, `notify` profile |
 
 
-## Профили compose
+## Compose profiles
 
-Корневой `compose.yml` — один файл, одна сеть (`${TAIMEN_NETWORK}`), одинаковые
-DNS-имена сервисов локально и на промышленном стенде. Набор сервисов выбирается
-профилями.
+The root `compose.yml` is one file with one network (`${TAIMEN_NETWORK}`) and the
+same service DNS names locally and on a production deployment. You select the
+set of services with profiles.
 
 ```mermaid
 flowchart LR
-    subgraph default["по умолчанию: make up"]
+    subgraph default["default: make up"]
         core[core]
         edge[edge]
     end
-    subgraph opt["опционально"]
+    subgraph opt["optional"]
         notify[notify]
     end
     core --> edge
     notify -.-> core
 ```
 
-| Профиль | Сервисы | Статус | Когда включать |
+| Profile | Services | Status | When to enable |
 |---|---|---|---|
-| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` | **стабильное ядро** | всегда (MinIO — содержимое артефактов ядра) |
-| `edge` | `caddy` | стабильный | всегда, кроме случаев, когда периметр обеспечен иначе |
-| `notify` | `notification-db`, `notification-service` | опционально | уведомления людей по событиям Control Plane; учётку сервиса заводит bootstrap |
+| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` | **stable core** | always (MinIO stores the core's artifact content) |
+| `edge` | `caddy` | stable | always, unless the edge is provided some other way |
+| `notify` | `notification-db`, `notification-service` | optional | notifications for people based on Control Plane events; bootstrap creates the service's account |
 
-Команды:
+Commands:
 
 ```bash
-make up                                     # core edge (по умолчанию)
-make up PROFILES="core notify edge"         # с уведомлениями
-docker compose --profile core --profile edge up -d   # то же без make
+make up                                     # core edge (default)
+make up PROFILES="core notify edge"         # with notifications
+docker compose --profile core --profile edge up -d   # the same without make
 ```
 
-`make down` останавливает все профили (`--profile "*"`), данные в volumes
-сохраняются.
+`make down` stops all profiles (`--profile "*"`); data in volumes is kept.
 
-!!! warning "Интерполяция идёт по всему файлу"
-    Docker Compose подставляет переменные во **весь** `compose.yml`, а не только
-    в сервисы включённых профилей. Поэтому обязательными (`${VAR:?…}`)
-    объявлены только значения, которые генерирует `make secrets`.
-    Идентификаторы опциональных профилей (например, `IAM_TENANT_ID`) по
-    умолчанию пусты и проверяются сервисами своих профилей, так что `make up`
-    для `core edge` работает на чистом `.env` — см.
-    [Установку и первый запуск](../getting-started/quickstart.md).
+!!! warning "Interpolation covers the whole file"
+    Docker Compose substitutes variables in the **entire** `compose.yml`, not
+    only in the services of enabled profiles. For this reason, only the values
+    that `make secrets` generates are declared as required (`${VAR:?…}`).
+    Identifiers for optional profiles (for example, `IAM_TENANT_ID`) are empty
+    by default and are checked by the services of their own profiles, so
+    `make up` for `core edge` works with a clean `.env`. See
+    [Installation and first launch](../getting-started/quickstart.md).
 
-## Образы и сборка
+## Images and builds
 
-| Образ | Контекст сборки | Dockerfile |
+| Image | Build context | Dockerfile |
 |---|---|---|
-| `${IMAGE_PREFIX}/control-plane` | корень суперпроекта (`CP_BUILD_CONTEXT`) | `control-plane/Dockerfile` |
+| `${IMAGE_PREFIX}/control-plane` | superproject root (`CP_BUILD_CONTEXT`) | `control-plane/Dockerfile` |
 | `${IMAGE_PREFIX}/iam-service` | `./iam-service` (`IAM_BUILD_CONTEXT`) | `iam-service/Dockerfile` |
-| `${IMAGE_PREFIX}/memory-service` | корень (`MEMORY_BUILD_CONTEXT`) | `memory-service/Dockerfile` |
+| `${IMAGE_PREFIX}/memory-service` | root (`MEMORY_BUILD_CONTEXT`) | `memory-service/Dockerfile` |
 | `${IMAGE_PREFIX}/memory-db` | `memory-service/infra/memory-db` | PostgreSQL + AGE + pgvector |
-| `${IMAGE_PREFIX}/notification-service` | корень (`NOTIFY_BUILD_CONTEXT`) | `notification-service/Dockerfile` |
+| `${IMAGE_PREFIX}/notification-service` | root (`NOTIFY_BUILD_CONTEXT`) | `notification-service/Dockerfile` |
 
-`IMAGE_PREFIX` по умолчанию `taimen`, `IMAGE_TAG` — `local`. Контейнеры сервисов
-на Python работают под непривилегированным пользователем (у Control Plane и IAM
-— uid `10001`), поэтому файлы секретов, которые монтируются в контейнер, на
-Linux должны принадлежать этому uid.
+`IMAGE_PREFIX` defaults to `taimen`, and `IMAGE_TAG` to `local`. Python service
+containers run as an unprivileged user (uid `10001` for Control Plane and IAM),
+so on Linux the secret files mounted into a container must be owned by that
+uid.
 
 ## Volumes
 
-Имена volumes задаются явно, чтобы промышленный стенд мог указать уже
-существующие: `VOLUME_CONTROL_PLANE_DB`, `VOLUME_IAM_DB`, `VOLUME_MEMORY_DB`,
-`VOLUME_NOTIFY_DB` и т.д. По умолчанию имя — `${COMPOSE_PROJECT_NAME}_<volume>`,
-например `taimen_control_plane_db`. Список — в
-[Переменных окружения](../reference/environment.md), резервное копирование — в
-[Резервном копировании](../operations/backup.md).
+Volume names are set explicitly so that a production deployment can point to
+existing ones: `VOLUME_CONTROL_PLANE_DB`, `VOLUME_IAM_DB`, `VOLUME_MEMORY_DB`,
+`VOLUME_NOTIFY_DB`, and so on. The default name is
+`${COMPOSE_PROJECT_NAME}_<volume>`, for example `taimen_control_plane_db`. The
+list is in [Environment variables](../reference/environment.md); backups are
+covered in [Backup](../operations/backup.md).
 
-## Что не входит в compose
+## What is not in compose
 
-- **Runner** (`control-plane-agent`) — демон автономного исполнителя ставится
-  на отдельный хост как systemd-юниты. См. [Агенты и runner](../runner/index.md).
-- **MCP-сервер и CLI** Control Plane — ставятся на машину оператора
-  (`uv tool install`). См. [CLI и MCP-сервер](../control-plane/cli-and-mcp.md).
-- **LLM-провайдер** — внешний OpenAI-совместимый endpoint; память может
-  работать без него на офлайн-заглушках.
+- **Runner** (`control-plane-agent`): the autonomous executor daemon is
+  installed on a separate host as systemd units. See
+  [Agents and runner](../runner/index.md).
+- **Control Plane MCP server and CLI**: installed on the operator's machine
+  (`uv tool install`). See [CLI and MCP server](../control-plane/cli-and-mcp.md).
+- **LLM provider**: an external OpenAI-compatible endpoint; memory can run
+  without it on offline stubs.
 
-## См. также
+## See also
 
-- [Архитектура](architecture.md)
-- [Установка и первый запуск](../getting-started/quickstart.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
-- [Цели make](../reference/make.md)
+- [Architecture](architecture.md)
+- [Installation and first launch](../getting-started/quickstart.md)
+- [Services and ports](../reference/services-and-ports.md)
+- [Make targets](../reference/make.md)

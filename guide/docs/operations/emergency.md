@@ -1,25 +1,27 @@
-# Аварийные процедуры
 
-Runbook для инцидентов: что продолжает работать при отказе отдельного
-компонента, как откатить релиз, что делать при потере runner-хоста и при
-компрометации credentials. Статья для дежурного инженера; каждая процедура
-начинается с оценки, затем идут шаги и проверка.
+# Emergency procedures
 
-## Карта зависимостей
+A runbook for incidents: what keeps working when an individual component
+fails, how to roll back a release, what to do when you lose the runner host,
+and what to do when credentials are compromised. This article is for the
+on-call engineer; each procedure starts with an assessment, followed by
+steps and verification.
 
-Что перестаёт работать при отказе компонента:
+## Dependency map
 
-| Отказал | Что продолжает работать | Что встаёт |
+What stops working when a component fails:
+
+| Failed | What keeps working | What stops |
 |---|---|---|
-| `iam-service` или `iam-db` | Уже выданные access token до истечения (до 300 с); проверка подписи по кэшу JWKS; статический ключ памяти | Обмен PAT и client credentials; через ~5 минут — все harness, исполнители, вход людей через федерацию; доставка в память через service account ядра |
-| `control-plane-api` / `control-plane-db` | Память и IAM сами по себе | Вся координация: задачи, claims, runs, approvals; доставка в память |
-| `memory-service` / `memory-db` | Координация полностью: claims, runs, approvals, завершение задач | Сборка контекста (отдаётся деградированным), доставка журнала копит отставание или паркуется |
-| `caddy` | Всё внутри хоста; доступ через SSH-туннель к `127.0.0.1` | Любой доступ снаружи |
-| Runner-хост | Платформа целиком | Автономное исполнение задач, назначенных этому исполнителю |
+| `iam-service` or `iam-db` | Already issued access tokens until they expire (up to 300 s); signature verification against the JWKS cache; the static memory key | PAT and client credentials exchange; after ~5 minutes, every harness, executor, and people's sign-in through federation; delivery to memory through the core service account |
+| `control-plane-api` / `control-plane-db` | Memory and IAM on their own | All coordination: tasks, claims, runs, approvals; delivery to memory |
+| `memory-service` / `memory-db` | Coordination entirely: claims, runs, approvals, task completion | Context assembly (returned degraded); log delivery accumulates lag or gets parked |
+| `caddy` | Everything inside the host; access through an SSH tunnel to `127.0.0.1` | Any access from outside |
+| Runner host | The whole platform | Autonomous execution of tasks assigned to this executor |
 
-## Отказ IAM
+## IAM outage
 
-**Оценка.**
+**Assessment.**
 
 ```bash
 docker compose ps iam-service iam-db
@@ -28,250 +30,259 @@ docker compose logs --since 15m iam-service | tail -50
 ```
 
 
-**Что происходит.** Control Plane проверяет подпись access token по JWKS из
-кэша (устаревший кэш допустим до `CP_IAM_JWKS_STALE_AFTER_SECONDS`, по
-умолчанию 3600 с), поэтому токены, выданные до отказа, работают до своего
-истечения. Новые токены не выдаются: harness и исполнители теряют доступ в
-пределах срока жизни access token (300 с). `context-adapter`, работающий через
-service account, получает отказы и копит отставание.
+**What happens.** Control Plane verifies the access token signature against
+JWKS from its cache (a stale cache is acceptable up to
+`CP_IAM_JWKS_STALE_AFTER_SECONDS`, 3600 s by default), so tokens issued
+before the outage keep working until they expire. No new tokens are issued:
+harnesses and executors lose access within the access token lifetime
+(300 s). `context-adapter`, which works through a service account, gets
+refusals and accumulates lag.
 
-**Шаги.**
+**Steps.**
 
-1. Если лежит база: `docker compose up -d iam-db`, проверить диск и логи
-   PostgreSQL.
-2. Если сервис падает при старте — смотреть первую ошибку в логах:
-    - ошибка миграции Alembic → откат релиза (ниже);
-    - `PermissionError` на ключе подписи → владелец `secrets/iam-signing.pem`
-      должен быть uid 10001 (`chown 10001:10001`, режим `600`);
-    - ошибка подключения к БД → пароль `IAM_POSTGRES_PASSWORD` в `.env`
-      не совпадает с ролью в базе.
-3. `docker compose up -d iam-service`, дождаться `healthy`.
-4. Проверить `context_adapter_parked_tenants`; при `> 0` —
+1. If the database is down: `docker compose up -d iam-db`, check the disk
+   and the PostgreSQL logs.
+2. If the service fails at startup, look at the first error in the logs:
+    - an Alembic migration error → roll back the release (below);
+    - `PermissionError` on the signing key → the owner of
+      `secrets/iam-signing.pem` must be uid 10001 (`chown 10001:10001`,
+      mode `600`);
+    - a database connection error → the `IAM_POSTGRES_PASSWORD` password in
+      `.env` does not match the role in the database.
+3. `docker compose up -d iam-service`, wait for `healthy`.
+4. Check `context_adapter_parked_tenants`; if it is `> 0`, run
    `control-plane ops adapter redrive <tenant-id>`.
 
-### Аварийный вход, пока IAM не поднят
+### Emergency access while IAM is down
 
-Если восстановление IAM затягивается, а в Control Plane нужно войти (снять
-claim, отменить задачу, отозвать binding), владелец хоста выпускает
-**аварийный ключ** — короткоживущий admin-ключ Control Plane для человека
-(CP-ADR-0065). API для этого нет: команда выполняется в контейнере
-`control-plane-api`, границей доверия служит shell на хосте.
+If restoring IAM takes long and you need to get into Control Plane (release
+a claim, cancel a task, revoke a binding), the host owner issues a
+**break-glass key**: a short-lived Control Plane admin key for a person
+(CP-ADR-0065). There is no API for this: the command runs in the
+`control-plane-api` container, and the shell on the host is the trust
+boundary.
 
 ```bash
-# principal оператора — cpOperatorPrincipalId в deploy/state/<env>.json
+# the operator principal is cpOperatorPrincipalId in deploy/state/<env>.json
 PRINCIPAL=$(python3 -c 'import json;print(json.load(open("deploy/state/taimen.json"))["cpOperatorPrincipalId"])')
 docker compose exec -e BREAK_GLASS_OPERATOR="$(whoami)" control-plane-api \
   python -m control_plane.break_glass issue --principal "$PRINCIPAL" --ttl 3600 \
-  --reason "IAM недоступен, <номер инцидента>"
+  --reason "IAM unavailable, <incident number>"
 ```
 
-Ключ `cp_bg…` печатается один раз. Им работают как обычным Bearer-токеном
-(`Authorization: Bearer cp_bg…`), в том числе при
-`CP_LEGACY_API_KEYS_ENABLED=false`: обычные legacy-ключи при этом
-по-прежнему не принимаются.
+The `cp_bg…` key is printed once. You use it like a regular Bearer token
+(`Authorization: Bearer cp_bg…`), including when
+`CP_LEGACY_API_KEYS_ENABLED=false`; regular legacy keys are still not
+accepted in that case.
 
-| Ограничение | Значение |
+| Constraint | Value |
 |---|---|
-| Кому | только активному principal вида `human` |
-| Права | `admin` |
-| Срок жизни | `--ttl` от 60 с до `CP_BREAK_GLASS_MAX_TTL_SECONDS` (4 ч); по умолчанию 1 ч |
-| Аудит | событие `api_key.break_glass_issued`: principal, префикс, срок, причина, кто выпустил |
-| Выключатель | `CP_BREAK_GLASS_ENABLED=false` — нет ни выпуска, ни приёма выпущенных |
+| For whom | only an active principal of kind `human` |
+| Permissions | `admin` |
+| Lifetime | `--ttl` from 60 s to `CP_BREAK_GLASS_MAX_TTL_SECONDS` (4 h); 1 h by default |
+| Audit | the `api_key.break_glass_issued` event: principal, prefix, lifetime, reason, who issued it |
+| Kill switch | `CP_BREAK_GLASS_ENABLED=false`: neither issuance nor acceptance of issued keys |
 
-Как только IAM поднят — отзовите все аварийные ключи:
+As soon as IAM is back up, revoke all break-glass keys:
 
 ```bash
 docker compose exec control-plane-api python -m control_plane.break_glass revoke
 ```
 
-## Control Plane не готов
+## Control Plane is not ready
 
-**Оценка:** `curl -s http://127.0.0.1:18000/health/ready`.
+**Assessment:** `curl -s http://127.0.0.1:18000/health/ready`.
 
-| Ответ | Причина | Действие |
+| Response | Cause | Action |
 |---|---|---|
-| `503 database_unreachable` | База недоступна | `docker compose ps control-plane-db`, логи, диск; `docker compose up -d control-plane-db` |
-| `503 migrations_pending` | Ревизия БД не равна head образа | Если API не стартует из-за ошибки миграции — логи `control-plane-api`, откат релиза; если ревизия БД **новее** образа — запущен старый образ поверх новой схемы: вернуть новый образ или сделать downgrade |
-| Нет ответа | Контейнер в цикле рестартов | `docker compose logs --tail 100 control-plane-api` |
+| `503 database_unreachable` | The database is unavailable | `docker compose ps control-plane-db`, logs, disk; `docker compose up -d control-plane-db` |
+| `503 migrations_pending` | The database revision does not equal the image's head | If the API does not start because of a migration error: `control-plane-api` logs, roll back the release; if the database revision is **newer** than the image, an old image is running on top of a new schema: bring back the new image or run a downgrade |
+| No response | The container is in a restart loop | `docker compose logs --tail 100 control-plane-api` |
 
-Пока API не готов, `control-plane-worker` и `context-adapter` не стартуют
-(зависимость `service_healthy`) — это защита, а не отдельная проблема.
+While the API is not ready, `control-plane-worker` and `context-adapter` do
+not start (the `service_healthy` dependency); this is a safeguard, not a
+separate problem.
 
-## Откат релиза
+## Release rollback
 
-Короткая версия; полная — в [Обновлении и миграциях](upgrades.md).
+The short version; the full one is in [Upgrades and migrations](upgrades.md).
 
 ```bash
 cd /opt/taimen/src
-# 1. Если новый релиз применил миграции — downgrade НОВЫМ образом
+# 1. If the new release applied migrations, downgrade with the NEW image
 docker compose stop control-plane-worker context-adapter control-plane-api
-docker compose run --rm --no-deps control-plane-api alembic downgrade <ревизия прошлого релиза>
-# 2. Код и образы прошлого релиза
-git checkout <коммит прошлого релиза> && git submodule update --init --recursive
-docker compose --profile core --profile edge build     # или прежний IMAGE_TAG без сборки
+docker compose run --rm --no-deps control-plane-api alembic downgrade <previous release revision>
+# 2. Code and images of the previous release
+git checkout <previous release commit> && git submodule update --init --recursive
+docker compose --profile core --profile edge build     # or the previous IMAGE_TAG without a build
 docker compose --profile core --profile edge up -d
 make smoke
 ```
 
-Если downgrade невозможен — восстановление базы из бэкапа, снятого перед
-релизом (см. [Резервное копирование](backup.md)).
+If a downgrade is impossible, restore the database from the backup taken
+before the release (see [Backup](backup.md)).
 
-## Потеря runner-хоста
+## Loss of the runner host
 
-**Оценка.** Машина недоступна или скомпрометирована. На ней лежали: PAT
-исполнителя, токен подписки кодового агента, токен forge, рабочие копии с
-неопубликованными изменениями.
+**Assessment.** The machine is unavailable or compromised. It held: the
+executor PAT, the coding agent's subscription token, the forge token, and
+working copies with unpublished changes.
 
-**Что происходит с задачами.** Claims исполнителя истекают по аренде
-(`CP_CLAIM_TTL_SECONDS`, по умолчанию 300 с), после чего задачу может взять
-другой исполнитель (takeover). Незавершённый run остаётся в статусе
-`running`; когда исполнитель с тем же principal стартует снова, он находит
-свой осиротевший run через `/api/v1/harness/context` и закрывает его с
-`failure_reason=restart_recovery`, возвращая задачу в очередь.
+**What happens to tasks.** The executor's claims expire by lease
+(`CP_CLAIM_TTL_SECONDS`, 300 s by default), after which another executor can
+claim the task (takeover). An unfinished run stays in `running` status; when
+an executor with the same principal starts again, it finds its orphaned run
+through `/api/v1/harness/context` and closes it with
+`failure_reason=restart_recovery`, returning the task to the queue.
 
-**Шаги.**
+**Steps.**
 
-1. **Если потеря неконтролируемая** (кража, взлом, доступ посторонних) —
-   считать все секреты хоста скомпрометированными:
-    - отозвать binding исполнителя в Control Plane (немедленно закрывает вход):
-      `POST /api/v1/iam-bindings/<binding-id>:revoke`;
-    - отозвать PAT исполнителя в IAM (`…/platform-access-tokens/<id>:revoke`);
-    - отозвать токен подписки у поставщика и токен forge в forge.
-2. Поднять новую машину исполнителя тем же способом, что и прежнюю.
-3. Выпустить исполнителю новый PAT (см. [Секреты и ротация](secrets.md));
-   если binding отзывался — создать заново
-   `POST /api/v1/principals/<principal-id>/iam-bindings` с прежними правами.
-4. Запустить исполнителя. Проверить в логах, что осиротевшие runs закрыты
-   `restart_recovery`, а задачи вернулись в очередь.
-5. Неопубликованная работа утеряна; опубликованные ветки `task/<id>` лежат в
-   forge и доступны для ревью.
+1. **If the loss is uncontrolled** (theft, a break-in, access by outsiders),
+   consider all secrets on the host compromised:
+    - revoke the executor's binding in Control Plane (closes access
+      immediately): `POST /api/v1/iam-bindings/<binding-id>:revoke`;
+    - revoke the executor's PAT in IAM (`…/platform-access-tokens/<id>:revoke`);
+    - revoke the subscription token at the provider and the forge token in
+      the forge.
+2. Bring up a new executor machine the same way as the previous one.
+3. Issue a new PAT to the executor (see [Secrets and rotation](secrets.md));
+   if the binding was revoked, create it again with
+   `POST /api/v1/principals/<principal-id>/iam-bindings` and the previous
+   permissions.
+4. Start the executor. Check in the logs that orphaned runs were closed with
+   `restart_recovery` and the tasks returned to the queue.
+5. Unpublished work is lost; published `task/<id>` branches are in the forge
+   and available for review.
 
-**Экстренно остановить исполнителя, не разбираясь:**
+**Stop an executor in an emergency, without investigating:**
 
-=== "Контейнер"
+=== "Container"
 
     ```bash
-    docker compose -f <compose-файл исполнителя> stop
+    docker compose -f <executor compose file> stop
     ```
 
 === "systemd"
 
     ```bash
-    systemctl stop <юнит> && systemctl disable <юнит>
+    systemctl stop <unit> && systemctl disable <unit>
     ```
 
-Остановка безопасна в любой момент: run будет закрыт `restart_recovery`
-при следующем старте, рабочая копия сохранится.
+Stopping is safe at any moment: the run is closed with `restart_recovery`
+at the next start, and the working copy is preserved.
 
-## Компрометация credentials
+## Credential compromise
 
-### PAT человека или агента
+### A person's or an agent's PAT
 
-| Шаг | Команда | Эффект |
+| Step | Command | Effect |
 |---|---|---|
-| 1. Закрыть вход в Control Plane | `POST /api/v1/iam-bindings/<binding-id>:revoke` | Сразу: кэш binding сбрасывается в процессе API |
-| 2. Отозвать PAT | `POST …/tenants/<t>/platform-access-tokens/<id>:revoke?reason=leaked` (bootstrap) или `POST /api/v1/platform-access-tokens:revoke-self` (владелец) | Новые обмены невозможны |
-| 3. Разобрать последствия | Audit IAM (`platform_access_tokens.exchange` по префиксу PAT), журнал событий Control Plane по principal | Понять, что сделано чужим токеном |
-| 4. Вернуть доступ | Новый PAT, повторный `POST /api/v1/principals/<id>/iam-bindings` | Владелец работает дальше |
+| 1. Close access to Control Plane | `POST /api/v1/iam-bindings/<binding-id>:revoke` | Immediate: the binding cache is reset in the API process |
+| 2. Revoke the PAT | `POST …/tenants/<t>/platform-access-tokens/<id>:revoke?reason=leaked` (bootstrap) or `POST /api/v1/platform-access-tokens:revoke-self` (owner) | New exchanges are impossible |
+| 3. Assess the consequences | IAM audit (`platform_access_tokens.exchange` by PAT prefix), the Control Plane event log by principal | Find out what was done with the stolen token |
+| 4. Restore access | New PAT, another `POST /api/v1/principals/<id>/iam-bindings` | The owner continues working |
 
-Уже выданные этим PAT access token живут до 300 с; шаг 1 закрывает их в
-Control Plane раньше. Если PAT имел `control-plane:admin`, проверьте в
-журнале созданные principals, bindings и изменения каталога за период утечки.
+Access tokens already issued for this PAT live up to 300 s; step 1 closes
+them in Control Plane earlier. If the PAT had `control-plane:admin`, check
+the log for principals, bindings, and catalog changes created during the
+leak period.
 
-### Bootstrap-токен IAM
+### IAM bootstrap token
 
-`IAM_BOOTSTRAP_TOKEN` позволяет выпустить PAT любому principal — это
-инцидент наивысшей важности.
+`IAM_BOOTSTRAP_TOKEN` lets you issue a PAT to any principal; this is an
+incident of the highest severity.
 
 
-1. Сменить значение в `.env` на новое случайное (`openssl rand -hex 24`),
-   `docker compose up -d iam-service`.
-2. Выгрузить список PAT (`GET …/platform-access-tokens?includeRevoked=true`)
-   и audit IAM; отозвать всё, что выпущено не вами после вероятного момента
-   утечки.
-3. Проверить service accounts, созданные за тот же период, и отозвать
-   лишние (`…/service-accounts/<client-id>:revoke`).
+1. Change the value in `.env` to a new random one (`openssl rand -hex 24`),
+   then `docker compose up -d iam-service`.
+2. Export the PAT list (`GET …/platform-access-tokens?includeRevoked=true`)
+   and the IAM audit; revoke everything that was issued by someone other
+   than you after the likely moment of the leak.
+3. Check service accounts created during the same period and revoke the
+   extra ones (`…/service-accounts/<client-id>:revoke`).
 
-### Ключ подписи IAM
+### IAM signing key
 
-Позволяет подделать access token любого principal. Немедленная ротация
-ключа и перезапуск сервисов, проверяющих токены, — см.
-[Секреты и ротация](secrets.md).
+It lets an attacker forge an access token for any principal. Rotate the key
+immediately and restart the services that verify tokens; see
+[Secrets and rotation](secrets.md).
 
-### Секрет service account
+### Service account secret
 
 ```bash
-# ядро: bootstrap перевыпустит и отзовёт прежний
+# core: bootstrap reissues it and revokes the previous one
 mv secrets/control-plane-iam.env /tmp/ && python3 deploy/bootstrap.py --env .env --name <env>
 docker compose up -d control-plane-api control-plane-worker context-adapter
 ```
 
-Для прочих service accounts — отзыв в IAM и перевыпуск; см.
-[Секреты и ротация](secrets.md).
+For other service accounts: revoke in IAM and reissue; see
+[Secrets and rotation](secrets.md).
 
-### `MEMORY_API_KEY`, ключ LLM-провайдера, пароли БД
+### `MEMORY_API_KEY`, LLM provider key, database passwords
 
-Сменить значение (для паролей БД — сначала `ALTER ROLE` в базе), обновить
-`.env`, пересоздать потребителей. Процедуры — в
-[Секретах и ротации](secrets.md).
+Change the value (for database passwords, `ALTER ROLE` in the database
+first), update `.env`, recreate the consumers. The procedures are in
+[Secrets and rotation](secrets.md).
 
-## Периметр недоступен или истёк сертификат
+## Edge unavailable or certificate expired
 
-Всё внутри хоста продолжает работать. Для эксплуатационных операций
-используйте порты на `127.0.0.1` через SSH-туннель:
+Everything inside the host keeps working. For operational tasks, use the
+ports on `127.0.0.1` through an SSH tunnel:
 
 ```bash
-ssh -N -L 18000:127.0.0.1:18000 -L 18010:127.0.0.1:18010 <хост платформы>
+ssh -N -L 18000:127.0.0.1:18000 -L 18010:127.0.0.1:18010 <platform host>
 curl -s http://127.0.0.1:18000/health/ready
 ```
 
-!!! tip "Туннели в ssh-алиасе"
-    Если в `~/.ssh/config` для хоста прописаны `LocalForward`, а порты уже
-    заняты другой сессией, ssh падает целиком (`bind … Address already in
-    use`) — вместе с командой, ради которой вы подключались. Подключайтесь
-    с `ssh -o ClearAllForwardings=yes <алиас>`; для git поверх такого алиаса —
-    `GIT_SSH_COMMAND='ssh -o ClearAllForwardings=yes'`.
+!!! tip "Tunnels in an ssh alias"
+    If `~/.ssh/config` defines `LocalForward` for the host and the ports are
+    already taken by another session, ssh fails entirely (`bind … Address
+    already in use`), along with the command you connected for. Connect
+    with `ssh -o ClearAllForwardings=yes <alias>`; for git over such an
+    alias, use `GIT_SSH_COMMAND='ssh -o ClearAllForwardings=yes'`.
 
-Причины и исправление сертификатов — в [Периметре и TLS](edge-and-tls.md).
+Causes and certificate fixes are in [Edge and TLS](edge-and-tls.md).
 
-## Закончился диск
+## Disk full
 
-PostgreSQL перестаёт принимать запись, сервисы отвечают `5xx`.
+PostgreSQL stops accepting writes, and services return `5xx`.
 
 ```bash
 df -h /var/lib/docker
 docker system df
-docker builder prune -f            # кэш сборки
-docker image prune -f              # висячие образы
+docker builder prune -f            # build cache
+docker image prune -f              # dangling images
 journalctl --vacuum-size=500M
 ```
 
-Затем найдите растущий объект (см. [Ресурсы и масштабирование](capacity.md))
-и заведите алерт на заполнение диска. Не удаляйте файлы внутри томов баз
-данных вручную.
+Then find the growing object (see [Resources and scaling](capacity.md)) and
+set up an alert on disk usage. Do not delete files inside database volumes
+by hand.
 
-## Смена публичного адреса (issuer)
+## Changing the public address (issuer)
 
-Не авария, но процедура с риском закрыть вход всем: issuer IAM равен
-`${TAIMEN_PUBLIC_URL}/iam`, а Control Plane ищет binding по паре
-`(issuer, iam_principal_id)`.
+Not an emergency, but a procedure that risks locking everyone out: the IAM
+issuer equals `${TAIMEN_PUBLIC_URL}/iam`, and Control Plane looks up a
+binding by the pair `(issuer, iam_principal_id)`.
 
 
-1. **До переключения**, пока старый адрес работает, создайте для каждого
-   principal binding с новым issuer — тем же вызовом
-   `POST /api/v1/principals/<principal-id>/iam-bindings`, указав
-   `"issuer": "https://new.example.com/iam"` и прежние права. Старые bindings
-   остаются и не мешают.
-2. Настройте DNS и Caddyfile для нового имени, дождитесь сертификата.
-3. Поменяйте `TAIMEN_PUBLIC_URL` и `TAIMEN_PUBLIC_HOST` в `.env`.
-4. Пересоздайте сервисы, чтобы они взяли новый адрес: `docker compose … up -d`.
-5. Обновите `CONTROL_PLANE_SERVER` и `CONTROL_PLANE_IAM_URL` у исполнителей
-   и операторов. Ключ записи в `credentials.json` включает адрес IAM —
-   перенесите записи под новый адрес.
-6. После проверки отзовите bindings со старым issuer.
+1. **Before the switch**, while the old address works, create a binding with
+   the new issuer for each principal using the same call,
+   `POST /api/v1/principals/<principal-id>/iam-bindings`, with
+   `"issuer": "https://new.example.com/iam"` and the previous permissions.
+   The old bindings remain and do not interfere.
+2. Configure DNS and the Caddyfile for the new name, wait for the
+   certificate.
+3. Change `TAIMEN_PUBLIC_URL` and `TAIMEN_PUBLIC_HOST` in `.env`.
+4. Recreate the services so they pick up the new address:
+   `docker compose … up -d`.
+5. Update `CONTROL_PLANE_SERVER` and `CONTROL_PLANE_IAM_URL` for executors
+   and operators. The record key in `credentials.json` includes the IAM
+   address, so move the records under the new address.
+6. After verification, revoke the bindings with the old issuer.
 
-Если шаг 1 пропущен и вход уже закрыт, bindings переносятся SQL в базе
-Control Plane:
+If step 1 was skipped and access is already closed, move the bindings with
+SQL in the Control Plane database:
 
 ```sql
 UPDATE iam_principal_bindings
@@ -279,23 +290,24 @@ UPDATE iam_principal_bindings
  WHERE issuer = 'https://old.example.com/iam';
 ```
 
-После правки базы мимо API Control Plane может ещё до
-`CP_IAM_BINDING_STALE_AFTER_SECONDS` (по умолчанию 120 с) отвечать по
-закэшированному отказу; чтобы не ждать, перезапустите `control-plane-api`.
+After editing the database behind the API's back, Control Plane may keep
+answering with a cached refusal for up to
+`CP_IAM_BINDING_STALE_AFTER_SECONDS` (120 s by default); to avoid waiting,
+restart `control-plane-api`.
 
-## После инцидента
+## After the incident
 
-- Запишите хронологию, затронутые компоненты и принятые меры.
-- Проверьте `make smoke`, `/health/ready`, `context_adapter_parked_tenants`.
-- Если отзывались credentials — убедитесь, что все легитимные клиенты
-  получили новые и работают.
-- Добавьте алерт, который поймал бы инцидент раньше (см.
-  [Мониторинг и здоровье](monitoring.md)).
+- Record the timeline, the affected components, and the measures taken.
+- Check `make smoke`, `/health/ready`, `context_adapter_parked_tenants`.
+- If credentials were revoked, make sure all legitimate clients received new
+  ones and are working.
+- Add an alert that would have caught the incident earlier (see
+  [Monitoring and health](monitoring.md)).
 
-## См. также
+## See also
 
-- [Секреты и ротация](secrets.md)
-- [Резервное копирование](backup.md)
-- [Обновление и миграции](upgrades.md)
-- [Исполнение и claims](../control-plane/execution.md)
-- [Диагностика](../troubleshooting/index.md)
+- [Secrets and rotation](secrets.md)
+- [Backup](backup.md)
+- [Upgrades and migrations](upgrades.md)
+- [Execution and claims](../control-plane/execution.md)
+- [Troubleshooting](../troubleshooting/index.md)

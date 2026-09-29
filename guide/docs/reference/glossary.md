@@ -1,402 +1,402 @@
-# Глоссарий
 
-Термины платформы Taimen по алфавиту: сначала латиница (имена сущностей и
-контрактов, как в коде и API), затем кириллица. Для каждого термина —
-краткое определение и ссылка на статью, где он раскрыт. Статья для всех
-читателей руководства.
+# Glossary
+
+Taimen platform terms in alphabetical order: first the names of entities and
+contracts as they appear in code and the API, then general terms. Each term
+has a short definition and a link to the page that covers it. This page is
+for all readers of the guide.
 
 ## A
 
-**Access token** — короткоживущий JWT, который IAM выдаёт в обмен на PAT,
-client credentials или федеративный токен. Выпускается ровно на один
-audience; время жизни — `IAM_TOKEN_TTL_SECONDS` (300 с). Несёт identity и
-scopes, но не доменные права. → [Токены, audiences, scopes](../iam/tokens.md)
+**Access token**: a short-lived JWT that IAM issues in exchange for a PAT,
+client credentials, or a federated token. It is issued for exactly one
+audience; its lifetime is `IAM_TOKEN_TTL_SECONDS` (300 s). It carries the
+identity and scopes, but not domain permissions. → [Tokens, audiences, scopes](../iam/tokens.md)
 
-**Acceptance (приёмка)** — критерии, по которым проверяется, что цель
-(Goal) достигнута; набор проверок с уникальными ключами. →
-[Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)
+**Acceptance**: the criteria used to check that a goal (Goal) is achieved; a
+set of checks with unique keys. →
+[Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)
 
-**Adapter (адаптер исполнителя)** — часть демона runner, которая
-исполняет run конкретным кодовым агентом: `echo`, `claude-code`, `codex`,
-отдельно — OpenCode. → [Адаптеры исполнителей](../runner/adapters.md)
+**Adapter (executor adapter)**: the part of the runner daemon that executes a
+run with a specific code agent: `echo`, `claude-code`, `codex`, and
+separately OpenCode. → [Executor adapters](../runner/adapters.md)
 
-**Approval** — запрос решения человека (статусы `pending`, `approved`,
-`rejected`, `cancelled`). Решает principal с правом `approvals.decide`;
-агенту это право не выдаётся. → [Approvals](../control-plane/approvals.md)
+**Approval**: a request for a human decision (statuses `pending`, `approved`,
+`rejected`, `cancelled`). A principal with the `approvals.decide` permission
+decides it; this permission is never granted to an agent. → [Approvals](../control-plane/approvals.md)
 
-**Artifact (артефакт)** — зарегистрированный результат работы по задаче:
-коммит, документ, транскрипт прогона и т. п. →
-[Артефакты и комментарии](../control-plane/artifacts.md)
+**Artifact**: a registered result of work on a task: a commit, a document, a
+run transcript, and so on. →
+[Artifacts and comments](../control-plane/artifacts.md)
 
 
-**Audience** — идентификатор одного resource service в IAM
+**Audience**: the identifier of one resource service in IAM
 (`control-plane`, `memory-service`,
-`notification-service` …). Реестр audience задаёт допустимые
-scopes (`allowedScopes`). → [Права и scopes](permissions.md)
+`notification-service` …). The audience registry sets the allowed
+scopes (`allowedScopes`). → [Permissions and scopes](permissions.md)
 
-**Audit reason** — точная причина отказа (`binding_not_found`,
-`credential_revoked`, `issuer_mismatch` …), которая пишется только в audit
-и лог; клиенту уходит обобщённый код. → [Коды ошибок](errors.md)
+**Audit reason**: the exact denial reason (`binding_not_found`,
+`credential_revoked`, `issuer_mismatch` …), written only to the audit trail
+and the log; the client receives a generalized code. → [Error codes](errors.md)
 
-**Authentication context** — запись IAM о свежем входе человека (`issuer`,
-`acr`, `amr`, время). Выпуск PAT человеку требует контекста не старше
-`IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`. → [Credentials и PAT](../iam/credentials.md)
+**Authentication context**: an IAM record of a human's fresh sign-in
+(`issuer`, `acr`, `amr`, time). Issuing a PAT to a human requires a context
+no older than `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`. → [Credentials and PAT](../iam/credentials.md)
 
 ## B
 
-**Binding (IAM principal binding)** — строка `iam_principal_bindings` в
-Control Plane: пара (issuer, IAM principal) → локальный principal и его
-права. Статусы `active`, `disabled`, `revoked`. Без binding токен IAM не
-даёт доступа к ядру. → [Права и scopes](permissions.md#iam-principal-bindings)
+**Binding (IAM principal binding)**: an `iam_principal_bindings` row in
+Control Plane: the pair (issuer, IAM principal) → a local principal and its
+permissions. Statuses `active`, `disabled`, `revoked`. Without a binding, an
+IAM token gives no access to the core. → [Permissions and scopes](permissions.md#iam-principal-bindings)
 
-**Bootstrap** — первичная инициализация: `POST /api/v1/bootstrap` Control
-Plane (tenant, администратор, binding) и bootstrap-эндпоинты IAM; в
-поставке — `make bootstrap` (`deploy/bootstrap.py`). →
+**Bootstrap**: initial setup: the Control Plane `POST /api/v1/bootstrap`
+(tenant, administrator, binding) and the IAM bootstrap endpoints; in the
+delivery, `make bootstrap` (`deploy/bootstrap.py`). →
 [Bootstrap](../getting-started/bootstrap.md)
 
 
-**Bootstrap token** — секрет, открывающий bootstrap-эндпоинты:
-`CP_BOOTSTRAP_TOKEN` (заголовок `Authorization: Bearer`),
-`IAM_BOOTSTRAP_TOKEN` (заголовок `X-IAM-Bootstrap-Token`).
+**Bootstrap token**: a secret that unlocks the bootstrap endpoints:
+`CP_BOOTSTRAP_TOKEN` (header `Authorization: Bearer`),
+`IAM_BOOTSTRAP_TOKEN` (header `X-IAM-Bootstrap-Token`).
 
 ## C
 
-**Capability** — (1) организационная: именованная способность principal,
-используемая в требованиях задач; (2) протокольная: что умеет харнесс
-(`events.realtime`, `checkpoints`, `skills.protocol.<p>` …), объявляется
-при открытии сессии. Не путать.
+**Capability**: (1) organizational: a named ability of a principal, used in
+task requirements; (2) protocol: what a harness can do (`events.realtime`,
+`checkpoints`, `skills.protocol.<p>` …), declared when a session opens. Do
+not confuse the two.
 
-**Checkpoint** — запись промежуточного состояния run (`kind` + данные),
-из которой продолжение работы восстанавливается новым run. →
-[Исполнение — claims и runs](../control-plane/execution.md)
+**Checkpoint**: a record of the intermediate state of a run (`kind` + data)
+from which a new run restores and continues the work. →
+[Execution: claims and runs](../control-plane/execution.md)
 
-**Child handle / child run** — делегирование части работы дочернему run с
-ограниченным grant (права, capabilities, skills не шире родителя);
-токен вида `ch1_<id>_<secret>`. → [Исполнение](../control-plane/execution.md)
+**Child handle / child run**: delegating part of the work to a child run with
+a limited grant (permissions, capabilities, skills no wider than the
+parent's); a token of the form `ch1_<id>_<secret>`. → [Execution](../control-plane/execution.md)
 
-**Claim** — эксклюзивная аренда задачи исполнителем на TTL
-(`CP_CLAIM_TTL_SECONDS`). Пока claim жив, писать в задачу может только
-его держатель с `claimId` и `fencingToken`. → [Исполнение](../control-plane/execution.md)
+**Claim**: an exclusive lease of a task by an executor for a TTL
+(`CP_CLAIM_TTL_SECONDS`). While the claim is alive, only its holder, with
+`claimId` and `fencingToken`, can write to the task. → [Execution](../control-plane/execution.md)
 
-**Client credentials** — `clientId` + `clientSecret` service account;
-обмениваются на access token через `POST /api/v1/tokens/exchange`. →
+**Client credentials**: the `clientId` + `clientSecret` of a service account;
+exchanged for an access token through `POST /api/v1/tokens/exchange`. →
 [Service accounts](../iam/service-accounts.md)
 
-**Context adapter** — процесс `context-adapter` Control Plane, который
-доставляет события ядра в память (memory-service) с изоляцией по tenant.
+**Context adapter**: the Control Plane `context-adapter` process that
+delivers core events to memory (memory-service) with per-tenant isolation.
 
-**ContextPack** — собранный памятью пакет контекста для задачи или run в
-пределах бюджета токенов (`CP_CONTEXT_DEFAULT_MAX_TOKENS`). →
-[Контекст задачи и память](../control-plane/context.md)
+**ContextPack**: a context package that memory assembles for a task or a run
+within a token budget (`CP_CONTEXT_DEFAULT_MAX_TOKENS`). →
+[Task context and memory](../control-plane/context.md)
 
-**Control Plane** — ядро платформы: модель Work (задачи, цели, workspaces,
-проекты), исполнение (claims, runs), approvals, артефакты, журнал событий,
-харнесс-протокол. → [Control Plane](../control-plane/index.md)
+**Control Plane**: the platform core: the Work model (tasks, goals,
+workspaces, projects), execution (claims, runs), approvals, artifacts, the
+event log, the harness protocol. → [Control Plane](../control-plane/index.md)
 
-**Cursor (курсор событий)** — непрозрачная позиция в журнале событий;
-клиент передаёт её без изменений, чтобы продолжить чтение. →
-[События](../control-plane/events.md)
+**Cursor (event cursor)**: an opaque position in the event log; the client
+passes it back unchanged to continue reading. →
+[Events](../control-plane/events.md)
 
 ## D
 
-**Delegation (делегирование)** — разрешение агенту действовать от имени
-конкретного человека (`delegations.manage`).
+**Delegation**: permission for an agent to act on behalf of a specific human
+(`delegations.manage`).
 
-**Domain pack (пакет видов)** — зарегистрированный в памяти набор видов
-сущностей и связей как данные; регистрирует только identity ядра
-(`memory:service`). → [Модель знаний](../memory/knowledge-model.md)
+**Domain pack**: a set of entity and relation kinds registered in memory as
+data; only the core identity registers it (`memory:service`). → [Knowledge model](../memory/knowledge-model.md)
 
 ## E
 
-**Edge** — профиль compose с единственным внешним контейнером `caddy`. →
-[Периметр и TLS](../operations/edge-and-tls.md)
+**Edge**: the compose profile with the only external container, `caddy`. →
+[Edge and TLS](../operations/edge-and-tls.md)
 
 
-**Entitlement** — лицензирование продуктов и features, квоты и места.
-Проверку выполняет внешний сервис лицензий, если он подключён (стадия
-entitlement PEP). → [platform-auth-sdk](../sdk/platform-auth-sdk.md#entitlement-stage)
+**Entitlement**: licensing of products and features, quotas, and seats. An
+external licensing service performs the check if one is connected (the
+entitlement PEP stage). → [platform-auth-sdk](../sdk/platform-auth-sdk.md#entitlement-stage)
 
-**Event journal (журнал событий)** — упорядоченный поток изменений
-Control Plane (`GET /api/v1/events`, WebSocket), источник для адаптеров и
-проекций. → [События](../control-plane/events.md)
+**Event journal (event log)**: the ordered stream of Control Plane changes
+(`GET /api/v1/events`, WebSocket), the source for adapters and projections. →
+[Events](../control-plane/events.md)
 
-**Evidence** — подтверждение выполнения проверки приёмки, ссылающееся на
-ключ проверки из acceptance. → [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)
+**Evidence**: confirmation that an acceptance check passed, referring to the
+check key from acceptance. → [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)
 
-**Execution workspace (рабочая копия)** — локальный git worktree, в
-котором runner исполняет задачу на ветке задачи; может включать соседние
-репозитории на ревизиях суперпроекта. → [Рабочие копии](../runner/execution-workspace.md)
+**Execution workspace (working copy)**: a local git worktree in which the
+runner executes a task on the task branch; it can include neighboring
+repositories at superproject revisions. → [Working copies](../runner/execution-workspace.md)
 
-**Executor (исполнитель skills)** — процесс, исполняющий вызовы skills по
-протоколам `local`, `http`, `mcp` (право `skills.execute`); транспорт без
-собственных прав.
+**Executor (skill executor)**: a process that executes skill invocations over
+the `local`, `http`, `mcp` protocols (permission `skills.execute`); a
+transport without permissions of its own.
 
 ## F
 
-**Fail closed** — принцип: если решение (проверка токена, PDP,
-entitlement) получить нельзя, запрос отклоняется (`503 …_unavailable`), а
-не пропускается.
+**Fail closed**: the principle that if a decision (token check, PDP,
+entitlement) cannot be obtained, the request is rejected
+(`503 …_unavailable`), not let through.
 
 
-**Federation (федерация)** — обмен токена внешнего OIDC-провайдера на
-access token IAM: `POST /api/v1/tenants/{t}/federation:exchange`. Только
-для людей. → [Федерация identity](../iam/federation.md)
+**Federation**: exchanging a token from an external OIDC provider for an IAM
+access token: `POST /api/v1/tenants/{t}/federation:exchange`. Humans only. →
+[Identity federation](../iam/federation.md)
 
-**Fencing token** — монотонный номер эпохи claim. Операции с устаревшим
-токеном отвергаются кодом `stale_claim`, даже если процесс считает себя
-владельцем.
+**Fencing token**: a monotonic claim epoch number. Operations with a stale
+token are rejected with `stale_claim`, even if the process considers itself
+the owner.
 
 
 ## G
 
-**Gate** — approval, который удерживает задачу (`approval_required`) или
-разрешает skill с побочным эффектом `external_write`.
+**Gate**: an approval that holds a task (`approval_required`) or allows a
+skill with the `external_write` side effect.
 
-**Goal (цель)** — желаемое состояние, которое tenant хочет сделать
-истинным; иерархия целей, связь с задачами, acceptance и evidence (права
-`goals.read`, `goals.write`). → [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md)
+**Goal**: a desired state that the tenant wants to make true; a hierarchy of
+goals, links to tasks, acceptance, and evidence (permissions `goals.read`,
+`goals.write`). → [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md)
 
 ## H
 
 
-**Handoff** — передача работы: run публикует checkpoint handoff, и
-продолжение берёт другой исполнитель или человек
+**Handoff**: passing work on: a run publishes a handoff checkpoint, and
+another executor or a human picks up the continuation
 (`reason=human_harness_handoff`).
 
 
-**Harness (харнесс)** — клиент, через который человек или агент работает
-с Control Plane: MCP-плагин, CLI, демон runner. Объявляет тип и
-capabilities при открытии сессии. → [Харнесс-протокол](../control-plane/harness-protocol.md)
+**Harness**: the client through which a human or an agent works with Control
+Plane: the MCP plugin, the CLI, the runner daemon. It declares its type and
+capabilities when a session opens. → [Harness protocol](../control-plane/harness-protocol.md)
 
-**Harness protocol** — контракт сессий, claims, runs и курсоров между
-харнессом и ядром (`control-harness`, версии `1` и `2`).
+**Harness protocol**: the contract for sessions, claims, runs, and cursors
+between a harness and the core (`control-harness`, versions `1` and `2`).
 
 
 ## I
 
-**IAM (iam-service)** — сервис identity: tenants, principals, credentials
-(PAT, service accounts, федерация), выпуск access token и JWKS. Доменных
-прав не хранит. → [IAM](../iam/index.md)
+**IAM (iam-service)**: the identity service: tenants, principals,
+credentials (PAT, service accounts, federation), access token issuance, and
+JWKS. It stores no domain permissions. → [IAM](../iam/index.md)
 
-**Idempotency-Key** — заголовок, делающий повтор записи безопасным: тот же
-ключ с тем же телом возвращает сохранённый ответ; с другим телом —
+**Idempotency-Key**: a header that makes a repeated write safe: the same key
+with the same body returns the stored response; with a different body,
 `409 idempotency_key_reused`.
 
-**If-Match / ETag** — оптимистичная блокировка: `ETag` вида
-`"task-<version>"`, при несовпадении — `409 version_conflict`, без
-заголовка — `428 if_match_required`.
+**If-Match / ETag**: optimistic locking: an `ETag` of the form
+`"task-<version>"`; on mismatch, `409 version_conflict`; without the header,
+`428 if_match_required`.
 
-**Installation (установка каталога)** — файл `kind: Installation`
-(`deploy/packages.yaml`), перечисляющий пакеты каталога для окружения. →
-[Пакеты каталога](../control-plane/catalog-packages.md)
+**Installation (catalog installation)**: a `kind: Installation` file
+(`deploy/packages.yaml`) that lists the catalog packages for an environment. →
+[Catalog packages](../control-plane/catalog-packages.md)
 
-**Issuer** — значение `iss` токенов IAM, `${TAIMEN_PUBLIC_URL}/iam`.
-Входит в ключ binding: смена публичного адреса требует переноса bindings.
+**Issuer**: the `iss` value of IAM tokens, `${TAIMEN_PUBLIC_URL}/iam`. It is
+part of the binding key: changing the public address requires moving the
+bindings.
 
 ## J
 
-**JWKS** — публичные ключи IAM (`/.well-known/jwks.json`), по которым
-resource services проверяют подпись токенов; кэшируются с границей
-устаревания.
+**JWKS**: the IAM public keys (`/.well-known/jwks.json`) that resource
+services use to verify token signatures; cached with a staleness bound.
 
 ## K
 
 
-**Knowledge pack** — закреплённый по версии (`name@version`) пакет знаний,
-включаемый на корневом workspace. → [Загрузка знаний](../memory/ingestion.md)
+**Knowledge pack**: a version-pinned (`name@version`) package of knowledge,
+enabled on a root workspace. → [Knowledge ingestion](../memory/ingestion.md)
 
 ## L
 
-**Legacy API key** — ключ вида `cp_<prefix>_<secret>`, прежний способ
-аутентификации в Control Plane. Работает только при
-`CP_LEGACY_API_KEYS_ENABLED=true`; в стеке по умолчанию выключен.
+**Legacy API key**: a key of the form `cp_<prefix>_<secret>`, the former way
+to authenticate to Control Plane. It works only with
+`CP_LEGACY_API_KEYS_ENABLED=true`; it is off in the default stack.
 
-**Lifecycle (жизненный цикл типа задачи)** — объявленные типом задачи
-статусы, их категории и разрешённые переходы.
+**Lifecycle (task type lifecycle)**: the statuses a task type declares, their
+categories, and the allowed transitions.
 
 ## M
 
-**MCP-сервер (`control-plane-mcp`)** — сервер Model Context Protocol,
-открывающий инструменты `cp_*` Control Plane кодовым агентам. →
-[CLI и MCP-сервер](../control-plane/cli-and-mcp.md)
+**MCP server (`control-plane-mcp`)**: a Model Context Protocol server that
+exposes the Control Plane `cp_*` tools to code agents. →
+[CLI and MCP server](../control-plane/cli-and-mcp.md)
 
-**memory-service** — движок памяти: граф знаний (PostgreSQL + Apache AGE),
-векторный поиск (pgvector), наблюдения, сборка ContextPack. →
-[Память](../memory/index.md)
+**memory-service**: the memory engine: knowledge graph (PostgreSQL + Apache
+AGE), vector search (pgvector), observations, ContextPack assembly. →
+[Memory](../memory/index.md)
 
 ## N
 
-**Namespace** — изолированная база знаний в памяти. Память tenant —
-`tenant:<tenant_id>` и поддерево `tenant:<tenant_id>:*`. →
-[Namespaces и доступ](../memory/namespaces.md)
+**Namespace**: an isolated knowledge base in memory. A tenant's memory is
+`tenant:<tenant_id>` and the subtree `tenant:<tenant_id>:*`. →
+[Namespaces and access](../memory/namespaces.md)
 
 ## O
 
-**Observation (наблюдение)** — сырой факт, записываемый в память
-(`observations.write`), с источником и scope.
+**Observation**: a raw fact written to memory (`observations.write`), with a
+source and a scope.
 
 
-**Origin** — происхождение задачи в work graph (откуда она возникла).
+**Origin**: where a task in the work graph came from.
 
-**Outbox** — таблица исходящих событий, которые worker доставляет с
-повторами и экспоненциальной задержкой (`CP_OUTBOX_*`).
+**Outbox**: the table of outgoing events that the worker delivers with
+retries and exponential backoff (`CP_OUTBOX_*`).
 
 ## P
 
-**Package (пакет каталога)** — версионируемый набор объектов каталога
-(типы задач, шаблоны, роли, capabilities, skills) в `packages/`, который
-bootstrap приводит в Control Plane. → [Пакеты каталога](../control-plane/catalog-packages.md)
+**Package (catalog package)**: a versioned set of catalog objects (task
+types, templates, roles, capabilities, skills) in `packages/` that bootstrap
+applies to Control Plane. → [Catalog packages](../control-plane/catalog-packages.md)
 
-**PAT (Platform Access Token)** — долгоживущий credential человека или
-агента в IAM с потолком scopes и списком audiences. Сам как Bearer не
-предъявляется — только обменивается на access token. →
-[Credentials и PAT](../iam/credentials.md)
-
-
-**PDP / PEP** — Policy Decision Point (внешний PDP, решает) и Policy
-Enforcement Point (resource service, применяет решение). Режим ядра —
-`CP_AUTHZ_MODE`.
-
-**Permission (право)** — плоская строка прав Control Plane (`tasks.read`,
-`tasks.claim`, `admin` …), хранится в binding. → [Права и scopes](permissions.md)
-
-**Principal** — участник: `human`, `agent`, `service` в Control Plane;
-`human`, `agent`, `service_account`, `workload` в IAM. → [Tenants и principals](../iam/principals.md)
+**PAT (Platform Access Token)**: a long-lived IAM credential of a human or an
+agent with a scope ceiling and a list of audiences. It is never presented as
+a Bearer itself; it is only exchanged for an access token. →
+[Credentials and PAT](../iam/credentials.md)
 
 
-**Profile (профиль compose)** — группа сервисов `compose.yml`, включаемая
-флагом `--profile` (`core`, `edge`, `notify` …). →
-[Сервисы и порты](services-and-ports.md)
+**PDP / PEP**: Policy Decision Point (the external PDP, which decides) and
+Policy Enforcement Point (the resource service, which enforces the decision).
+The core mode is `CP_AUTHZ_MODE`.
 
-**Project profile** — проектная надстройка над workspace: шаблон,
-конфигурация по ревизиям, governance, представления.
+**Permission**: a flat Control Plane permission string (`tasks.read`,
+`tasks.claim`, `admin` …), stored in a binding. → [Permissions and scopes](permissions.md)
+
+**Principal**: a participant: `human`, `agent`, `service` in Control Plane;
+`human`, `agent`, `service_account`, `workload` in IAM. → [Tenants and principals](../iam/principals.md)
+
+
+**Profile (compose profile)**: a group of `compose.yml` services enabled with
+the `--profile` flag (`core`, `edge`, `notify` …). →
+[Services and ports](services-and-ports.md)
+
+**Project profile**: a project layer over a workspace: template,
+configuration by revision, governance, views.
 
 ## R
 
-**Reconcile (сверка снимков)** — приведение памяти к снимку источника
-целиком; выполняется только identity ядра.
+**Reconcile (snapshot reconciliation)**: bringing memory in line with a
+source snapshot as a whole; only the core identity performs it.
 
 
-**Resource service** — сервис, который проверяет чужие токены и сам
-решает о доменных правах (Control Plane, memory-service,
+**Resource service**: a service that verifies tokens issued by others and
+decides on domain permissions itself (Control Plane, memory-service,
 notification-service).
 
 
-**Role (роль)** — организационная роль Control Plane (не даёт прав). →
-[Права и scopes](permissions.md#roles)
+**Role**: a Control Plane organizational role (grants no permissions). →
+[Permissions and scopes](permissions.md#roles)
 
-**Run** — одна попытка исполнения задачи под claim; статусы `running`,
-`succeeded`, `failed`, `cancelled`, `suspended`. Несёт actions,
-checkpoints, артефакты, бюджет длительности.
+**Run**: one attempt to execute a task under a claim; statuses `running`,
+`succeeded`, `failed`, `cancelled`, `suspended`. It carries actions,
+checkpoints, artifacts, and a duration budget.
 
-**Run action** — зафиксированное действие внутри run (например,
-`tool.<имя>` на каждый вызов инструмента агента), `started` → finish.
+**Run action**: a recorded action inside a run (for example,
+`tool.<name>` for each agent tool call), `started` → finish.
 
-**Run control** — управляющее сообщение живому run: `queue`, `steer`,
-`redirect`, `request_cancel`, `force_cancel`; подтверждается исполнителем.
+**Run control**: a control message to a live run: `queue`, `steer`,
+`redirect`, `request_cancel`, `force_cancel`; the executor acknowledges it.
 
-**Runner** — хост и демон (`control-plane-agent`), который берёт
-назначенные задачи и исполняет их адаптером. → [Агенты и runner](../runner/index.md)
+**Runner**: the host and daemon (`control-plane-agent`) that takes assigned
+tasks and executes them with an adapter. → [Agents and runner](../runner/index.md)
 
 ## S
 
-**Scope** — единица потолка полномочий токена с префиксом audience
-(`control-plane:write`, `memory:read`). Сужает права, никогда не
-расширяет. → [Права и scopes](permissions.md)
+**Scope**: a unit of a token's authority ceiling, with the audience prefix
+(`control-plane:write`, `memory:read`). It narrows permissions and never
+widens them. → [Permissions and scopes](permissions.md)
 
-**Scope ceiling (потолок scopes)** — максимальный набор scopes, который
-credential (PAT, service account) может запросить при обмене.
+**Scope ceiling**: the maximum set of scopes that a credential (PAT, service
+account) can request during exchange.
 
-**SCIM** — протокол provisioning пользователей и групп из внешнего
-каталога в IAM (audience `iam-scim`).
+**SCIM**: the protocol for provisioning users and groups from an external
+directory into IAM (audience `iam-scim`).
 
-**Service account** — principal-сервис в IAM с client credentials; PAT не
-получает. → [Service accounts](../iam/service-accounts.md)
+**Service account**: a service principal in IAM with client credentials; it
+does not get a PAT. → [Service accounts](../iam/service-accounts.md)
 
-**Session (сессия харнесса)** — аренда присутствия харнесса
-(`CP_SESSION_TTL_SECONDS`), внутри которой берутся claims.
+**Session (harness session)**: a lease on the harness's presence
+(`CP_SESSION_TTL_SECONDS`) within which claims are taken.
 
-**Shadow mode** — `CP_AUTHZ_MODE=shadow`: решает локальная проверка, PDP
-спрашивается параллельно, расхождения пишутся в журнал.
+**Shadow mode**: `CP_AUTHZ_MODE=shadow`: the local check decides, the PDP is
+queried in parallel, and discrepancies are logged.
 
-**Skill** — версионированная единица исполнения с контрактом (входы,
-выходы, протокол `http`/`local`/`mcp`, побочные эффекты, риск,
-идемпотентность). → [skill-sdk](../sdk/skill-sdk.md)
+**Skill**: a versioned unit of execution with a contract (inputs, outputs,
+protocol `http`/`local`/`mcp`, side effects, risk, idempotency). →
+[skill-sdk](../sdk/skill-sdk.md)
 
-**Skill invocation (вызов skill)** — запрос ядру исполнить версию skill
-(`skills.invoke`); исполнитель берёт вызов в аренду.
+**Skill invocation**: a request to the core to execute a skill version
+(`skills.invoke`); an executor takes the invocation on lease.
 
-**Status category (категория статуса)** — единственный словарь статусов, на
-который опирается ядро: `backlog`, `active`, `blocked`,
-`terminal_success`, `terminal_cancelled`. Ключи статусов задаёт тип задачи.
-→ [Типы задач и статусы](../control-plane/task-types.md)
+**Status category**: the only status vocabulary the core relies on:
+`backlog`, `active`, `blocked`, `terminal_success`, `terminal_cancelled`. The
+task type sets the status keys.
+→ [Task types and statuses](../control-plane/task-types.md)
 
 ## T
 
-**Task (задача, work item)** — единица работы Control Plane; тип задачи
-определяет статусы, поля и исполнение. → [Модель работы](../control-plane/work-model.md)
+**Task (work item)**: the Control Plane unit of work; the task type defines
+statuses, fields, and execution. → [Work model](../control-plane/work-model.md)
 
-**Task relation (связь задач)** — `parent`, `blocks`, `depends_on`,
-`spawned_by`, `related_to`; `blocks` и `depends_on` влияют на готовность
+**Task relation**: `parent`, `blocks`, `depends_on`, `spawned_by`,
+`related_to`; `blocks` and `depends_on` affect readiness
 (`task_not_ready`).
 
 
-**Task type (тип задачи)** — версионированное описание вида работы:
-жизненный цикл, схема полей, исполнение, критерии приёмки по
-умолчанию. → [Типы задач и статусы](../control-plane/task-types.md)
+**Task type**: a versioned description of a kind of work: lifecycle, field
+schema, execution, default acceptance criteria. → [Task types and statuses](../control-plane/task-types.md)
 
-**Tenant** — изолированная организация. В IAM и Control Plane у новой
-инсталляции единый UUID tenant. → [Tenants и principals](../iam/principals.md)
+**Tenant**: an isolated organization. In a new installation, IAM and Control
+Plane share a single tenant UUID. → [Tenants and principals](../iam/principals.md)
 
-**Transcript (трасса прогона)** — артефакт `transcript` с лентой
-рассуждений и вызовов инструментов агента (без thinking, с редакцией путей
-и credential). → [Трасса прогонов](../runner/trace.md)
+**Transcript (run trace)**: the `transcript` artifact with the feed of the
+agent's reasoning and tool calls (without thinking, with paths and
+credentials redacted). → [Run trace](../runner/trace.md)
 
 ## W
 
-**Work graph** — граф работы: цели, задачи, связи, origin, acceptance и
-evidence.
+**Work graph**: the graph of work: goals, tasks, relations, origin,
+acceptance, and evidence.
 
-**Worker** — процесс `control-plane-worker`: outbox, отложенные исходы
-approvals, фоновые задачи ядра.
+**Worker**: the `control-plane-worker` process: outbox, deferred approval
+outcomes, background core jobs.
 
-**Workspace** — узел иерархии организации работы внутри tenant; имеет тип
-(`allowedChildTypes`), может нести project profile.
+**Workspace**: a node in the hierarchy that organizes work inside a tenant;
+it has a type (`allowedChildTypes`) and can carry a project profile.
 
-## А–Я
+## General terms
 
-**Агент** — principal вида `agent`: автономный исполнитель с собственным
-PAT и binding без human-only прав.
+**Agent**: a principal of kind `agent`: an autonomous executor with its own
+PAT and a binding without human-only permissions.
 
-**Бюджет run** — предельная длительность run (`maxDurationSeconds`);
-превышение — `budget_exceeded`.
+**Run budget**: the maximum duration of a run (`maxDurationSeconds`);
+exceeding it gives `budget_exceeded`.
 
-**Вертикальный пакет** — предметный продукт поверх ядра, использующий общие Control Plane, IAM и память, но свои API и
-audience. → [Вертикальные пакеты](../sdk/vertical-packages.md)
+**Vertical package**: a domain product on top of the core that uses the
+shared Control Plane, IAM, and memory, but has its own API and audience. →
+[Vertical packages](../sdk/vertical-packages.md)
 
-**Дело** — экземпляр процесса: данные, стадии, таймеры, журнал решений и
-исход; в базе знаний — узел `case`. → [Процессы](../processes/index.md)
+**Case**: a process instance: data, stages, timers, decision log, and
+outcome; in the knowledge base, a `case` node. → [Processes](../processes/index.md)
 
 
-**Оператор** — человек, ведущий работу в Control Plane через MCP-плагин
-или CLI. → [Работа оператора](../operator/index.md)
+**Operator**: a human who runs work in Control Plane through the MCP plugin
+or the CLI. → [Operator work](../operator/index.md)
 
-**Потолок** — см. *Scope ceiling*.
+**Ceiling**: see *Scope ceiling*.
 
-**Производственный календарь** — объект каталога вида `Calendar`:
-рабочие и нерабочие дни по годам для `cal.*` в выражениях.
+**Business calendar**: a catalog object of kind `Calendar`: working and
+non-working days by year for `cal.*` in expressions.
 
-**Процесс** — объект каталога вида `Process`: стадии, шаги, сроки,
-согласования и проекция в базу знаний; исполняет ядро. →
-[Процессы](../processes/index.md)
+**Process**: a catalog object of kind `Process`: stages, steps, deadlines,
+approvals, and a projection into the knowledge base; the core executes it. →
+[Processes](../processes/index.md)
 
-**Суперпроект** — репозиторий верхнего уровня: компоненты подключены
-git-сабмодулями плоско в корне, плюс `compose.yml`, `.env.example`,
+**Superproject**: the top-level repository: components are attached as git
+submodules flat in the root, plus `compose.yml`, `.env.example`,
 `Makefile`, `deploy/`, `packages/`, `tools/`.
 
-## См. также
+## See also
 
-- [Ключевые понятия](../overview/concepts.md)
-- [Архитектура](../overview/architecture.md)
-- [Права и scopes](permissions.md)
-- [Коды ошибок](errors.md)
+- [Key concepts](../overview/concepts.md)
+- [Architecture](../overview/architecture.md)
+- [Permissions and scopes](permissions.md)
+- [Error codes](errors.md)

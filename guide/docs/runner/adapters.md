@@ -1,363 +1,373 @@
-# Адаптеры исполнителей
 
-Адаптер — сменная часть runner'а, которая отвечает на один вопрос: «заставить кодового
-агента сделать работу». Статья описывает три реализации — Claude Code, Codex и OpenCode, —
-как они запускают CLI, где берут credentials, в каком режиме разрешений работают и что
-попадает в prompt.
+# Executor adapters
 
-## Контракт адаптера
+An adapter is the replaceable part of the runner that answers one question: "make the coding
+agent do the work". The article describes three implementations — Claude Code, Codex, and
+OpenCode — how they start the CLI, where they get credentials, which permission mode they
+run in, and what goes into the prompt.
 
-Цикл координации принадлежит демону `control-plane-agent`; адаптер получает одну задачу:
+## Adapter contract
+
+The coordination loop belongs to the `control-plane-agent` daemon; the adapter receives one
+task:
 
 ```python
 async def execute(task, run, client, workspace) -> list[ArtifactSpec]: ...
 ```
 
-| Аргумент | Что это |
+| Argument | What it is |
 |---|---|
-| `task` | задача целиком (`publicId`, `title`, `description`, `typeKey`, …) |
-| `run` | текущий run (`id`, `attempt`) |
-| `client` | `ControlPlaneClient` под identity агента |
-| `workspace` | рабочая копия задачи или `None`, если пул рабочих копий не настроен |
+| `task` | the whole task (`publicId`, `title`, `description`, `typeKey`, …) |
+| `run` | the current run (`id`, `attempt`) |
+| `client` | a `ControlPlaneClient` under the agent's identity |
+| `workspace` | the task's working copy, or `None` if the working copy pool is not configured |
 
-Адаптер возвращает спецификации артефактов (`report`, `transcript`); демон проверяет их на
-переносимость (нет локальных путей и credential'ов), записывает, добавляет артефакт
-`commit` и сам вызывает `succeed_run`. Исключение из адаптера превращается в `fail_run` с
-причиной, из которой вырезаны пути хоста.
+The adapter returns artifact specifications (`report`, `transcript`); the daemon checks them
+for portability (no local paths and no credentials), writes them, adds a `commit` artifact,
+and calls `succeed_run` itself. An exception from the adapter turns into `fail_run` with a
+reason from which host paths are stripped.
 
-Выбор адаптера — `CONTROL_PLANE_AGENT_ADAPTER`:
+`CONTROL_PLANE_AGENT_ADAPTER` selects the adapter:
 
-| Значение | Реализация | Назначение |
+| Value | Implementation | Purpose |
 |---|---|---|
-| `echo` (по умолчанию) | встроенный | протокольные проверки: пишет action `echo.observe` и артефакт `report` с заголовком задачи |
+| `echo` (default) | built-in | protocol checks: writes an `echo.observe` action and a `report` artifact with the task title |
 | `claude-code` | `control_plane_claude` | Claude Code CLI (`claude -p`) |
 | `codex` | `control_plane_codex` | Codex CLI (`codex exec`) |
 
-Вендорские адаптеры импортируются лениво: демон работает на хосте, где CLI не установлен,
-а неизвестное имя даёт `unknown adapter '…'` при старте.
+Vendor adapters are imported lazily: the daemon runs on a host where the CLI is not
+installed, and an unknown name produces `unknown adapter '…'` at startup.
 
-OpenCode устроен иначе — это отдельный харнесс со своим циклом (см.
-[ниже](#opencode)).
+OpenCode works differently — it is a separate harness with its own loop (see
+[below](#opencode)).
 
-## Общие правила всех адаптеров
+## Rules common to all adapters
 
-- **Prompt — через stdin**, никогда аргументом: аргументы процесса видны всем на хосте.
-- **Секреты — только через наследуемое окружение.** Токен подписки или API-ключ не
-  попадают ни в argv, ни в файлы конфигурации run'а.
-- **Сессия агента переживает рестарт.** Идентификатор сессии пишется в checkpoint run'а;
-  следующая попытка той же задачи продолжает тот же разговор, а не начинает новый.
-- **Сырой поток остаётся на хосте.** Каждая строка вывода CLI пишется в локальный журнал
-  `<runtime>/sessions/<publicId>-<session>.jsonl` (`0600`, потолок 32 МБ на файл за всю его
-  жизнь, включая продолженные ходы). В Control Plane уходят только summary, счётчики и
-  ограниченный отредактированный транскрипт (см. [Трасса прогонов](trace.md)).
-- **Один ход на run.** Адаптер не ведёт многоходовый диалог; продолжение работы — следующий
-  run, читающий checkpoints предыдущего.
-- **Исход решает демон.** Агенту прямо сказано: не claim'ить, не завершать, не пушить и не
-  открывать pull request — ветку публикует демон.
+- **The prompt goes through stdin**, never as an argument: process arguments are visible to
+  everyone on the host.
+- **Secrets only through the inherited environment.** The subscription token or API key
+  never ends up in argv or in the run's configuration files.
+- **The agent session survives a restart.** The session identifier is written to a run
+  checkpoint; the next attempt of the same task continues the same conversation instead of
+  starting a new one.
+- **The raw stream stays on the host.** Every CLI output line is written to the local log
+  `<runtime>/sessions/<publicId>-<session>.jsonl` (`0600`, capped at 32 MB per file over its
+  whole lifetime, including resumed turns). Only the summary, counters, and a bounded
+  redacted transcript go to Control Plane (see [Run trace](trace.md)).
+- **One turn per run.** The adapter does not conduct a multi-turn dialogue; continuing the
+  work is the next run, which reads the checkpoints of the previous one.
+- **The daemon decides the outcome.** The agent is told explicitly: do not claim, do not
+  complete, do not push, and do not open a pull request — the daemon publishes the branch.
 
 ## Claude Code
 
-### Как запускается
+### How it starts
 
 ```text
 claude --print --output-format stream-json --verbose \
        --permission-mode <mode> \
-       --session-id <uuid>            # новая сессия
-       | --resume <uuid>              # продолжение
+       --session-id <uuid>            # new session
+       | --resume <uuid>              # continuation
        [--model <model>] \
        [--mcp-config <runtime>/mcp.json --strict-mcp-config] \
        [--disallowedTools mcp__control-plane__cp_claim_task …]
 ```
 
-Рабочий каталог процесса — рабочая копия задачи (`worktrees/<publicId>/<repo>`).
+The process working directory is the task's working copy (`worktrees/<publicId>/<repo>`).
 
-Идентификатор сессии генерируется адаптером **до** запуска процесса и сразу пишется в
-checkpoint `claude-code.session` (`{"claudeSessionId", "resumed", "phase": "started"}`). Если
-runner упадёт посреди хода, следующая попытка найдёт этот checkpoint и передаст `--resume`.
-По завершении хода пишется checkpoint с `phase: finished`, `subtype`, `turns`; при ошибке —
-`phase: failed` и тип исключения (без текста: в нём бывают пути).
+The adapter generates the session identifier **before** starting the process and immediately
+writes it to the `claude-code.session` checkpoint (`{"claudeSessionId", "resumed", "phase":
+"started"}`). If the runner crashes in the middle of a turn, the next attempt finds this
+checkpoint and passes `--resume`. When the turn ends, a checkpoint with `phase: finished`,
+`subtype`, `turns` is written; on error — `phase: failed` and the exception type (without
+the text: it can contain paths).
 
-Результат хода — событие `result` потока stream-json. Ход с `is_error` или ненулевым кодом
-выхода — провал run; ход без события `result` — ошибка `claude exited with code … without a
-result` с хвостом stderr в журнале runner'а.
+The turn result is the `result` event of the stream-json stream. A turn with `is_error` or a
+non-zero exit code fails the run; a turn without a `result` event produces the error
+`claude exited with code … without a result` with the stderr tail in the runner log.
 
-### Аутентификация
+### Authentication
 
-| Вариант | Переменная | Примечание |
+| Option | Variable | Note |
 |---|---|---|
-| Подписка | `CLAUDE_CODE_OAUTH_TOKEN` | выпускается `claude setup-token` на машине с браузером; принадлежит человеку |
-| API-ключ | `ANTHROPIC_API_KEY` | оплата за токены |
+| Subscription | `CLAUDE_CODE_OAUTH_TOKEN` | issued by `claude setup-token` on a machine with a browser; belongs to a human |
+| API key | `ANTHROPIC_API_KEY` | pay per token |
 
-Адаптер токен не читает и не копирует: дочерний процесс и запущенные им MCP-серверы
-наследуют окружение runner'а. Следствие: агент видит токен в своём окружении — это свойство
-конструкции, поэтому периметр строится вокруг процесса (пользователь, контейнер), а не
-внутри него.
+The adapter does not read or copy the token: the child process and the MCP servers it starts
+inherit the runner environment. Consequence: the agent sees the token in its environment —
+this is a property of the design, so the perimeter is built around the process (user,
+container), not inside it.
 
-!!! note "Окно подписки"
-    Исчерпание окна подписки сейчас — обычная ошибка хода и `fail_run`. Параллельные
-    прогоны на токене человека расходуют то же окно, что и его интерактивные сессии.
+!!! note "Subscription window"
+    Exhausting the subscription window is currently an ordinary turn error and `fail_run`.
+    Parallel runs on a human's token consume the same window as that person's interactive
+    sessions.
 
-### Режим разрешений
+### Permission mode
 
-`CONTROL_PLANE_CLAUDE_PERMISSION_MODE` передаётся в `--permission-mode`:
+`CONTROL_PLANE_CLAUDE_PERMISSION_MODE` is passed to `--permission-mode`:
 
-| Режим | Поведение | Когда |
+| Mode | Behavior | When |
 |---|---|---|
-| `acceptEdits` (по умолчанию) | правки файлов без запроса, остальные команды требуют подтверждения | безопасный старт; в неинтерактивном режиме агент не сможет выполнять команды (тесты, сборка) |
-| `bypassPermissions` | все инструменты без запросов | рабочий режим автономного исполнителя — только внутри периметра |
+| `acceptEdits` (default) | file edits without prompts, other commands require confirmation | a safe start; in non-interactive mode the agent cannot run commands (tests, build) |
+| `bypassPermissions` | all tools without prompts | the working mode of an autonomous executor — only inside a perimeter |
 
-Без `bypassPermissions` автономный агент не выполнит ни одной shell-команды: подтверждать
-некому, и в отчётах это видно как «every tool call requires approval». Периметр при этом —
-непривилегированный пользователь с `ProtectSystem=strict` или контейнер.
+Without `bypassPermissions` an autonomous agent cannot run a single shell command: nobody is
+there to confirm, and reports show it as "every tool call requires approval". The perimeter
+in that case is an unprivileged user with `ProtectSystem=strict` or a container.
 
-### MCP внутри агента {#mcp-inside}
+### MCP inside the agent {#mcp-inside}
 
-При `CONTROL_PLANE_CLAUDE_MCP=1` (по умолчанию) адаптер пишет
-`<runtime>/mcp.json` (`0600`) и передаёт его с `--strict-mcp-config` — агент получает ровно
-один MCP-сервер `control-plane` и не видит чужих, настроенных у пользователя:
+With `CONTROL_PLANE_CLAUDE_MCP=1` (default) the adapter writes `<runtime>/mcp.json` (`0600`)
+and passes it with `--strict-mcp-config` — the agent gets exactly one MCP server,
+`control-plane`, and does not see other servers configured for the user:
 
 ```json
 {"mcpServers": {"control-plane": {"type": "stdio", "command": "control-plane-mcp", "args": []}}}
 ```
 
-В файле нет ни адреса сервера, ни токена: `control-plane-mcp` наследует окружение runner'а и
-резолвит identity так же, как демон. Агент работает под тем же principal'ом.
+The file contains neither the server address nor a token: `control-plane-mcp` inherits the
+runner environment and resolves identity the same way the daemon does. The agent works under
+the same principal.
 
-Через MCP агент сам читает `cp_get_run_context`, пишет checkpoints и артефакты. Но
-**авторитетные инструменты у него отобраны** флагом `--disallowedTools`. Список не
-записан в адаптере, а вычисляется из самого MCP-сервера (`withheld_tool_names()`): отбирается
-всё, что не помечено read-only и не входит в набор инструментов evidence.
+Through MCP the agent reads `cp_get_run_context`, writes checkpoints and artifacts on its
+own. But **the authoritative tools are taken away from it** with the `--disallowedTools` flag.
+The list is not hard-coded in the adapter; it is computed from the MCP server itself
+(`withheld_tool_names()`): everything that is not marked read-only and is not part of the
+evidence tool set is withheld.
 
-| Агенту доступно | Агенту недоступно (примеры) |
+| Available to the agent | Not available to the agent (examples) |
 |---|---|
-| все read-only: `cp_whoami`, `cp_context`, `cp_get_task`, `cp_get_run_context`, `cp_list_*`, `cp_search_tools`, … | `cp_claim_task`, `cp_release_task`, `cp_start_run` |
+| all read-only: `cp_whoami`, `cp_context`, `cp_get_task`, `cp_get_run_context`, `cp_list_*`, `cp_search_tools`, … | `cp_claim_task`, `cp_release_task`, `cp_start_run` |
 | evidence: `cp_checkpoint`, `cp_record_action`, `cp_create_artifact`, `cp_remember`, `cp_comment`, `cp_request_approval` | `cp_complete_run`, `cp_fail_run`, `cp_suspend_run`, `cp_prepare_handoff` |
-| | `cp_create_task`, `cp_update_task`, связи, цели |
+| | `cp_create_task`, `cp_update_task`, relations, goals |
 | | `cp_approve`, `cp_reject`, `cp_invoke_skill`, `cp_launch_child`, `cp_control_run`, `cp_focus_project` |
 
-Инструмент без аннотации считается авторитетным — забытая разметка закрывает дверь, а не
-открывает.
+A tool without an annotation is treated as authoritative — forgotten markup closes the door
+rather than opening it.
 
-!!! warning "Это сужение задачи, а не граница безопасности"
-    Агент работает под тем же credential, что и демон, и технически может дойти до API
-    мимо MCP. Настоящий потолок — права binding агента (и child grant, который вычисляет
-    сервер для дочерних run). `--disallowedTools` лишь убирает соблазн.
+!!! warning "This narrows the task; it is not a security boundary"
+    The agent works under the same credential as the daemon and can technically reach the
+    API bypassing MCP. The real ceiling is the permissions of the agent's binding (and the
+    child grant the server computes for child runs). `--disallowedTools` only removes the
+    temptation.
 
 ### Prompt
 
-Prompt собирается из частей в фиксированном порядке:
+The prompt is assembled from parts in a fixed order:
 
-1. **Системная заметка**: ты автономный исполнитель одной задачи; MCP `control-plane`
-   доступен для контекста, записей и checkpoints; не claim'ить, не завершать; работать
-   только в текущем каталоге; не пушить и не открывать PR; закончить summary.
-2. **Задача**: `# Task <publicId>: <title>` и описание.
-3. **Проект** (если задача в проекте): статус и шаблон.
-4. **Входы** задачи, если их объявил её тип (раздел `## Входы`, см.
-   [ниже](#task-inputs)).
-5. **Контекст задачи** из памяти (раздел `## Контекст задачи`, см. ниже).
-6. **Соглашения репозитория** — содержимое `CONTROL_PLANE_CLAUDE_PROMPT_FILE` под заголовком
-   `## Repository conventions`.
+1. **System note**: you are an autonomous executor of one task; the `control-plane` MCP is
+   available for context, records, and checkpoints; do not claim, do not complete; work only
+   in the current directory; do not push and do not open a PR; finish with a summary.
+2. **Task**: `# Task <publicId>: <title>` and the description.
+3. **Project** (if the task belongs to a project): status and template.
+4. **Inputs** of the task, if its type declares them (section `## Входы`, see
+   [below](#task-inputs)).
+5. **Task context** from memory (section `## Контекст задачи`, see below).
+6. **Repository conventions** — the contents of `CONTROL_PLANE_CLAUDE_PROMPT_FILE` under the
+   heading `## Repository conventions`.
 
-Системная заметка также говорит агенту, что файл-результат, который не является
-частью кода (документ, отчёт), сдаётся вызовом `cp_create_artifact` с параметром `file`:
-инструмент загружает файл в Control Plane, и тот становится артефактом run'а (см.
-[Содержимое в хранилище](../control-plane/artifacts.md#content)).
+The system note also tells the agent that a result file that is not part of the code (a
+document, a report) is delivered by calling `cp_create_artifact` with the `file` parameter:
+the tool uploads the file to Control Plane, and it becomes an artifact of the run (see
+[Content in storage](../control-plane/artifacts.md#content)).
 
-### Файл соглашений
+### Conventions file
 
-`CONTROL_PLANE_CLAUDE_PROMPT_FILE` — путь к текстовому файлу, который дописывается в
-**каждый** prompt. Описание задачи говорит «что сделать»; файл соглашений — «как устроен
-этот репозиторий»: как запускать тесты, что никогда не коммитить, где лежат ADR, как
-нумеровать миграции, каким сервисам можно доверять как контрактам. Это знание иначе стоит
-по одному раунду ревью на каждую ветку.
+`CONTROL_PLANE_CLAUDE_PROMPT_FILE` is the path to a text file appended to **every** prompt.
+The task description says "what to do"; the conventions file says "how this repository
+works": how to run tests, what never to commit, where ADRs live, how to number migrations,
+which services can be trusted as contracts. Otherwise this knowledge costs one review round
+per branch.
 
-Файл читается при каждом запуске хода — правка вступает в силу без перезапуска runner'а.
-Нечитаемый файл пишется в журнал предупреждением, ход продолжается без него.
+The file is read at every turn start — an edit takes effect without restarting the runner.
+An unreadable file is logged as a warning, and the turn continues without it.
 
-Пример структуры:
+Example structure:
 
 ```markdown
-# Соглашения для агента-исполнителя
+# Conventions for the executor agent
 
-## Среда
-- Рабочая копия — текущий каталог. Соседи `../platform-auth-sdk` стоят на ревизиях
-  суперпроекта и доступны только для чтения.
-- Контракт другого сервиса не выдумывай: бери схемы из кода соседа и закрепляй
-  contract-тестом.
-- Полный прогон тестов: `uv run ruff check . && uv run pytest -q`.
+## Environment
+- The working copy is the current directory. The neighbours `../platform-auth-sdk` are at
+  superproject revisions and are read-only.
+- Do not invent another service's contract: take the schemas from the neighbour's code and
+  pin them with a contract test.
+- Full test run: `uv run ruff check . && uv run pytest -q`.
 
-## Правила
-- Меняешь контракт API или схему БД — обнови ADR в том же коммите.
-- Не коммить секреты, абсолютные пути, `.env`, артефакты сборки.
-- Не трогай `main`: демон сам коммитит и публикует ветку задачи.
+## Rules
+- If you change an API contract or a DB schema, update the ADR in the same commit.
+- Do not commit secrets, absolute paths, `.env`, build artifacts.
+- Do not touch `main`: the daemon commits and publishes the task branch itself.
 
-## Отчёт
-Первой строкой — что сделано. Дальше: изменённые места, какие тесты прогнаны и с каким
-результатом, что требует решения человека.
+## Report
+First line: what was done. Then: changed places, which tests were run and with what result,
+what needs a human decision.
 ```
 
-### Параметры
+### Parameters
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_CLAUDE_BINARY` | `claude` | путь к CLI |
-| `CONTROL_PLANE_CLAUDE_MODEL` | как настроено у CLI | модель (`--model`) |
-| `CONTROL_PLANE_CLAUDE_PERMISSION_MODE` | `acceptEdits` | режим разрешений |
-| `CONTROL_PLANE_CLAUDE_TIMEOUT` | `3600` | потолок одного хода, секунды; по истечении процесс убивается, run проваливается |
-| `CONTROL_PLANE_CLAUDE_MCP` | `1` | `0` — не передавать MCP внутрь |
-| `CONTROL_PLANE_CLAUDE_LOGS` | `1` | `0` — не писать локальный журнал сессии |
-| `CONTROL_PLANE_CLAUDE_RESUME` | `1` | `0` — всегда начинать новую сессию |
-| `CONTROL_PLANE_CLAUDE_RUNTIME_DIR` | `~/.claude-runner` | где лежат `mcp.json` и `sessions/` |
-| `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | — | файл соглашений репозитория |
+| `CONTROL_PLANE_CLAUDE_BINARY` | `claude` | path to the CLI |
+| `CONTROL_PLANE_CLAUDE_MODEL` | as configured in the CLI | model (`--model`) |
+| `CONTROL_PLANE_CLAUDE_PERMISSION_MODE` | `acceptEdits` | permission mode |
+| `CONTROL_PLANE_CLAUDE_TIMEOUT` | `3600` | cap for one turn, seconds; when it expires, the process is killed and the run fails |
+| `CONTROL_PLANE_CLAUDE_MCP` | `1` | `0` — do not pass MCP inside |
+| `CONTROL_PLANE_CLAUDE_LOGS` | `1` | `0` — do not write the local session log |
+| `CONTROL_PLANE_CLAUDE_RESUME` | `1` | `0` — always start a new session |
+| `CONTROL_PLANE_CLAUDE_RUNTIME_DIR` | `~/.claude-runner` | where `mcp.json` and `sessions/` live |
+| `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | — | repository conventions file |
 
-!!! tip "Таймаут хода"
-    Задачи с миграцией, API, клиентом и тестами редко укладываются в час. Для таких
-    очередей поднимайте `CONTROL_PLANE_CLAUDE_TIMEOUT` (например до `10800`), помня, что
-    зависший ход держит аренду до конца таймаута.
+!!! tip "Turn timeout"
+    Tasks with a migration, an API, a client, and tests rarely fit into an hour. For such
+    queues, raise `CONTROL_PLANE_CLAUDE_TIMEOUT` (for example to `10800`), keeping in mind
+    that a hung turn holds the lease until the timeout ends.
 
 ## Codex
 
-### Как запускается
+### How it starts
 
 ```text
-codex exec --json --sandbox <sandbox> [--model <model>] -          # новая сессия
-codex exec --json --sandbox <sandbox> [--model <model>] resume <id> -   # продолжение
+codex exec --json --sandbox <sandbox> [--model <model>] -          # new session
+codex exec --json --sandbox <sandbox> [--model <model>] resume <id> -   # continuation
 ```
 
-`-` в конце заставляет Codex читать prompt из stdin.
+The trailing `-` makes Codex read the prompt from stdin.
 
-В отличие от Claude Code, идентификатор новой сессии выбирает сам Codex и сообщает первым
-событием потока (`thread.started`). Поэтому для новой сессии checkpoint `codex.session`
-(`{"codexSessionId", …}`) пишется в момент чтения этого события — уже после старта
-процесса, но до реальной работы. Для продолжения известной сессии checkpoint пишется до
-старта, как у Claude Code.
+Unlike Claude Code, Codex chooses the identifier of a new session itself and reports it in
+the first event of the stream (`thread.started`). Therefore, for a new session the
+`codex.session` checkpoint (`{"codexSessionId", …}`) is written when this event is read —
+after the process has started but before the actual work. To continue a known session, the
+checkpoint is written before the start, as with Claude Code.
 
-### Особенности
+### Specifics
 
-- **Без MCP внутри.** Control Plane MCP Codex не передаётся: весь контекст задачи встроен
-  в prompt, и агенту сказано, что инструментов Control Plane у него нет.
-- **Аутентификация** — `auth.json` в `$CODEX_HOME` (по умолчанию `~/.codex/auth.json`;
-  подписка ChatGPT или ключ) или `OPENAI_API_KEY`. Адаптер не трогает `CODEX_HOME`, но
-  Codex переписывает `auth.json` при каждом запуске — каталог должен быть записываемым и
-  постоянным (volume в контейнере), иначе после рестарта понадобится новый вход.
-- **Песочница** — `CONTROL_PLANE_CODEX_SANDBOX`, по умолчанию `workspace-write` (правки в
-  рабочей копии). Собственный режим Codex «только чтение» агенту бесполезен. Для
-  ревьюера, которому нужно гонять тесты и `git fetch`, применяют `danger-full-access` —
-  тоже только внутри периметра.
-- **Исчерпание квоты** распознаётся по тексту ошибки (`rate limit`, `usage limit`, `quota`,
-  `429`) и именуется отдельным исключением, но пока, как и у Claude Code, приводит к
-  обычному `fail_run`.
-- Файла соглашений у Codex-адаптера нет; всё нужное кладите в описание задачи.
-- Action хода — `codex.turn`; артефакты — `report` (summary) и `transcript`.
+- **No MCP inside.** The Control Plane MCP is not passed to Codex: the whole task context is
+  embedded in the prompt, and the agent is told it has no Control Plane tools.
+- **Authentication** — `auth.json` in `$CODEX_HOME` (default `~/.codex/auth.json`; a ChatGPT
+  subscription or a key) or `OPENAI_API_KEY`. The adapter does not touch `CODEX_HOME`, but
+  Codex rewrites `auth.json` on every start — the directory must be writable and persistent
+  (a volume in a container), otherwise a new login is required after a restart.
+- **Sandbox** — `CONTROL_PLANE_CODEX_SANDBOX`, default `workspace-write` (edits in the
+  working copy). Codex's own read-only mode is useless for the agent. For a reviewer that
+  needs to run tests and `git fetch`, `danger-full-access` is used — also only inside a
+  perimeter.
+- **Quota exhaustion** is recognized by the error text (`rate limit`, `usage limit`, `quota`,
+  `429`) and raised as a separate exception, but for now, as with Claude Code, it leads to an
+  ordinary `fail_run`.
+- The Codex adapter has no conventions file; put everything needed into the task description.
+- The turn action is `codex.turn`; the artifacts are `report` (summary) and `transcript`.
 
-### Параметры
+### Parameters
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_CODEX_BINARY` | `codex` | путь к CLI |
-| `CONTROL_PLANE_CODEX_MODEL` | как настроено у CLI | модель |
-| `CONTROL_PLANE_CODEX_SANDBOX` | `workspace-write` | режим песочницы |
-| `CONTROL_PLANE_CODEX_TIMEOUT` | `3600` | потолок хода, секунды |
-| `CONTROL_PLANE_CODEX_RESUME` | `1` | `0` — всегда новая сессия |
-| `CONTROL_PLANE_CODEX_LOGS` | `1` | `0` — без локального журнала |
-| `CONTROL_PLANE_CODEX_RUNTIME_DIR` | `~/.codex-runner` | каталог журналов `sessions/` |
-| `CONTROL_PLANE_CODEX_CREDENTIAL_CLASS` | — | метка класса credential (подписка / ключ); попадает в metadata артефакта как `credentialClass` |
+| `CONTROL_PLANE_CODEX_BINARY` | `codex` | path to the CLI |
+| `CONTROL_PLANE_CODEX_MODEL` | as configured in the CLI | model |
+| `CONTROL_PLANE_CODEX_SANDBOX` | `workspace-write` | sandbox mode |
+| `CONTROL_PLANE_CODEX_TIMEOUT` | `3600` | turn cap, seconds |
+| `CONTROL_PLANE_CODEX_RESUME` | `1` | `0` — always a new session |
+| `CONTROL_PLANE_CODEX_LOGS` | `1` | `0` — no local log |
+| `CONTROL_PLANE_CODEX_RUNTIME_DIR` | `~/.codex-runner` | directory of the `sessions/` logs |
+| `CONTROL_PLANE_CODEX_CREDENTIAL_CLASS` | — | credential class label (subscription / key); goes into the artifact metadata as `credentialClass` |
 
 ## OpenCode {#opencode}
 
-`control-plane-opencode` — самостоятельный харнесс, а не адаптер демона: у него свой цикл
-discovery → claim → run, и он управляет процессом `opencode serve` по его HTTP API.
+`control-plane-opencode` is a standalone harness, not a daemon adapter: it has its own
+discovery → claim → run loop, and it drives an `opencode serve` process through its HTTP API.
 
-| Особенность | Значение |
+| Aspect | Value |
 |---|---|
-| Запуск | `control-plane-opencode` рядом с `opencode serve` |
-| Адрес OpenCode | `OPENCODE_SERVER` (по умолчанию `http://127.0.0.1:4096`), пароль — `OPENCODE_SERVER_PASSWORD` |
-| Модель и агент | `OPENCODE_MODEL`, `OPENCODE_AGENT` |
-| Очередь | `CONTROL_PLANE_AGENT_WORKSPACE`, `CONTROL_PLANE_AGENT_PROJECT`, `CONTROL_PLANE_AGENT_SUBPROJECTS`, `CONTROL_PLANE_AGENT_POLL` |
-| Credential | только API-ключ Control Plane (`CONTROL_PLANE_API_KEY` или хранилище `control-plane login`) |
-| Рабочая копия | нет пула worktree; работает в каталоге процесса |
-| Continuity | checkpoint `opencode.session` с `openCodeSessionId` и `lastMessageId` |
-| Результат | action `opencode.prompt`, артефакт `report` (`opencode-summary`) |
-| Транскрипт | не публикуется |
+| Launch | `control-plane-opencode` next to `opencode serve` |
+| OpenCode address | `OPENCODE_SERVER` (default `http://127.0.0.1:4096`), password — `OPENCODE_SERVER_PASSWORD` |
+| Model and agent | `OPENCODE_MODEL`, `OPENCODE_AGENT` |
+| Queue | `CONTROL_PLANE_AGENT_WORKSPACE`, `CONTROL_PLANE_AGENT_PROJECT`, `CONTROL_PLANE_AGENT_SUBPROJECTS`, `CONTROL_PLANE_AGENT_POLL` |
+| Credential | Control Plane API key only (`CONTROL_PLANE_API_KEY` or the `control-plane login` store) |
+| Working copy | no worktree pool; works in the process directory |
+| Continuity | `opencode.session` checkpoint with `openCodeSessionId` and `lastMessageId` |
+| Result | `opencode.prompt` action, `report` artifact (`opencode-summary`) |
+| Transcript | not published |
 
-!!! warning "Ограничения OpenCode-харнесса"
-    Харнесс не умеет IAM-identity (только legacy API-ключ), не фильтрует задачи по
-    назначению и не использует рабочие копии. На сервере, где legacy-ключи выключены, он
-    не аутентифицируется. Используйте его для экспериментов, а для работы — демон с
-    адаптером `claude-code` или `codex`.
+!!! warning "Limitations of the OpenCode harness"
+    The harness does not support IAM identity (only a legacy API key), does not filter tasks
+    by assignment, and does not use working copies. On a server where legacy keys are turned
+    off, it cannot authenticate. Use it for experiments; for real work, use the daemon with
+    the `claude-code` or `codex` adapter.
 
-## Входы задачи { #task-inputs }
+## Task inputs { #task-inputs }
 
-Если тип задачи объявляет входы (`artifactSchema.inputs`, см.
-[Входы и выходы](../control-plane/task-types.md#artifact-schema)), демон готовит их сам
-перед запуском адаптера; раздел в prompt получают Claude Code и Codex:
+If the task type declares inputs (`artifactSchema.inputs`, see
+[Inputs and outputs](../control-plane/task-types.md#artifact-schema)), the daemon prepares
+them itself before starting the adapter; Claude Code and Codex receive a section in the
+prompt:
 
-1. читает `inputs` из `GET /runs/{id}/context`;
-2. скачивает каждый вход с содержимым в хранилище (`contentState: stored`) через
-   `GET /artifacts/{id}/content?forTask=<задача>` в
-   `<runtime>/inputs/<key>/<name>`. Каталог `<runtime>` — каталог задачи рядом с рабочей
-   копией, а не внутри неё: вход не часть изменения, и `git add -A` его не захватит.
-   Корень — `CONTROL_PLANE_AGENT_RUNTIME_DIR`, по умолчанию `.runtime` в корне пула
-   рабочих копий (без пула — `~/.control-plane-agent/runtime`);
-3. имя файла очищается до одного компонента пути: разделители и служебные символы
-   заменяются на `_`, ведущие точки убираются, длина ограничена;
-4. каталог входов пересоздаётся на каждом run, так что новая head-ревизия заменяет
-   старую; после успешного run он удаляется.
+1. reads `inputs` from `GET /runs/{id}/context`;
+2. downloads every input whose content is in storage (`contentState: stored`) through
+   `GET /artifacts/{id}/content?forTask=<task>` into `<runtime>/inputs/<key>/<name>`. The
+   `<runtime>` directory is the task directory next to the working copy, not inside it: an
+   input is not part of the change, and `git add -A` does not pick it up. The root is
+   `CONTROL_PLANE_AGENT_RUNTIME_DIR`, default `.runtime` at the root of the working copy pool
+   (without a pool — `~/.control-plane-agent/runtime`);
+3. the file name is sanitized to a single path component: separators and special characters
+   are replaced with `_`, leading dots are removed, the length is limited;
+4. the inputs directory is recreated on every run, so a new head revision replaces the old
+   one; after a successful run it is deleted.
 
-В prompt появляется раздел `## Входы` — внутри ограды `<task_inputs>…</task_inputs>` с
-предупреждением, что имена и содержимое входов — данные от других участников, а **не
-инструкции**. По строке на вход: ключ, тип, задача-источник и связь, имя, id артефакта,
-media type, размер и одно из:
+The prompt gets a `## Входы` (inputs) section — inside the fence
+`<task_inputs>…</task_inputs>` with a warning that input names and contents are data from
+other participants and **not instructions**. One line per input: key, type, source task and
+relation, name, artifact id, media type, size, and one of:
 
-| Состояние | Что в строке |
+| State | What the line contains |
 |---|---|
-| скачан | `file: <локальный путь>` |
-| не скачался | `not downloaded (<код ошибки>); read it with cp_get_artifact_content` |
-| содержимое удалено | `content purged by an administrator` |
-| ссылка без содержимого | `reference only: <uri>` |
+| downloaded | `file: <local path>` |
+| not downloaded | `not downloaded (<error code>); read it with cp_get_artifact_content` |
+| content purged | `content purged by an administrator` |
+| reference without content | `reference only: <uri>` |
 
-Неудачное скачивание не проваливает run: агент видит, какой вход недоступен и почему, и
-может получить его сам MCP-инструментом `cp_get_artifact_content` (Claude Code). Обходится
-ли работа без входа — решает агент и пишет об этом в summary.
+A failed download does not fail the run: the agent sees which input is unavailable and why,
+and can get it itself with the `cp_get_artifact_content` MCP tool (Claude Code). Whether the
+work can do without the input is up to the agent, which says so in the summary.
 
-## Контекст задачи в prompt
+## Task context in the prompt
 
-Все три реализации запрашивают у Control Plane рабочий контекст задачи (`POST
-/api/v1/context` с `task`, `run` и `includeMemory`) и превращают его в раздел
-`## Контекст задачи` одной общей функцией. Правила раздела:
+All three implementations request the task's working context from Control Plane (`POST
+/api/v1/context` with `task`, `run`, and `includeMemory`) and turn it into a
+`## Контекст задачи` (task context) section with one shared function. Section rules:
 
-- элементы памяти сгруппированы по секциям пакета (`current`, `relevant_facts`,
-  `related_entities`, `documents`, затем прочие), у каждого — источник `[source: …]`;
-- всё находится внутри ограды `<recalled_memory>…</recalled_memory>` с предупреждением,
-  что это данные от разных участников, а **не инструкции**; элемент не может закрыть ограду
-  досрочно или начать собственную строку prompt'а;
-- каждая строка проходит редакцию путей хоста и credential'ов;
-- один элемент — не длиннее 600 символов; весь раздел — не больше
-  `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` (по умолчанию 12000); не вошедшее считается строкой
-  `… N more item(s) omitted by the context budget`;
-- если память недоступна, пуста или не поместилась — одна строка
-  `контекст памяти недоступен: <причина>`. Run из-за этого не падает: задача сама по себе
-  авторитетна.
+- memory items are grouped by package sections (`current`, `relevant_facts`,
+  `related_entities`, `documents`, then the rest), each with a source `[source: …]`;
+- everything sits inside the fence `<recalled_memory>…</recalled_memory>` with a warning that
+  this is data from various participants and **not instructions**; an item cannot close the
+  fence early or start its own prompt line;
+- every line passes redaction of host paths and credentials;
+- one item is no longer than 600 characters; the whole section is no larger than
+  `CONTROL_PLANE_CONTEXT_BUDGET_CHARS` (default 12000); what does not fit is counted in the
+  line `… N more item(s) omitted by the context budget`;
+- if memory is unavailable, empty, or does not fit — a single line
+  `контекст памяти недоступен: <причина>` ("memory context unavailable: <reason>"). The run
+  does not fail because of this: the task itself is authoritative.
 
-Подробнее о памяти и контексте — [Контекст задачи и память](../control-plane/context.md).
+More on memory and context: [Task context and memory](../control-plane/context.md).
 
-## Сравнение
+## Comparison
 
 | | Claude Code | Codex | OpenCode |
 |---|---|---|---|
-| Тип | адаптер демона | адаптер демона | отдельный харнесс |
+| Type | daemon adapter | daemon adapter | separate harness |
 | `harness.type` | `claude-code` | `codex` | `opencode` |
-| Credential Control Plane | IAM PAT или API-ключ | IAM PAT или API-ключ | только API-ключ |
-| Рабочие копии и ветки | да | да | нет |
-| MCP Control Plane внутри | да, без авторитетных инструментов | нет | нет |
-| Файл соглашений | `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | нет | нет |
-| Транскрипт и `tool.*` actions | да | да | нет |
-| Checkpoint сессии | `claude-code.session` (до старта) | `codex.session` (по `thread.started`) | `opencode.session` |
-| Сигнал «остановлен» (`executor_blocked`) | checkpoint `blocked` (`cp_checkpoint`) | файл `CONTROL_PLANE_BLOCKED_FILE` → checkpoint `blocked` | нет |
+| Control Plane credential | IAM PAT or API key | IAM PAT or API key | API key only |
+| Working copies and branches | yes | yes | no |
+| Control Plane MCP inside | yes, without authoritative tools | no | no |
+| Conventions file | `CONTROL_PLANE_CLAUDE_PROMPT_FILE` | no | no |
+| Transcript and `tool.*` actions | yes | yes | no |
+| Session checkpoint | `claude-code.session` (before start) | `codex.session` (on `thread.started`) | `opencode.session` |
+| "Stopped" signal (`executor_blocked`) | `blocked` checkpoint (`cp_checkpoint`) | file `CONTROL_PLANE_BLOCKED_FILE` → `blocked` checkpoint | no |
 
-## См. также
+## See also
 
-- [Рабочие копии](execution-workspace.md)
-- [Трасса прогонов](trace.md)
-- [Конфигурация](configuration.md)
-- [CLI и MCP-сервер](../control-plane/cli-and-mcp.md)
+- [Working copies](execution-workspace.md)
+- [Run trace](trace.md)
+- [Configuration](configuration.md)
+- [CLI and MCP server](../control-plane/cli-and-mcp.md)

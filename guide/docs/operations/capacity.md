@@ -1,19 +1,21 @@
-# Ресурсы и масштабирование
 
-Сколько CPU, памяти и диска нужно установке Taimen, какие лимиты заданы в
-`compose.yml`, как их менять и где у платформы пределы масштабирования.
-Статья для инженера, который выбирает машину и планирует рост.
+# Resources and scaling
 
-## Лимиты памяти контейнеров
+How much CPU, memory, and disk a Taimen installation needs, which limits are
+set in `compose.yml`, how to change them, and where the platform's scaling
+limits are. This article is for the engineer who picks the machine and plans
+for growth.
 
-Каждый сервис корневого `compose.yml` имеет `mem_limit`, заданный переменной
-окружения со значением по умолчанию. Значение — потолок: при его превышении
-ядро убивает процесс контейнера (OOM), Docker перезапускает его по
-`restart: unless-stopped`.
+## Container memory limits
 
-### Ядро и периметр (`core`, `edge`)
+Every service in the root `compose.yml` has a `mem_limit` set by an
+environment variable with a default value. The value is a ceiling: when a
+process exceeds it, the kernel kills the container process (OOM), and Docker
+restarts it according to `restart: unless-stopped`.
 
-| Сервис | Переменная | По умолчанию |
+### Core and edge (`core`, `edge`)
+
+| Service | Variable | Default |
 |---|---|---|
 | `iam-db` | `PG_MEM_LIMIT` | 256m |
 | `iam-service` | `IAM_MEM_LIMIT` | 256m |
@@ -24,57 +26,58 @@
 | `memory-db` | `MEMORY_DB_MEM_LIMIT` | 512m |
 | `memory-service` | `MEMORY_MEM_LIMIT` | 512m |
 | `minio` | `MINIO_MEM_LIMIT` | 256m |
-| `minio-bootstrap` | — | одноразовый, завершается после старта |
-| `caddy` | — | без лимита (обычно десятки МБ) |
+| `minio-bootstrap` | — | one-shot, exits after startup |
+| `caddy` | — | no limit (usually tens of MB) |
 | `guide` | — | 64m |
-| **Итого потолков** | | **≈ 3,1 ГиБ** |
+| **Total of ceilings** | | **≈ 3.1 GiB** |
 
 
-!!! note "`PG_MEM_LIMIT` — общий"
-    Одна переменная задаёт потолок всем базам на образе `postgres:16-alpine`.
-    У `memory-db` (граф и вектора) свой потолок `MEMORY_DB_MEM_LIMIT`, потому
-    что ей нужно больше всех.
+!!! note "`PG_MEM_LIMIT` is shared"
+    One variable sets the ceiling for all databases on the `postgres:16-alpine`
+    image. `memory-db` (graph and vectors) has its own ceiling,
+    `MEMORY_DB_MEM_LIMIT`, because it needs the most.
 
-### Как изменить лимит
+### How to change a limit
 
-Задайте переменную в `.env` и пересоздайте сервис:
+Set the variable in `.env` and recreate the service:
 
 ```bash
 echo 'MEMORY_DB_MEM_LIMIT=1g' >> .env
 docker compose up -d memory-db
-docker stats --no-stream        # фактическое потребление против лимита
+docker stats --no-stream        # actual usage against the limit
 ```
 
-## Рекомендуемые конфигурации хоста
+## Recommended host configurations
 
-| Состав | vCPU | RAM | Swap | Диск | Комментарий |
+| Composition | vCPU | RAM | Swap | Disk | Comment |
 |---|---|---|---|---|---|
-| `core edge` (минимум) | 2 | 4 ГиБ | 2 ГиБ | 40 ГБ | Координация, IAM, память на небольших базах знаний |
+| `core edge` (minimum) | 2 | 4 GiB | 2 GiB | 40 GB | Coordination, IAM, memory on small knowledge bases |
 
-Как считать:
-
-
-- Сумма потолков — верхняя оценка. В покое сервисы потребляют заметно
-  меньше, но под нагрузкой к потолку подходят `memory-db` и
-  `memory-service`. Фактическое потребление смотрите `docker stats`.
-- Оставьте не меньше 1 ГиБ на ОС, Docker, файловый кэш и **сборку образов**:
-  `docker compose build` на хосте кратковременно требует памяти и CPU больше,
-  чем работающий стек. На машине с 2 vCPU сборку стоит выполнять заранее, до
-  переключения (см. [Обновление и миграции](upgrades.md)).
-- Swap не заменяет память, но спасает от OOM во время сборки и пиков.
+How to estimate:
 
 
-## Диск
+- The sum of ceilings is an upper bound. At rest the services use noticeably
+  less, but under load `memory-db` and `memory-service` approach their
+  ceilings. Check actual usage with `docker stats`.
+- Leave at least 1 GiB for the OS, Docker, the file cache, and **image builds**:
+  `docker compose build` on the host briefly needs more memory and CPU than
+  the running stack. On a 2 vCPU machine, run the build ahead of time, before
+  the switchover (see [Upgrades and migrations](upgrades.md)).
+- Swap does not replace memory, but it saves you from OOM during builds and
+  peaks.
 
-| Что растёт | Где | Оценка и управление |
+
+## Disk
+
+| What grows | Where | Estimate and management |
 |---|---|---|
-| Журнал событий Control Plane | `control_plane_db` | Растёт линейно с работой; `:archive` уменьшает горячую таблицу, но не общий размер тома; физически освобождает только `:prune` |
-| Память: вектора | `memory_db` | Эмбеддинг размерности 1536 во `float4` — 6 КиБ на чанк; только вектора 100 тыс. чанков — около 600 МБ, плюс индекс, текст и граф |
-| Память: граф, наблюдения, трассы | `memory_db` | Растёт с объёмом загруженных знаний и числом сборок контекста |
-| Содержимое артефактов | `platform_minio` (том MinIO) | Объём файлов, сданных в артефакты задач |
-| Образы и кэш сборки | Docker | Несколько ГБ на релиз; `docker image prune`, `docker builder prune` |
-| Логи контейнеров | Docker | Без ротации растут неограниченно — см. [Мониторинг](monitoring.md) |
-| Бэкапы | `/opt/taimen/backups` | Дампы × срок хранения; выносите за пределы хоста |
+| Control Plane event log | `control_plane_db` | Grows linearly with work; `:archive` shrinks the hot table but not the total volume size; only `:prune` frees space physically |
+| Memory: vectors | `memory_db` | A 1536-dimension embedding in `float4` is 6 KiB per chunk; the vectors alone for 100k chunks are about 600 MB, plus the index, text, and graph |
+| Memory: graph, observations, traces | `memory_db` | Grows with the volume of loaded knowledge and the number of context assemblies |
+| Artifact content | `platform_minio` (MinIO volume) | Volume of files submitted as task artifacts |
+| Images and build cache | Docker | Several GB per release; `docker image prune`, `docker builder prune` |
+| Container logs | Docker | Grow without bound without rotation; see [Monitoring](monitoring.md) |
+| Backups | `/opt/taimen/backups` | Dumps × retention period; move them off the host |
 
 ```bash
 docker system df -v | head -40
@@ -82,66 +85,67 @@ docker compose exec control-plane-db psql -U control_plane -d control_plane \
   -c "SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM pg_catalog.pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 10"
 ```
 
-## Пределы масштабирования
+## Scaling limits
 
-Платформа рассчитана на вертикальное масштабирование одного хоста. Что важно
-знать:
+The platform is designed for vertical scaling of a single host. What you
+need to know:
 
-| Компонент | Ограничение |
+| Component | Limitation |
 |---|---|
-| `context-adapter` | Singleton: единственность держится advisory lock в базе. Второй экземпляр не ускорит доставку. Per-tenant изоляция изолирует **отказы** (один запаркованный tenant не блокирует остальных), а не даёт параллелизм |
-| `control-plane-api` | Один контейнер; горизонтальное масштабирование в `compose.yml` не описано |
-| Базы | Каждая — отдельный контейнер PostgreSQL 16 на этом же хосте. Для `memory-db` нужны расширения Apache AGE и pgvector, которых у управляемых PostgreSQL обычно нет |
-| Миграции | Индексы строятся не `CONCURRENTLY` — на больших таблицах нужно окно обслуживания |
-| Retention журнала | Планировщика нет: `:archive` запускает оператор |
+| `context-adapter` | Singleton: uniqueness is held by an advisory lock in the database. A second instance does not speed up delivery. Per-tenant isolation isolates **failures** (one parked tenant does not block the others); it does not provide parallelism |
+| `control-plane-api` | One container; horizontal scaling is not described in `compose.yml` |
+| Databases | Each is a separate PostgreSQL 16 container on the same host. `memory-db` needs the Apache AGE and pgvector extensions, which managed PostgreSQL offerings usually lack |
+| Migrations | Indexes are not built `CONCURRENTLY`; large tables need a maintenance window |
+| Log retention | There is no scheduler: the operator runs `:archive` |
 
-Если хост перестаёт справляться, по порядку:
+If the host stops keeping up, in order:
 
-1. Поднимите `MEMORY_DB_MEM_LIMIT`, `MEMORY_MEM_LIMIT`, `CP_MEM_LIMIT`.
-2. Архивируйте журнал Control Plane.
-3. Вынесите исполнителей и экспериментальные профили на другие машины.
-4. Перейдите на машину с большим числом vCPU и памяти (перенос — через
-   [Резервное копирование](backup.md)).
+1. Raise `MEMORY_DB_MEM_LIMIT`, `MEMORY_MEM_LIMIT`, `CP_MEM_LIMIT`.
+2. Archive the Control Plane log.
+3. Move executors and experimental profiles to other machines.
+4. Move to a machine with more vCPUs and memory (migrate via
+   [Backup](backup.md)).
 
-## Runner-хост
+## Runner host
 
-Кодовый агент (Node.js + модель через API поставщика) потребляет много памяти
-в пиках, особенно при сборке и тестах внутри рабочей копии.
+The coding agent (Node.js plus a model via the provider's API) uses a lot of
+memory at peaks, especially when building and running tests inside the
+working copy.
 
-=== "Контейнер"
+=== "Container"
 
-    Лимиты задаются в compose-файле исполнителя: `cpus` и `mem_limit`.
-    Ориентир — `cpus: 2` и `mem_limit: 4g` на исполнителя, тестовым базам
-    512m (`db-test`) и 768m (`memory-db-test`, данные в tmpfs). Два
-    исполнителя с тестовыми базами — это около 10 ГБ потолков: машине нужно
-    8–12 ГиБ RAM и 4 vCPU.
+    Limits are set in the executor's compose file: `cpus` and `mem_limit`.
+    A reference point is `cpus: 2` and `mem_limit: 4g` per executor, with
+    512m for test databases (`db-test`) and 768m (`memory-db-test`, data in
+    tmpfs). Two executors with test databases come to about 10 GB of
+    ceilings: the machine needs 8–12 GiB of RAM and 4 vCPUs.
 
 === "systemd"
 
-    Лимиты задаются в юните или drop-in `limits.conf`: `CPUQuota`,
-    `MemoryHigh` (мягкий порог, выше которого ядро начинает отбирать
-    память), `MemoryMax` (жёсткий потолок на весь cgroup, включая дочерние
-    процессы агента), `IOWeight`.
+    Limits are set in the unit or in a `limits.conf` drop-in: `CPUQuota`,
+    `MemoryHigh` (a soft threshold above which the kernel starts reclaiming
+    memory), `MemoryMax` (a hard ceiling for the whole cgroup, including the
+    agent's child processes), `IOWeight`.
 
-!!! danger "Сумма потолков не должна превышать RAM"
-    Если на одной машине несколько исполнителей, сумма их `MemoryMax`
-    (или `mem_limit`) должна укладываться в физическую память за вычетом ОС
-    и соседних сервисов. Иначе два тяжёлых прогона одновременно выводят
-    машину в OOM: ядро убивает процесс, systemd или Docker его перезапускает,
-    а run закрывается с `failure_reason=restart_recovery`. Если задача
-    повторно упирается в потолок, её нужно выполнять на машине крупнее, а не
-    поднимать потолок до уровня, при котором страдают соседи.
+!!! danger "The sum of ceilings must not exceed RAM"
+    If several executors run on one machine, the sum of their `MemoryMax`
+    (or `mem_limit`) must fit into physical memory minus the OS and
+    neighboring services. Otherwise two heavy runs at the same time push the
+    machine into OOM: the kernel kills the process, systemd or Docker
+    restarts it, and the run closes with `failure_reason=restart_recovery`.
+    If a task repeatedly hits the ceiling, run it on a larger machine rather
+    than raising the ceiling to a level at which the neighbors suffer.
 
-Прочие параметры потребления исполнителя:
+Other executor consumption parameters:
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CONTROL_PLANE_AGENT_MAX_WORKSPACES` | 8 | Сколько рабочих копий хранить на диске |
-| `CONTROL_PLANE_CLAUDE_TIMEOUT` | 3600 | Предел одного хода кодового агента, секунды |
-| `CONTROL_PLANE_AGENT_POLL` | 5 | Интервал опроса очереди, секунды |
+| `CONTROL_PLANE_AGENT_MAX_WORKSPACES` | 8 | How many working copies to keep on disk |
+| `CONTROL_PLANE_CLAUDE_TIMEOUT` | 3600 | Limit for one coding-agent turn, in seconds |
+| `CONTROL_PLANE_AGENT_POLL` | 5 | Queue polling interval, in seconds |
 
-## См. также
+## See also
 
-- [Промышленное развёртывание](deployment.md)
-- [Мониторинг и здоровье](monitoring.md)
-- [Требования](../getting-started/requirements.md)
+- [Production deployment](deployment.md)
+- [Monitoring and health](monitoring.md)
+- [Requirements](../getting-started/requirements.md)

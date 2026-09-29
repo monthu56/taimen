@@ -1,32 +1,34 @@
-# Память (memory-service)
 
-memory-service — сервис памяти платформы Taimen: типизированный граф знаний и
-векторный индекс поверх одного PostgreSQL, которые отвечают на вопросы **с цитатами
-на источники** и собирают готовый контекст для агентов. Раздел предназначен
-интеграторам, которые пишут знания в память и читают их, и администраторам,
-которые разворачивают и сопровождают сервис.
+# Memory (memory-service)
 
-## Назначение
+memory-service is the memory service of the Taimen platform: a typed knowledge
+graph and a vector index on top of a single PostgreSQL, which answer questions
+**with citations to sources** and assemble ready-to-use context for agents.
+This section is for integrators who write knowledge to memory and read it, and
+for administrators who deploy and maintain the service.
 
-Сервис решает три задачи:
+## Purpose
 
-1. **Хранит знания** — статьи, документы, факты, события внешних систем — в виде
-   графа сущностей и связей (Apache AGE) и текстовых фрагментов с эмбеддингами
-   (pgvector).
-2. **Находит релевантное** — гибридным поиском (вектор + полнотекстовый поиск +
-   соседи по графу), с необязательным реранкингом и синтезом ответа через LLM.
-3. **Собирает контекст** — структурированный `ContextPack` под бюджет токенов, где у
-   каждого элемента есть provenance (откуда взят) и объяснение, почему он включён.
+The service does three things:
 
-Главное продуктовое требование — **источник в каждом ответе**: по `source_path` и
-`node_key` потребитель всегда может показать оригинальный документ, из которого
-взята подсказка (`GET /api/brain/sources/{natural_key}`).
+1. **Stores knowledge** (articles, documents, facts, events from external
+   systems) as a graph of entities and relations (Apache AGE) and as text
+   fragments with embeddings (pgvector).
+2. **Finds what is relevant** with hybrid search (vector + full-text search +
+   graph neighbors), with optional reranking and answer synthesis by an LLM.
+3. **Assembles context**: a structured `ContextPack` within a token budget,
+   where each element carries provenance (where it came from) and an
+   explanation of why it was included.
 
-Сервис продукт-нейтрален: он не знает доменов в коде. Виды сущностей и связи
-конкретной предметной области описываются данными — доменными пакетами (см.
-[Модель знаний](knowledge-model.md#domain-packs)).
+The main product requirement is **a source in every answer**: by `source_path`
+and `node_key`, a consumer can always show the original document a hint came
+from (`GET /api/brain/sources/{natural_key}`).
 
-## Место в платформе
+The service is product-neutral: its code knows no domains. The entity kinds
+and relations of a specific subject area are described as data, in domain packs
+(see [Knowledge model](knowledge-model.md#domain-packs)).
+
+## Place in the platform
 
 
 ```mermaid
@@ -41,79 +43,79 @@ flowchart LR
     end
     DB[(memory-db<br/>PostgreSQL 16<br/>AGE + pgvector + pg_trgm)]
     IAM[iam-service<br/>JWKS]
-    POL[внешний PDP<br/>опционально]
-    APP[Приложения и демо<br/>статический ключ или IAM-токен]
+    POL[external PDP<br/>optional]
+    APP[Applications and demos<br/>static key or IAM token]
 
     CA == "observations:batch" ==> MAPI
     API == "context, reconcile,<br/>packages" ==> MAPI
     APP ==> BRAIN
     BRAIN ==> DB
     MAPI ==> DB
-    MEM -. "проверка подписи" .-> IAM
-    MEM -. "видимость principal" .-> POL
+    MEM -. "signature check" .-> IAM
+    MEM -. "principal visibility" .-> POL
 ```
 
-- **Control Plane** — главный потребитель. Его `context-adapter` доставляет доменные
-  события ядра в память наблюдениями (`POST /api/memory/observations:batch`), а
-  `control-plane-api` собирает объединённый контекст работы (`POST /api/v1/context`
-  ядра вызывает `POST /api/memory/context`) и публикует снимки знаний клиентов
-  (`POST /api/memory/reconcile`, пакеты видов). Подробнее — в
-  [Контексте Control Plane](../control-plane/context.md).
-- **Приложения** (чат-боты, суфлёры, консоли) ходят в `/api/brain/*` напрямую со
-  статическим ключом или access token IAM.
-- **IAM** выпускает токены с audience `memory-service`; сервис проверяет их подпись
-  по JWKS.
+- **Control Plane** is the main consumer. Its `context-adapter` delivers core
+  domain events to memory as observations (`POST /api/memory/observations:batch`),
+  and `control-plane-api` assembles the combined work context (the core's
+  `POST /api/v1/context` calls `POST /api/memory/context`) and publishes
+  client knowledge snapshots (`POST /api/memory/reconcile`, kind packages).
+  Details are in [Control Plane context](../control-plane/context.md).
+- **Applications** (chatbots, prompters, consoles) call `/api/brain/*` directly
+  with a static key or an IAM access token.
+- **IAM** issues tokens with audience `memory-service`; the service verifies
+  their signature against JWKS.
 
-- **Внешний PDP** (экспериментально, выключен по умолчанию) определяет, какие
-  namespaces и scopes видит конкретный человек или агент.
+- **An external PDP** (experimental, off by default) determines which
+  namespaces and scopes a particular person or agent can see.
 
-!!! note "Память не источник истины об операционном состоянии"
-    Авторитетное состояние задач, прогонов и approvals хранит Control Plane. Память
-    хранит свидетельства и знания, а текущее состояние приложения может быть передано
-    в запрос как `ephemeral_context` — оно участвует в сборке контекста, но не
-    сохраняется.
+!!! note "Memory is not the source of truth for operational state"
+    Control Plane holds the authoritative state of tasks, runs, and approvals.
+    Memory holds evidence and knowledge, and the application's current state
+    can be passed into a request as `ephemeral_context`: it takes part in
+    context assembly but is not stored.
 
-## Из чего состоит сервис
+## What the service consists of
 
-| Часть | Что это | Точка входа |
+| Part | What it is | Entry point |
 |---|---|---|
-| HTTP-сервис | FastAPI: `/api/brain/*`, `/api/memory/*`, `/healthz` | `platform-memory-serve` |
-| MCP-сервер | Инструменты графа для агентов (stdio или streamable HTTP) | `platform-memory-mcp` |
-| CLI | Инициализация схемы, загрузка vault, запросы, трейсы | `cb` |
-| Клиент | `platform-memory-client`: `MemoryClient` / `AsyncMemoryClient` | каталог `memory-service/client` |
-| БД | PostgreSQL 16 + Apache AGE + pgvector + pg_trgm | образ `memory-db` |
+| HTTP service | FastAPI: `/api/brain/*`, `/api/memory/*`, `/healthz` | `platform-memory-serve` |
+| MCP server | Graph tools for agents (stdio or streamable HTTP) | `platform-memory-mcp` |
+| CLI | Schema initialization, vault loading, queries, traces | `cb` |
+| Client | `platform-memory-client`: `MemoryClient` / `AsyncMemoryClient` | directory `memory-service/client` |
+| Database | PostgreSQL 16 + Apache AGE + pgvector + pg_trgm | image `memory-db` |
 
-Дополнительные поверхности — административная консоль `/console` и публичная
-демо-витрина `/demo` — выключены по умолчанию и не входят в контракт потребителя (см.
-[Конфигурацию](configuration.md#console-demo)).
+Additional surfaces, the administrative console `/console` and the public demo
+showcase `/demo`, are off by default and are not part of the consumer contract
+(see [Configuration](configuration.md#console-demo)).
 
-## Ключевые понятия
+## Key concepts
 
-| Понятие | Кратко | Подробнее |
+| Concept | In short | More |
 |---|---|---|
-| Namespace | Жёсткая граница базы знаний: данные разных namespaces не пересекаются | [Namespaces и доступ](namespaces.md) |
-| Scope | Метка видимости `type:id` внутри namespace (`workspace:<id>`, `principal:<id>`) | [Namespaces и доступ](namespaces.md#visibility) |
-| Узел (node) | Сущность графа с `natural_key`, типом, заголовком и provenance | [Модель знаний](knowledge-model.md) |
-| Чанк (chunk) | Фрагмент текста с эмбеддингом и ссылкой на источник | [Модель знаний](knowledge-model.md#chunks) |
-| Observation | Неизменяемое свидетельство внешней системы | [Загрузка знаний](ingestion.md#observations) |
-| Факт | Ребро графа с интервалом валидности и классом свидетельства | [Модель знаний](knowledge-model.md#facts) |
-| ContextPack | Собранный контекст с секциями, источниками и трейсом | [Поиск и контекст](retrieval.md#context-compiler) |
+| Namespace | A hard knowledge base boundary: data of different namespaces never overlaps | [Namespaces and access](namespaces.md) |
+| Scope | A visibility label `type:id` inside a namespace (`workspace:<id>`, `principal:<id>`) | [Namespaces and access](namespaces.md#visibility) |
+| Node | A graph entity with a `natural_key`, type, title, and provenance | [Knowledge model](knowledge-model.md) |
+| Chunk | A text fragment with an embedding and a link to its source | [Knowledge model](knowledge-model.md#chunks) |
+| Observation | An immutable piece of evidence from an external system | [Knowledge ingestion](ingestion.md#observations) |
+| Fact | A graph edge with a validity interval and an evidence class | [Knowledge model](knowledge-model.md#facts) |
+| ContextPack | Assembled context with sections, sources, and a trace | [Search and context](retrieval.md#context-compiler) |
 
-## Развёртывание в составе платформы
+## Deployment as part of the platform
 
-В корневом `compose.yml` память входит в профиль `core` двумя сервисами:
+In the root `compose.yml`, memory belongs to the `core` profile as two services:
 
-| Сервис | Образ | Порт | Назначение |
+| Service | Image | Port | Purpose |
 |---|---|---|---|
-| `memory-db` | `memory-db` (сборка из `memory-service/infra/memory-db`) | только сеть compose | PostgreSQL 16 + AGE + pgvector, БД `company_brain` |
-| `memory-service` | `memory-service` (контекст сборки — корень суперпроекта) | `127.0.0.1:${MEMORY_HOST_PORT:-18001}` → `8077` | HTTP API |
+| `memory-db` | `memory-db` (built from `memory-service/infra/memory-db`) | compose network only | PostgreSQL 16 + AGE + pgvector, database `company_brain` |
+| `memory-service` | `memory-service` (build context is the superproject root) | `127.0.0.1:${MEMORY_HOST_PORT:-18001}` → `8077` | HTTP API |
 
-Контекст сборки образа — корень суперпроекта, потому что сервис подключает соседний
-`platform-auth-sdk` path-зависимостью. Наружу через edge-прокси память не
-публикуется: её вызывают сервисы платформы по внутреннему адресу
-`http://memory-service:8077`.
+The image build context is the superproject root because the service pulls in
+the neighboring `platform-auth-sdk` as a path dependency. Memory is not
+published through the edge proxy: platform services call it at the internal
+address `http://memory-service:8077`.
 
-Быстрая проверка после запуска:
+Quick check after startup:
 
 ```bash
 curl -fsS http://127.0.0.1:18001/healthz
@@ -121,42 +123,47 @@ curl -fsS http://127.0.0.1:18001/healthz
 
 curl -fsS -H "Authorization: Bearer $MEMORY_API_KEY" \
   http://127.0.0.1:18001/api/brain/health
-# то же, но с проверкой токена
+# the same, but with a token check
 ```
 
-`/healthz` не требует авторизации и отвечает `503`, если БД недоступна.
+`/healthz` requires no authorization and returns `503` if the database is
+unavailable.
 
-## Принципы работы
+## Operating principles
 
-- **Изоляция баз знаний.** Каждый запрос работает в явно указанных namespaces;
-  доступ к ним проверяется грантами токена. См. [Namespaces и доступ](namespaces.md).
-- **Идемпотентная запись.** Повторная отправка той же статьи (`external_id`), того же
-  документа (`natural_key`), того же события (`source.system` + `stream` +
-  `external_id`) или того же снимка (`snapshotId`) не создаёт дубликатов.
-- **Удаление с аудитом.** Любое удаление фиксируется событием `delete` в аудит-контуре
-  своей базы знаний и восстанавливается по `GET /api/brain/trace/{trace_id}`.
-- **LLM необязателен.** Запись, проекция, гибридный поиск, сборка контекста и трейсы
-  работают без генеративной модели. LLM нужен только для синтеза ответа
-  (`synthesize: true`), реранкинга и извлечения сущностей из неструктурированного
-  текста. Эмбеддинги нужны для векторного канала; для тестов есть офлайн-провайдеры
-  `fake`/`echo`.
-- **Защита ПДн.** При включённой защите токены без допуска получают выдачу с
-  масками, а выдача немаскированных ПДн журналируется событием `pii_access`.
+- **Knowledge base isolation.** Each request works in explicitly specified
+  namespaces; access to them is checked against the token's grants. See
+  [Namespaces and access](namespaces.md).
+- **Idempotent writes.** Sending the same article (`external_id`), the same
+  document (`natural_key`), the same event (`source.system` + `stream` +
+  `external_id`), or the same snapshot (`snapshotId`) again creates no
+  duplicates.
+- **Deletion with audit.** Every deletion is recorded as a `delete` event in
+  the audit trail of its knowledge base and can be reconstructed with
+  `GET /api/brain/trace/{trace_id}`.
+- **An LLM is optional.** Writing, projection, hybrid search, context assembly,
+  and traces work without a generative model. An LLM is needed only for
+  answer synthesis (`synthesize: true`), reranking, and entity extraction from
+  unstructured text. Embeddings are needed for the vector channel; for tests,
+  there are offline providers `fake`/`echo`.
+- **Personal data protection.** When protection is on, tokens without
+  clearance get masked results, and every release of unmasked personal data is
+  logged as a `pii_access` event.
 
-## Что дальше
+## What next
 
-- [Модель знаний](knowledge-model.md) — как устроены граф, чанки, факты и provenance.
-- [Namespaces и доступ](namespaces.md) — имена баз знаний, ключи, IAM-токены, видимость.
-- [Загрузка знаний](ingestion.md) — retain, документы, наблюдения, снимки, удаление.
-- [Поиск и сборка контекста](retrieval.md) — гибридный поиск, реранкинг, ContextPack.
-- [API](api.md) — справочник всех маршрутов.
-- [Конфигурация](configuration.md) — переменные `CB_*`, провайдеры, эксплуатация.
+- [Knowledge model](knowledge-model.md): how the graph, chunks, facts, and provenance work.
+- [Namespaces and access](namespaces.md): knowledge base names, keys, IAM tokens, visibility.
+- [Knowledge ingestion](ingestion.md): retain, documents, observations, snapshots, deletion.
+- [Search and context assembly](retrieval.md): hybrid search, reranking, ContextPack.
+- [API](api.md): reference for all routes.
+- [Configuration](configuration.md): `CB_*` variables, providers, operations.
 
-## См. также
+## See also
 
-- [Контекст Control Plane](../control-plane/context.md)
-- [Архитектура платформы](../overview/architecture.md)
-- [Токены IAM](../iam/tokens.md)
+- [Control Plane context](../control-plane/context.md)
+- [Platform architecture](../overview/architecture.md)
+- [IAM tokens](../iam/tokens.md)
 - [Service accounts](../iam/service-accounts.md)
-- [Клиенты SDK](../sdk/clients.md)
-- [Типичные проблемы с памятью](../troubleshooting/memory.md)
+- [SDK clients](../sdk/clients.md)
+- [Common memory problems](../troubleshooting/memory.md)

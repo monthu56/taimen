@@ -1,22 +1,23 @@
-# Установка и запуск
 
-Отказы при подготовке окружения, сборке образов, старте контейнеров,
-миграциях и bootstrap. Каждая таблица построена как «симптом → причина →
-решение»; команды выполняются из корня клона суперпроекта.
+# Installation and startup
 
-## Конфигурация compose
+Failures during environment preparation, image builds, container startup,
+migrations, and bootstrap. Each table follows the "symptom → cause → fix"
+pattern; run commands from the root of the superproject clone.
 
-| Симптом | Причина | Решение |
+## Compose configuration
+
+| Symptom | Cause | Fix |
 |---|---|---|
-| `required variable CP_POSTGRES_PASSWORD is missing a value: set CP_POSTGRES_PASSWORD` (или другая переменная с `:?`) | Нет `.env`, compose запущен не из корня клона или с `-f` без `--env-file` | `make secrets`; запускать из корня; иначе `--env-file <корень клона>/.env` |
-| `no such service: control-plane-context-adapter` | Неверное имя сервиса. Ошибка в одном имени роняет всю команду | Имя адаптера — `context-adapter`; список: `docker compose --profile "*" config --services` |
-| Ошибка разбора `env_file` с полем `required` | Старый Docker Compose | Обновить Compose до v2.24+ |
-| `network <имя> declared as external, but could not be found` | Дополнительный compose-файл установки ссылается на внешнюю сеть, которой нет | `docker network create <имя>` до `up` |
-| Ошибка монтирования тома с неизвестным драйвером | Compose-файл установки использует сторонний volume driver, плагин не установлен | Установить плагин (и его systemd-юнит) до первого `up` |
-| `Bind for 127.0.0.1:18000 failed: port is already allocated` | Порт занят другим процессом или второй копией стека | Освободить порт или задать другой `*_HOST_PORT` в `.env` |
-| `docker compose ps` показывает не все сервисы | Профиль не указан | `docker compose --profile "*" ps`; `make ps` делает это сам |
+| `required variable CP_POSTGRES_PASSWORD is missing a value: set CP_POSTGRES_PASSWORD` (or another variable with `:?`) | No `.env`, or compose is run outside the clone root, or with `-f` but without `--env-file` | Run `make secrets`; run from the root; otherwise pass `--env-file <clone root>/.env` |
+| `no such service: control-plane-context-adapter` | Wrong service name. An error in one name fails the entire command | The adapter name is `context-adapter`; to list services: `docker compose --profile "*" config --services` |
+| Parse error for `env_file` with the `required` field | Old Docker Compose | Upgrade Compose to v2.24+ |
+| `network <name> declared as external, but could not be found` | An additional compose file of the installation references an external network that does not exist | Run `docker network create <name>` before `up` |
+| Volume mount error with an unknown driver | The installation's compose file uses a third-party volume driver whose plugin is not installed | Install the plugin (and its systemd unit) before the first `up` |
+| `Bind for 127.0.0.1:18000 failed: port is already allocated` | The port is taken by another process or by a second copy of the stack | Free the port or set a different `*_HOST_PORT` in `.env` |
+| `docker compose ps` does not show all services | No profile specified | `docker compose --profile "*" ps`; `make ps` does this for you |
 
-Проверить итоговую конфигурацию после интерполяции:
+To check the resulting configuration after interpolation:
 
 
 ```bash
@@ -24,67 +25,70 @@ make config PROFILES="core notify edge"
 docker compose --profile core --profile edge config | less
 ```
 
-## Сборка образов
+## Image builds
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Сборка `control-plane`, `memory-service` падает на установке зависимостей: не найден `../platform-auth-sdk` или пустой каталог компонента | Сабмодули не инициализированы или на другой ревизии | `git submodule update --init --recursive`; `git submodule status` без `-` и `+` |
-| После `build` worker или адаптер работают на старом коде | Собран не тот сервис или не пересоздан контейнер. У `control-plane-worker` и `context-adapter` нет `build:`, они используют образ `control-plane-api` | `docker compose build control-plane-api` и `docker compose up -d control-plane-api control-plane-worker context-adapter` |
-| Сборка на хосте идёт очень долго, стек в это время частично недоступен | `make up` собирает во время переключения | Раздельно: `docker compose … build`, затем `up -d` |
-| Контекст сборки огромный, сборка медленная | Нарушен корневой `.dockerignore` или в дереве лишние каталоги (`node_modules`, `.venv`, `.git`) | Проверить `.dockerignore` в корне; не класть данные в рабочее дерево |
-| Не хватает памяти при сборке (`Killed` в выводе сборки) | Мало RAM, нет swap | Добавить swap; собирать при остановленных тяжёлых необязательных сервисах |
+| The `control-plane` or `memory-service` build fails while installing dependencies: `../platform-auth-sdk` not found, or a component directory is empty | Submodules are not initialized or are at a different revision | `git submodule update --init --recursive`; `git submodule status` shows no `-` or `+` |
+| After `build`, the worker or adapter runs old code | The wrong service was built, or the container was not recreated. `control-plane-worker` and `context-adapter` have no `build:`; they use the `control-plane-api` image | `docker compose build control-plane-api` and `docker compose up -d control-plane-api control-plane-worker context-adapter` |
+| The build on the host takes very long, and the stack is partially unavailable meanwhile | `make up` builds during the switchover | Separate the steps: `docker compose … build`, then `up -d` |
+| The build context is huge and the build is slow | The root `.dockerignore` is broken, or the tree contains extra directories (`node_modules`, `.venv`, `.git`) | Check `.dockerignore` at the root; do not put data in the working tree |
+| Out of memory during the build (`Killed` in the build output) | Little RAM, no swap | Add swap; build with heavy optional services stopped |
 
-## Старт контейнеров и healthcheck
+## Container startup and healthcheck
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Контейнер вечно `unhealthy`, хотя сервис отвечает | Healthcheck обращается к `localhost`: в slim/busybox-образах он резолвится в IPv6 `::1`, а сервис слушает только IPv4 | В своих healthcheck использовать `127.0.0.1`. Все healthcheck поставки уже так написаны |
-| `iam-service` стартует, но обмен токенов отвечает `500`; в логах `PermissionError` на `/run/secrets/iam_signing_key` | Файл ключа принадлежит root при режиме `600`, а сервис работает под uid 10001 | `sudo chown 10001:10001 secrets/iam-signing.pem`, режим оставить `600` |
-| Контейнер, читающий PAT или токен из `secrets/` (исполнители пакета), падает с `Permission denied` | Та же причина: владелец не uid 10001 | `chown 10001` на файлы, права не ослаблять |
-| `control-plane-worker` и `context-adapter` висят в `Created`/`Waiting` | Ждут `service_healthy` от `control-plane-api` | Разбираться с `control-plane-api` (см. ниже) |
-| `control-plane-api` рестартует; в логах ошибка Alembic | Миграция не применилась | Прочитать ошибку; при неисправимой — откат релиза, см. [Обновление и миграции](../operations/upgrades.md) |
-| `/health/ready` → `503 migrations_pending`, ревизия БД **новее** head | Поверх новой схемы запущен старый образ | Вернуть образ нового релиза или выполнить downgrade новым образом |
-| `/health/ready` → `503 database_unreachable` | База не поднялась, неверный пароль, закончился диск | `docker compose logs control-plane-db`, `df -h` |
-| `password authentication failed for user "…"` после смены пароля в `.env` | `POSTGRES_PASSWORD` применяется только при инициализации пустого тома | Сменить пароль роли `ALTER ROLE` в базе или вернуть прежнее значение в `.env`, см. [Секреты и ротация](../operations/secrets.md) |
-| `control-plane-api` не стартует: зависимость `minio-bootstrap` завершилась с ошибкой | Одноразовый контейнер упал | `docker compose logs minio minio-bootstrap` |
-| `memory-service` падает с `graph with oid … does not exist` | База памяти восстановлена логическим дампом в новый кластер | Исправление OID каталога AGE, см. [Резервное копирование](../operations/backup.md) |
+| A container stays `unhealthy` forever although the service responds | The healthcheck calls `localhost`: in slim/busybox images it resolves to IPv6 `::1`, while the service listens on IPv4 only | Use `127.0.0.1` in your own healthchecks. All healthchecks in the delivery already do this |
+| `iam-service` starts, but token exchange returns `500`; the logs show `PermissionError` on `/run/secrets/iam_signing_key` | The key file is owned by root with mode `600`, while the service runs as uid 10001 | `sudo chown 10001:10001 secrets/iam-signing.pem`; keep mode `600` |
+| A container that reads a PAT or token from `secrets/` (package executors) fails with `Permission denied` | Same cause: the owner is not uid 10001 | `chown 10001` the files; do not loosen permissions |
+| `control-plane-worker` and `context-adapter` hang in `Created`/`Waiting` | They wait for `service_healthy` from `control-plane-api` | Troubleshoot `control-plane-api` (see below) |
+| `control-plane-api` restarts; the logs show an Alembic error | A migration did not apply | Read the error; if it cannot be fixed, roll back the release, see [Upgrades and migrations](../operations/upgrades.md) |
+| `/health/ready` → `503 migrations_pending`, the database revision is **newer** than head | An old image runs on top of the new schema | Restore the new release's image or run a downgrade with the new image |
+| `/health/ready` → `503 database_unreachable` | The database did not start, the password is wrong, or the disk is full | `docker compose logs control-plane-db`, `df -h` |
+| `password authentication failed for user "…"` after changing a password in `.env` | `POSTGRES_PASSWORD` applies only when an empty volume is initialized | Change the role password with `ALTER ROLE` in the database or restore the previous value in `.env`, see [Secrets and rotation](../operations/secrets.md) |
+| `control-plane-api` does not start: dependency `minio-bootstrap` exited with an error | The one-shot container failed | `docker compose logs minio minio-bootstrap` |
+| `memory-service` fails with `graph with oid … does not exist` | The memory database was restored from a logical dump into a new cluster | Fix the AGE catalog OIDs, see [Backup](../operations/backup.md) |
 
-## Периметр (Caddy)
+## Edge (Caddy)
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `caddy` в логах: `challenge failed`, `no valid A records`, `429` | Имя не указывает на хост, закрыт 80/443 или превышены лимиты ACME-центра после серии неудач | Проверить `dig`, файрвол; убрать из Caddyfile имена без DNS; после `429` ждать окна лимита |
-| Правка Caddyfile не применилась после `caddy reload` | Файл заменён новым inode (`mv`, атомарная запись), bind-mount видит старый | Писать в тот же файл (`cat new > Caddyfile`) или `docker compose up -d --force-recreate caddy` |
-| `502` на маршруте | Upstream не поднят (профиль выключен) или упал | `docker compose ps <upstream>`; убрать лишний маршрут |
+| `caddy` logs show `challenge failed`, `no valid A records`, `429` | The name does not point to the host, ports 80/443 are closed, or the ACME CA rate limits were exceeded after a series of failures | Check `dig` and the firewall; remove names without DNS from the Caddyfile; after a `429`, wait for the rate-limit window |
+| A Caddyfile change does not apply after `caddy reload` | The file was replaced with a new inode (`mv`, atomic write), and the bind mount still sees the old one | Write into the same file (`cat new > Caddyfile`) or run `docker compose up -d --force-recreate caddy` |
+| `502` on a route | The upstream is not running (its profile is off) or has crashed | `docker compose ps <upstream>`; remove the unneeded route |
 
-Подробнее — в [Периметре и TLS](../operations/edge-and-tls.md).
+For details, see [Edge and TLS](../operations/edge-and-tls.md).
 
-## make и bootstrap
+## make and bootstrap
 
-| Симптом | Причина | Решение |
+Some `bootstrap.py` and `make smoke` messages below are quoted verbatim: the
+scripts print them in Russian.
+
+| Symptom | Cause | Fix |
 |---|---|---|
-| `make secrets`: `openssl: command not found` | Нет openssl на хосте | Установить openssl |
-| `bootstrap.py`: `не дождался http://127.0.0.1:18000/health/ready` | Стек не поднят, API не готов (миграции, БД) или изменён `CP_HOST_PORT` без пересоздания | `make smoke`, `docker compose ps`; порты берутся из `.env` |
-| `bootstrap.py`: `HTTP 401: {"detail":"unauthorized"}` на запросах к IAM | `IAM_BOOTSTRAP_TOKEN` в `.env` не совпадает с тем, с которым запущен `iam-service` (например, `.env` правили без пересоздания) | `docker compose up -d iam-service` или вернуть прежнее значение |
-| `bootstrap.py`: `HTTP 409 … already_bootstrapped` | Потерян `deploy/state/<env>.json`, а Control Plane уже инициализирован | Восстановить state-файл из бэкапа; bootstrap Control Plane выполняется один раз |
-| `bootstrap.py`: `нужен PyYAML` / `нужен jsonschema` | uv не установлен, у системного Python нет зависимостей шага каталога из пакетов | установить uv (`make bootstrap` подключит их сам) или `apt install python3-yaml python3-jsonschema` / `pip install pyyaml jsonschema` |
-| `bootstrap.py`: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` | Volumes сброшены, а `deploy/state/<env>.json` остался | `make reset-state` и повторить `make bootstrap` |
-| `bootstrap.py`: `!! IAM не умеет PATCH audiences` | `iam-service` старше скрипта | Обновить установку целиком (сабмодули на ревизиях суперпроекта) |
-| `bootstrap.py`: `!! tenant ядра … ≠ tenant IAM …` | Инсталляция старше единого tenant или Control Plane проигнорировал `tenantId` | Жить с разными id: в `.env` вписывать tenant IAM, который печатает скрипт |
-| После bootstrap ядро продолжает ходить в память статическим ключом | Процессы ядра не пересозданы после появления `secrets/control-plane-iam.env` | `docker compose up -d control-plane-api control-plane-worker context-adapter` |
-| `make smoke` пишет `не запущен` для нужного сервиса | Профиль не поднят или сервис упал | `docker compose --profile "*" ps` |
+| `make secrets`: `openssl: command not found` | openssl is not installed on the host | Install openssl |
+| `bootstrap.py`: `не дождался http://127.0.0.1:18000/health/ready` ("did not wait for …") | The stack is not up, the API is not ready (migrations, database), or `CP_HOST_PORT` was changed without recreating containers | `make smoke`, `docker compose ps`; ports are read from `.env` |
+| `bootstrap.py`: `HTTP 401: {"detail":"unauthorized"}` on IAM requests | `IAM_BOOTSTRAP_TOKEN` in `.env` does not match the value `iam-service` was started with (for example, `.env` was edited without recreating the container) | `docker compose up -d iam-service` or restore the previous value |
+| `bootstrap.py`: `HTTP 409 … already_bootstrapped` | `deploy/state/<env>.json` is lost, but Control Plane is already initialized | Restore the state file from a backup; Control Plane bootstrap runs once |
+| `bootstrap.py`: `нужен PyYAML` / `нужен jsonschema` ("PyYAML required" / "jsonschema required") | uv is not installed, and the system Python lacks the dependencies of the catalog-from-packages step | Install uv (`make bootstrap` pulls them in itself) or `apt install python3-yaml python3-jsonschema` / `pip install pyyaml jsonschema` |
+| `bootstrap.py`: `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` ("references an IAM tenant … that does not exist in IAM (volumes reset?)") | Volumes were reset, but `deploy/state/<env>.json` remains | `make reset-state` and rerun `make bootstrap` |
+| `bootstrap.py`: `!! IAM не умеет PATCH audiences` ("IAM cannot PATCH audiences") | `iam-service` is older than the script | Upgrade the whole installation (submodules at the superproject revisions) |
+| `bootstrap.py`: `!! tenant ядра … ≠ tenant IAM …` ("core tenant … ≠ IAM tenant …") | The installation predates the unified tenant, or Control Plane ignored `tenantId` | Live with different ids: put the IAM tenant that the script prints into `.env` |
+| After bootstrap, the core still calls memory with a static key | The core processes were not recreated after `secrets/control-plane-iam.env` appeared | `docker compose up -d control-plane-api control-plane-worker context-adapter` |
+| `make smoke` prints `не запущен` ("not running") for a required service | The profile is not up, or the service crashed | `docker compose --profile "*" ps` |
 
-## Разное
+## Miscellaneous
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `ssh <алиас>` падает с `bind [127.0.0.1]:… Address already in use` | В алиасе прописан `LocalForward`, порт занят другой сессией; ssh падает целиком | `ssh -o ClearAllForwardings=yes <алиас>`; для git — `GIT_SSH_COMMAND='ssh -o ClearAllForwardings=yes'` |
-| Статические файлы, доставленные rsync с macOS, отдаются `403` | Встроенный в macOS rsync не поддерживает `--chmod`, файлы приезжают с правами `600` | После доставки `chmod -R a+rX <каталог>` на хосте |
-| Диск быстро заполняется | Логи Docker без ротации, кэш сборки, журнал Control Plane | См. [Ресурсы и масштабирование](../operations/capacity.md) |
+| `ssh <alias>` fails with `bind [127.0.0.1]:… Address already in use` | The alias defines a `LocalForward`, and the port is taken by another session; ssh fails entirely | `ssh -o ClearAllForwardings=yes <alias>`; for git, `GIT_SSH_COMMAND='ssh -o ClearAllForwardings=yes'` |
+| Static files delivered by rsync from macOS are served with `403` | The rsync bundled with macOS does not support `--chmod`, so files arrive with mode `600` | After delivery, run `chmod -R a+rX <directory>` on the host |
+| The disk fills up quickly | Docker logs without rotation, build cache, the Control Plane event log | See [Resources and scaling](../operations/capacity.md) |
 
-## См. также
+## See also
 
-- [Промышленное развёртывание](../operations/deployment.md)
-- [Обновление и миграции](../operations/upgrades.md)
-- [Установка и первый запуск](../getting-started/quickstart.md)
-- [Аутентификация и доступ](auth.md)
+- [Production deployment](../operations/deployment.md)
+- [Upgrades and migrations](../operations/upgrades.md)
+- [Installation and first launch](../getting-started/quickstart.md)
+- [Authentication and access](auth.md)

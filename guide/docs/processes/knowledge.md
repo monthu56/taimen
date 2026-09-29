@@ -1,137 +1,145 @@
-# Процессы и база знаний
 
-Процессы и база знаний платформы работают как одно целое: каждое дело
-попадает в граф знаний со своими данными, связями и исходом, шаги процесса
-спрашивают базу знаний и пишут в неё, исполнитель шага получает контекст
-из неё, регламенты привязаны к элементам процесса, а уроки закрытых дел
-всплывают в похожих делах. Статья для авторов процессов и администраторов
-базы знаний. Обоснование — TAI-ADR-0054 п.9, CP-ADR-0076.
+# Processes and the knowledge base
 
-## Главное правило: память — только через ядро
+Processes and the platform's knowledge base work as one whole: every case
+enters the knowledge graph with its data, relations, and outcome; process
+steps query the knowledge base and write to it; a step's executor receives
+context from it; regulations are bound to process elements; and lessons
+from closed cases surface in similar cases. This article is for process
+authors and knowledge base administrators. Rationale: TAI-ADR-0054 item 9,
+CP-ADR-0076.
 
-Процесс, пакет, коннектор и агент **не обращаются к сервису памяти
-напрямую**. Все чтения и записи идут через Control Plane:
+## The main rule: memory only through the core
 
-- **namespace и scope выбирает ядро** — корень дерева workspace процесса;
-  клиент их не задаёт;
-- **граф хранит проекцию, а не состояние.** Состояние дела живёт в ядре
-  (экземпляр и его журнал). Граф можно целиком восстановить из журнала ядра,
-  и движок не читает граф ни для одного решения, кроме записанного ответа
-  `recall`;
-- **недоступная память не останавливает процессы.** Проекция доставляется
-  асинхронно и не менее одного раза: память не отвечает — процесс идёт
-  дальше, доставка догонит;
-- **в граф идут только объявленные поля.** Данные дела, которые проекция не
-  называет, память не видит. Персональные данные — по правилам памяти.
+A process, package, connector, or agent **does not call the memory service
+directly**. All reads and writes go through Control Plane:
+
+- **the core chooses the namespace and scope**: the root of the process's
+  workspace tree; the client does not set them;
+- **the graph stores a projection, not state.** The state of a case lives
+  in the core (the instance and its log). The graph can be fully rebuilt
+  from the core's log, and the engine does not read the graph for any
+  decision except a recorded `recall` response;
+- **unavailable memory does not stop processes.** The projection is
+  delivered asynchronously and at least once: if memory does not respond,
+  the process moves on, and delivery catches up;
+- **only declared fields go into the graph.** Memory does not see case data
+  that the projection does not name. Personal data follows memory's rules.
 
 ```mermaid
 flowchart LR
-    P[Экземпляр процесса<br/>в ядре] -->|"process.started / data_changed / completed<br/>(вычисленная проекция)"| J[(Журнал ядра)]
-    J --> A[Context Adapter] -->|наблюдения| M[(Граф знаний)]
-    P -->|"recall (вне транзакции)"| Q[Очередь recall] -->|typed-запрос| M
-    Q -->|"ответ — вход журнала"| P
-    P -->|"remember — наблюдение ядра"| J
+    P[Process instance<br/>in the core] -->|"process.started / data_changed / completed<br/>(computed projection)"| J[(Core log)]
+    J --> A[Context Adapter] -->|observations| M[(Knowledge graph)]
+    P -->|"recall (outside the transaction)"| Q[recall queue] -->|typed query| M
+    Q -->|"response is a log input"| P
+    P -->|"remember is a core observation"| J
 ```
 
-Почему так: движок детерминирован. Если бы он читал граф напрямую, replay
-зависел бы от сегодняшнего состояния графа, а синхронная запись в память в
-транзакции движка останавливала бы процессы при её недоступности.
+Why this way: the engine is deterministic. If it read the graph directly,
+replay would depend on the graph's current state, and a synchronous write
+to memory inside the engine transaction would stop processes whenever
+memory was unavailable.
 
-## Проекция дела — `memory`
+## Case projection: `memory`
 
-Процесс объявляет, как дело отражается в графе:
+A process declares how a case is reflected in the graph:
 
 ```yaml
 memory:
   case:
-    kind: case                                   # вид узла дела, по умолчанию case
-    key: "'invoice:' + data.number"              # естественный ключ дела
-    title: "'Счёт ' + data.number + ': ' + data.supplier"
-  facts:                                         # имя факта → значение
+    kind: case                                   # case node kind, case by default
+    key: "'invoice:' + data.number"              # natural key of the case
+    title: "'Invoice ' + data.number + ': ' + data.supplier"
+  facts:                                         # fact name → value
     amount: data.amount
     currency: data.currency
     approval: data.?approval.orValue('')
-  entities:                                      # сущности по естественным ключам
+  entities:                                      # entities by natural keys
     - {kind: legal_entity, key: data.supplierInn, name: data.supplier, rel: supplier}
-  documents: {artifacts: [invoice-review]}       # типы артефактов → документы дела
+  documents: {artifacts: [invoice-review]}       # artifact types → case documents
 ```
 
-| Поле | Что попадает в граф |
+| Field | What goes into the graph |
 |---|---|
-| `case` | узел дела `<kind>:<key>` с заголовком `title` и связью `instance_of` к процессу |
-| `facts` | факты дела: новое значение закрывает прежнее сроком действия — история фактов видна |
-| `entities[]` | узел сущности по естественному ключу (`kind`, `key`, `name`) и связь дела с ней (`rel`, по умолчанию `involves`); `when` — условие, `many: true` — `key` даёт список, по сущности на элемент |
-| `documents.artifacts` | артефакты этих типов на задачах экземпляра становятся документами базы знаний со связью `has_document` от дела |
+| `case` | the case node `<kind>:<key>` with the `title` heading and an `instance_of` relation to the process |
+| `facts` | case facts: a new value closes the previous one with a validity period, so fact history is visible |
+| `entities[]` | an entity node by natural key (`kind`, `key`, `name`) and the case's relation to it (`rel`, `involves` by default); `when` is a condition, `many: true` means `key` yields a list, one entity per element |
+| `documents.artifacts` | artifacts of these types on the instance's tasks become knowledge base documents with a `has_document` relation from the case |
 
-- **Вычисляет ядро.** При событиях `process.started`, `process.data_changed`,
-  `process.completed` движок вычисляет выражения проекции и кладёт
-  результат в поле `memory` события. Доставщику не нужно определение
-  процесса, а в журнал не попадают поля вне проекции.
-- **Идемпотентно.** Узлы и связи адресуются естественными ключами:
-  повторная доставка граф не меняет, а сущность, которой ещё нет, заводится
-  один раз — следующее дело с тем же заказчиком найдёт тот же узел.
-- **Ошибка вычисления проекции процесс не останавливает**: поле проекции
-  остаётся пустым, в журнале — решение `projection_incomplete`.
-- Процесс без `memory` в базу знаний ничего не пишет.
+- **The core computes it.** On the `process.started`,
+  `process.data_changed`, and `process.completed` events, the engine
+  evaluates the projection expressions and puts the result into the event's
+  `memory` field. The deliverer does not need the process definition, and
+  fields outside the projection never reach the log.
+- **Idempotent.** Nodes and relations are addressed by natural keys:
+  repeated delivery does not change the graph, and an entity that does not
+  exist yet is created once, so the next case with the same customer finds
+  the same node.
+- **A projection evaluation error does not stop the process**: the
+  projection field stays empty, and the log gets a `projection_incomplete`
+  decision.
+- A process without `memory` writes nothing to the knowledge base.
 
-## Процесс в графе
+## The process in the graph
 
-Опубликованная версия процесса тоже попадает в граф: узел процесса
-`process:<ключ>`, стадии `process:<ключ>/<id>` со связью `stage_of`, шаги,
-вехи и таблицы решений со связью `step_of`, и связи `regulates` от
-регламентов (`governedBy`) к элементам. Новая версия закрывает связи
-элементов, которых в ней нет.
+A published process version also enters the graph: the process node
+`process:<key>`, stages `process:<key>/<id>` with a `stage_of` relation,
+steps, milestones, and decision tables with a `step_of` relation, and
+`regulates` relations from regulations (`governedBy`) to elements. A new
+version closes the relations of elements it no longer has.
 
-Так вопрос «какие процессы опираются на этот регламент» или «какие дела
-вёл этот процесс» — обход графа.
+So questions such as "which processes rely on this regulation" or "which
+cases did this process handle" become graph traversals.
 
-## Процесс спрашивает — `recall` { #recall }
+## The process asks: `recall` { #recall }
 
 ```yaml
 - id: recall-history
-  displayName: Прошлые дела контрагента и уроки
+  displayName: Counterparty's past cases and lessons
   recall:
     anchors: [{kind: legal_entity, key: data.supplierInn}]
     traverse:
       - {relation: supplier, direction: in, depth: 1, limit: 30}
       - {relation: applies_to, direction: in, depth: 1, limit: 20, from: anchors}
     kinds: [case, lesson]
-    query: "'счета поставщика ' + data.supplier"
+    query: "'supplier invoices ' + data.supplier"
     limit: 50
     timeout: PT2M
     onTimeout: [{id: no-history, set: {history: "[]"}}]
   output: {as: {history: step.result.nodes}}
 ```
 
-| Поле | Что значит |
+| Field | Meaning |
 |---|---|
-| `anchors` | откуда начинать: `{case: true}` — узел дела экземпляра; `{kind, key}` — сущность по естественному ключу (CEL от данных); `via` — взять сущности, которые ссылаются на якорь этой связью |
-| `traverse` | шаги обхода: связь, направление `in`/`out`/`both`, глубина 1–3, лимит; `from: anchors` — от якорей, `previous` — от найденного прошлым шагом |
-| `kinds` | оставить узлы только этих видов |
-| `query` | текст смыслового добора (найденное помечается `inferred: true`) |
-| `limit` | не больше стольких узлов |
-| `timeout`, `onTimeout` | сколько ждать ответа и что делать без него; по умолчанию ждать 10 минут |
+| `anchors` | where to start: `{case: true}` is the instance's case node; `{kind, key}` is an entity by natural key (CEL over data); `via` takes the entities that reference the anchor through this relation |
+| `traverse` | traversal steps: relation, direction `in`/`out`/`both`, depth 1–3, limit; `from: anchors` starts from the anchors, `previous` from what the previous step found |
+| `kinds` | keep only nodes of these kinds |
+| `query` | text for semantic enrichment (results found this way are marked `inferred: true`) |
+| `limit` | at most this many nodes |
+| `timeout`, `onTimeout` | how long to wait for a response and what to do without it; by default, wait 10 minutes |
 
-Ответ — `{nodes, edges, truncated}`: сначала найденное по явным связям,
-затем добор по смыслу с пометкой `inferred`; внутри каждой части — свежее
-первым. Узел — `{kind, key, title, attributes, anchor, inferred, validFrom}`.
+The response is `{nodes, edges, truncated}`: first what was found through
+explicit relations, then semantic enrichment marked `inferred`; within each
+part, the most recent comes first. A node is
+`{kind, key, title, attributes, anchor, inferred, validFrom}`.
 
-**Как это исполняется.** Шаг ставит намерение в очередь в той же
-транзакции, а воркер ядра зовёт память **после** неё. Ответ записывается
-входом журнала экземпляра (с хэшем), и только затем движок делает шаг
-(`process.recall_completed`; сами узлы в событие не копируются). Память
-недоступна — повтор до таймаута шага; отказ по существу — сразу таймаут;
-ответ, пришедший после таймаута, записывается как опоздавший и не
-читается.
+**How it is executed.** The step queues an intent in the same transaction,
+and a core worker calls memory **after** it. The response is recorded as an
+input of the instance log (with a hash), and only then does the engine take
+the step (`process.recall_completed`; the nodes themselves are not copied
+into the event). If memory is unavailable, it retries until the step
+timeout; a substantive refusal leads to an immediate timeout; a response
+that arrives after the timeout is recorded as late and is not read.
 
-Поэтому:
+Therefore:
 
-- **replay** берёт ответ из журнала и память не зовёт вовсе: экземпляр с
-  `recall` при недоступной памяти даёт ноль расхождений;
-- **тест пакета** берёт ответ из заглушки `mocks.recall`
-  (см. [Тесты пакета](package-tests.md#mocks));
-- **таблица решений** видит знание только через данные: сначала `recall` с
-  `output.as`, затем `decide`.
+- **replay** takes the response from the log and does not call memory at
+  all: an instance with `recall` produces zero discrepancies when memory is
+  unavailable;
+- **a package test** takes the response from the `mocks.recall` stub
+  (see [Package tests](package-tests.md#mocks));
+- **a decision table** sees knowledge only through data: first `recall`
+  with `output.as`, then `decide`.
 
 ```yaml
 decisions:
@@ -147,7 +155,7 @@ decisions:
         then: {level: none}
 ```
 
-## Процесс помнит — `remember` { #remember }
+## The process remembers: `remember` { #remember }
 
 ```yaml
 - id: remember-payment
@@ -161,23 +169,23 @@ decisions:
       kind: legal_entity
       key: data.winner.inn
       name: data.winner.name
-      text: "'Победитель по цене ' + string(data.winner.price)"
+      text: "'Winner on price ' + string(data.winner.price)"
       links: [{rel: won, kind: case, key: "'purchase:' + data.number"}]
 ```
 
-- `facts` — факты дела; `entity` — узел сущности со связями `links`.
-- Запись — **наблюдение ядра** от личности процесса (вид
-  `process.remembered`) в workspace процесса. Оно попадает в память обычной
-  доставкой, поэтому `remember` не требует доступной памяти. Повтор шага
-  второго наблюдения не пишет.
-- Личности процесса нужно право `observations.write`. Отказ команды
-  записывается в журнал как невыполненное намерение и процесс не
-  останавливает.
+- `facts` are case facts; `entity` is an entity node with `links` relations.
+- The write is a **core observation** from the process identity (kind
+  `process.remembered`) in the process's workspace. It reaches memory through
+  regular delivery, so `remember` does not require memory to be available. A
+  repeated step does not write a second observation.
+- The process identity needs the `observations.write` permission. A refused
+  command is recorded in the log as an unfulfilled intent and does not stop
+  the process.
 
-## Контекст шага { #step-context }
+## Step context { #step-context }
 
-У шагов `human`, `approve` и `call` есть `context` — какой контекст из базы
-знаний получит исполнитель задачи:
+`human`, `approve`, and `call` steps have `context`: which context from the
+knowledge base the task's executor receives:
 
 ```yaml
 human:
@@ -194,21 +202,21 @@ human:
     budgetTokens: 6000
 ```
 
-- Якоря вычисляются при создании задачи и записываются в задачу как профиль
-  контекста — он заменяет профиль её типа.
-- Пакет контекста собирается при claim тем же механизмом, что у любой
-  задачи (см. [Контекст задачи и память](../control-plane/context.md)):
-  **сначала явные связи дела**, затем — если `semantic` не `false` — добор по
-  смыслу с пометкой «найдено по сходству» (`evidence: inferred`). Бюджет
-  режет добор первым.
-- Агентский шаг — задача на агента, поэтому исполнитель-агент получает тот
-  же раздел «Контекст задачи».
+- The anchors are evaluated when the task is created and are written into
+  the task as a context profile, which replaces the profile of its type.
+- The context package is assembled at claim time by the same mechanism as
+  for any task (see [Task context and memory](../control-plane/context.md)):
+  **the case's explicit relations first**, then, unless `semantic` is
+  `false`, semantic enrichment marked "found by similarity"
+  (`evidence: inferred`). The budget cuts the enrichment first.
+- An agent step is a task for an agent, so an agent executor receives the
+  same "Task context" section.
 
-## Регламенты — `governedBy` { #regulations }
+## Regulations: `governedBy` { #regulations }
 
-Процесс, стадия, шаг, таблица решений и её строка могут ссылаться на
-регламенты базы знаний — по естественному ключу документа и, при
-необходимости, пункту:
+A process, stage, step, decision table, and a table row can reference
+knowledge base regulations, by the document's natural key and, if needed, a
+section:
 
 ```yaml
 governedBy: [{document: "regulation:purchasing"}]
@@ -220,38 +228,42 @@ decisions:
     governedBy: [{document: "regulation:purchasing", section: "4.2"}]
 ```
 
-- **Проверка пакета** в ядре разрешает ссылки через память: документа нет —
-  предупреждение `governed_by_unknown_document`; память не настроена или не
-  ответила — одно предупреждение `governed_by_unchecked`. Публикации это не
-  мешает.
-- **План применения** считает покрытие регламента: какие разделы документа
-  исполняют какие элементы процесса и какие разделы **не покрыты**
-  (`regulationCoverage`). Разделы документа — узлы вида `regulation_section`
-  онтологии процессов, связанные с документом связью `section_of` (ключ пункта
-  — `<документ>#<пункт>`, имя — `attributes.section`); раздел, которого у
-  документа нет, — предупреждение `governed_by_unknown_section`. Если документ
-  загружен без пунктов, покрытие пусто.
-- **Поиск процессов по регламенту**:
-  `GET /api/v1/process-definitions?governedBy=<ключ документа>` — процессы,
-  чья последняя версия ссылается на документ, с workspace и владельцем.
+- **The package check** in the core resolves references through memory: if
+  the document does not exist, you get a `governed_by_unknown_document`
+  warning; if memory is not configured or did not respond, a single
+  `governed_by_unchecked` warning. This does not block publication.
+- **The apply plan** computes regulation coverage: which sections of the
+  document are carried out by which process elements and which sections are
+  **not covered** (`regulationCoverage`). Document sections are nodes of kind
+  `regulation_section` of the process ontology, linked to the document by a
+  `section_of` relation (the section key is `<document>#<section>`, the name
+  is `attributes.section`); a section the document does not have produces a
+  `governed_by_unknown_section` warning. If the document was loaded without
+  sections, the coverage is empty.
+- **Finding processes by regulation**:
+  `GET /api/v1/process-definitions?governedBy=<document key>` returns the
+  processes whose latest version references the document, with workspace and
+  owner.
 
-### Регламент изменился — сверка { #regulation-drift }
+### The regulation changed: reconciliation { #regulation-drift }
 
-Когда документ базы знаний меняется, ядро узнаёт об этом при сверке снимка
-знаний и пишет событие **`knowledge.changed`** со списком изменённых ключей
-(`changes: [{kind, key, change: opened | changed | closed}]`). Пустая сверка и
-повтор того же снимка события не дают.
+When a knowledge base document changes, the core learns about it during
+knowledge snapshot reconciliation and writes a **`knowledge.changed`** event
+with the list of changed keys
+(`changes: [{kind, key, change: opened | changed | closed}]`). An empty
+reconciliation or a repeat of the same snapshot produces no event.
 
-Событие `knowledge.changed` — триггер для [правила вывода
-работы](../control-plane/work-rules.md): правило передаёт изменённые ключи
-скиллу сверки, скилл находит процессы, чья версия ссылается на документ
-(`GET /process-definitions?governedBy=…`), и сравнивает пункты регламента с
-элементами процесса, а правило заводит владельцу процесса задачу на каждое
-расхождение. Такое правило и скилл сверки поставляются доменным пакетом и в
-поставку не входят. **Решение о правке процесса принимает человек**: процесс
-сам не меняется.
+The `knowledge.changed` event is a trigger for a
+[work rule](../control-plane/work-rules.md): the rule passes the changed
+keys to a reconciliation skill, the skill finds the processes whose version
+references the document (`GET /process-definitions?governedBy=…`) and
+compares the regulation's sections with the process elements, and the rule
+creates a task for the process owner for each discrepancy. Such a rule and
+reconciliation skill are shipped by a domain package and are not part of
+the delivery. **A person decides whether to change the process**: the
+process does not change itself.
 
-## Уроки закрытых дел — `retrospective` { #lessons }
+## Lessons from closed cases: `retrospective` { #lessons }
 
 ```yaml
 retrospective:
@@ -261,69 +273,70 @@ retrospective:
   when: data.approval == 'approved'
 ```
 
-1. После `process.completed` движок вызывает скилл разбора (по умолчанию
-   `process.retrospective@1`) с журналом решений, данными, исходом и
-   сущностями проекции дела.
-2. Скилл предлагает уроки `{key, text, appliesTo, evidence}` со ссылками на
-   записи журнала.
-3. Человеку приходит задача `taskType` (например, `lessons-review`): по
-   каждому уроку — подтвердить, поправить или отклонить.
-4. Подтверждённые и поправленные уроки процесс пишет узлами `lesson` со
-   связями `learned_from` (дело) и `applies_to` (сущности). **Отклонённый и
-   нерешённый урок в граф не попадает.**
-5. Урок находится в похожих делах: `recall` или контекст шага следующего дела
-   с якорем на ту же сущность и обходом `applies_to` внутрь. Свежий урок —
-   первым.
+1. After `process.completed`, the engine calls a review skill
+   (`process.retrospective@1` by default) with the decision log, the data,
+   the outcome, and the entities of the case projection.
+2. The skill proposes lessons `{key, text, appliesTo, evidence}` with
+   references to log entries.
+3. A person receives a `taskType` task (for example, `lessons-review`): for
+   each lesson, confirm, correct, or reject it.
+4. The process writes confirmed and corrected lessons as `lesson` nodes with
+   `learned_from` (case) and `applies_to` (entities) relations. **A rejected
+   or undecided lesson does not enter the graph.**
+5. A lesson is found in similar cases: through `recall` or the step context
+   of the next case anchored on the same entity with an inward `applies_to`
+   traversal. The most recent lesson comes first.
 
-`appliesTo` процесса — виды сущностей, к которым привязываются уроки.
-Процесс без ключа дела (`memory.case`) разбор не заводит.
+The process's `appliesTo` lists the entity kinds that lessons are attached
+to. A process without a case key (`memory.case`) does not create a review.
 
-## Онтология процессов
+## The process ontology
 
-Виды и связи памяти для процессов нейтральны к предметной области и
-приходят **пакетом онтологии** процессов, зарегистрированным в памяти через
-ядро:
+Memory kinds and relations for processes are domain-neutral and arrive as
+the processes **ontology package**, registered in memory through the core:
 
-| Вид | Ключ | Что это |
+| Kind | Key | What it is |
 |---|---|---|
-| `process` | `process:<ключ>` | опубликованный процесс |
-| `process_stage` | `process:<процесс>/<id>` | стадия |
-| `process_step` | `process:<процесс>/<id>` | шаг, веха или таблица решений |
-| `case` | `memory.case.key` | дело — экземпляр процесса |
-| `lesson` | `lesson:<дело>/<id>` | подтверждённый урок |
-| `regulation` | ключ документа | регламент |
+| `process` | `process:<key>` | a published process |
+| `process_stage` | `process:<process>/<id>` | a stage |
+| `process_step` | `process:<process>/<id>` | a step, milestone, or decision table |
+| `case` | `memory.case.key` | a case, a process instance |
+| `lesson` | `lesson:<case>/<id>` | a confirmed lesson |
+| `regulation` | document key | a regulation |
 
-Связи: `instance_of` (дело → процесс), `stage_of`, `step_of`, `regulates`
-(регламент → элемент), `involves` (дело → сущность по умолчанию),
-`learned_from` (урок → дело), `applies_to` (урок → сущность), `has_document`.
+Relations: `instance_of` (case → process), `stage_of`, `step_of`,
+`regulates` (regulation → element), `involves` (case → entity, by default),
+`learned_from` (lesson → case), `applies_to` (lesson → entity),
+`has_document`.
 
-Доменные виды — закупка, заказчик, счёт — приходят пакетами предметных
-областей. Ядро имён видов не знает и не проверяет: они приходят проекцией,
-шагами и пакетами онтологии.
+Domain kinds (a purchase, a customer, an invoice) arrive with domain
+packages. The core does not know or check kind names: they arrive through
+the projection, steps, and ontology packages.
 
-**Регистрация и включение** пакетов онтологии — только через ядро,
-администратором платформы. Включение заменяет набор пакетов namespace
-целиком — перечисляйте все нужные.
+**Registration and enabling** of ontology packages happen only through the
+core, by a platform administrator. Enabling replaces the namespace's whole
+set of packages, so list all the ones you need.
 
-!!! note "Скиллы сверки и разбора"
-    `process.regulation_check@1` и `process.retrospective@1` исполняет хостинг
-    local-скиллов инсталляции с правом `processes.read`, чтением памяти
-    workspace и LLM инсталляции (см. [skill-sdk](../sdk/skill-sdk.md)).
+!!! note "Reconciliation and review skills"
+    `process.regulation_check@1` and `process.retrospective@1` are executed
+    by the installation's local skill hosting with the `processes.read`
+    permission, read access to the workspace's memory, and the
+    installation's LLM (see [skill-sdk](../sdk/skill-sdk.md)).
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| дела нет в графе | у процесса нет `memory`, или доставка ещё не догнала | объявить проекцию; проверить Context Adapter |
-| `recall` всегда уходит в `onTimeout` | у личности процесса нет права `events.read` или ключа; память отказывает | выдать права личности; проверить память |
-| урок не всплывает в следующем деле | урок не подтверждён или у следующего дела другой якорь | подтвердить урок; якорь `recall` — та же сущность, обход `applies_to` внутрь |
-| `governed_by_unknown_document` | документа с этим ключом нет в базе знаний дерева workspace | загрузить регламент с тем же естественным ключом |
-| покрытие регламента пусто | память недоступна или у документа нет разделов `section_of` | проверить память; загрузить документ с разделами |
+| the case is not in the graph | the process has no `memory`, or delivery has not caught up yet | declare the projection; check the Context Adapter |
+| `recall` always ends in `onTimeout` | the process identity lacks the `events.read` permission or a key; memory refuses | grant permissions to the identity; check memory |
+| a lesson does not surface in the next case | the lesson is not confirmed, or the next case has a different anchor | confirm the lesson; the `recall` anchor must be the same entity, with an inward `applies_to` traversal |
+| `governed_by_unknown_document` | there is no document with this key in the knowledge base of the workspace tree | load the regulation with the same natural key |
+| regulation coverage is empty | memory is unavailable, or the document has no `section_of` sections | check memory; load the document with sections |
 
-## См. также
+## See also
 
-- [Процессы](index.md)
-- [Контекст задачи и память](../control-plane/context.md)
-- [Модель знаний](../memory/knowledge-model.md)
-- [Загрузка знаний](../memory/ingestion.md)
-- [Правила вывода работы](../control-plane/work-rules.md)
+- [Processes](index.md)
+- [Task context and memory](../control-plane/context.md)
+- [Knowledge model](../memory/knowledge-model.md)
+- [Knowledge ingestion](../memory/ingestion.md)
+- [Work rules](../control-plane/work-rules.md)

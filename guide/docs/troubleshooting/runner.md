@@ -1,140 +1,141 @@
-# Исполнение и runner
 
-Отказы автономного исполнителя (`control-plane-agent`) и прогонов задач:
-исполнитель не берёт работу, прогон падает, ветка не публикуется, машина
-упирается в память. Статья для инженера, сопровождающего runner-хост, и
-оператора, который разбирает упавшие runs.
+# Execution and runner
 
-## Как быстро понять, что происходит
+Failures of the autonomous executor (`control-plane-agent`) and of task runs:
+the executor does not pick up work, a run fails, a branch is not published, the
+machine runs out of memory. This article is for engineers who maintain the
+runner host and for operators who investigate failed runs.
+
+## How to see quickly what is going on
 
 ```bash
-# контейнерный вариант
-docker compose -f <compose-файл исполнителя> ps
-docker compose -f <compose-файл исполнителя> logs --since 30m runner
+# container variant
+docker compose -f <executor compose file> ps
+docker compose -f <executor compose file> logs --since 30m runner
 
-# systemd-вариант
-systemctl status <юнит>
-journalctl -u <юнит> -n 100      # или файл журнала из StandardOutput юнита
+# systemd variant
+systemctl status <unit>
+journalctl -u <unit> -n 100      # or the log file from the unit's StandardOutput
 ```
 
-Ищите в логе:
+Look for the following in the log:
 
-- ошибки credential (`iam_*`, `has no credentials`) — исполнитель не может
-  даже открыть сессию;
-- `failure_reason` при `fail_run` — почему закрыт конкретный run;
+- credential errors (`iam_*`, `has no credentials`): the executor cannot even
+  open a session;
+- `failure_reason` on `fail_run`: why a specific run was closed;
 - `no task_types.read`, `workspace busy`, `lease lost`, `no changes`.
 
-Упавший run виден и в Control Plane: `failure_reason` в карточке run, трасса
-прогона — артефакт `transcript` и actions `tool.<имя>` (см.
-[Трасса прогонов](../runner/trace.md)).
+A failed run is also visible in Control Plane: `failure_reason` on the run
+card, and the run trace, which is the `transcript` artifact plus `tool.<name>`
+actions (see [Run trace](../runner/trace.md)).
 
-## Причины завершения run (`failure_reason`)
+## Run termination reasons (`failure_reason`)
 
-| `failure_reason` | Что случилось | Что делать |
+| `failure_reason` | What happened | What to do |
 |---|---|---|
-| `restart_recovery` | Демон перезапустился посреди прогона (выкладка, OOM, рестарт машины). При старте он нашёл свой осиротевший run и закрыл его; задача вернулась в очередь | Ничего, если единичный случай. Если повторяется на одной задаче — смотреть OOM (ниже) |
-| `workspace_busy` | Рабочая копия задачи занята другим процессом (замок в каталоге рабочих копий) | Проверить, не запущены ли два демона с одним `CONTROL_PLANE_AGENT_WORKTREE_ROOT` |
-| `lease_lost` | Аренда claim истекла во время работы адаптера (heartbeat не прошёл); демон прекратил запись, чтобы не получить отказ fencing | Проверить сеть до платформы, доступность API; при частых случаях — длинные паузы процесса (swap, CPU-квота) |
-| `ownership_lost` | Claim перехвачен или освобождён, пока демон работал | Разобраться, кто ещё взял задачу; убедиться, что у исполнителей разные principals |
+| `restart_recovery` | The daemon restarted in the middle of a run (deployment, OOM, machine reboot). On startup it found its orphaned run and closed it; the task returned to the queue | Nothing, if it is a one-off. If it repeats on the same task, check for OOM (below) |
+| `workspace_busy` | The task's working copy is held by another process (a lock in the working copy directory) | Check whether two daemons run with the same `CONTROL_PLANE_AGENT_WORKTREE_ROOT` |
+| `lease_lost` | The claim lease expired while the adapter was working (a heartbeat failed); the daemon stopped writing to avoid a fencing rejection | Check the network path to the platform and API availability; if frequent, look for long process stalls (swap, CPU quota) |
+| `ownership_lost` | The claim was taken over or released while the daemon was working | Find out who else claimed the task; make sure the executors have different principals |
 
-### Ошибки вызова скиллов
+### Skill invocation errors
 
-Если задача исполняется скиллом (HTTP-вызов по контракту), отказ приходит с
-кодом скилла:
+If a task is executed by a skill (an HTTP call under a contract), the failure
+comes with a skill code:
 
-| Код | Причина | Решение |
+| Code | Cause | Fix |
 |---|---|---|
-| `insecure_endpoint` | Контракт скилла требует токен, а endpoint не `https://` | Исправить endpoint скилла; токены отправляются только по https |
-| `audience_not_allowed` | Исполнитель не выдаёт токены для audience скилла | Добавить audience в `CONTROL_PLANE_SKILLS_ALLOWED_AUDIENCES` исполнителя |
-| `executor_auth_unavailable` | Исполнитель не смог получить токен для audience (нет IAM identity или обмен отказал). Повторяемая ошибка: скилл может выполнить другой исполнитель | Проверить PAT исполнителя и наличие audience в его потолке |
+| `insecure_endpoint` | The skill contract requires a token, but the endpoint is not `https://` | Fix the skill endpoint; tokens are sent over https only |
+| `audience_not_allowed` | The executor does not issue tokens for the skill's audience | Add the audience to the executor's `CONTROL_PLANE_SKILLS_ALLOWED_AUDIENCES` |
+| `executor_auth_unavailable` | The executor could not obtain a token for the audience (no IAM identity, or the exchange was rejected). The error is retryable: another executor can run the skill | Check the executor's PAT and whether the audience is within its ceiling |
 
-## Исполнитель не берёт задачи
+## The executor does not claim tasks
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| В логе ошибки `iam_*` или `has no credentials` | Нет PAT, неверные права файла, несколько credentials без `IAM_PRINCIPAL` | См. [Аутентификация и доступ](auth.md) |
-| Задача в очереди, но исполнитель её не видит | `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1`, а задача не назначена на его principal | Назначить задачу на CP principal исполнителя (`assigneeId`) |
-| Не видит задачи нужного workspace | `CONTROL_PLANE_AGENT_WORKSPACE` указывает на другой workspace | Исправить переменную. Не путать с `CONTROL_PLANE_AGENT_WORKTREE_ROOT` — это каталог рабочих копий |
-| В логе `no task_types.read: leaving … alone` | У binding исполнителя нет права `task_types.read`. Без него демон не может понять, кодовая это задача или скилл, и fail-closed пропускает типизированную работу | Добавить `task_types.read` в права binding (bootstrap включает его в права агентов по умолчанию) |
-| Задача взята, но ничего не происходит | Идёт длинный ход кодового агента; ход ограничен `CONTROL_PLANE_CLAUDE_TIMEOUT` (по умолчанию 3600 с) | Проверить, жив ли процесс агента; трасса run показывает вызовы инструментов вживую |
+| The log shows `iam_*` or `has no credentials` errors | No PAT, wrong file permissions, several credentials without `IAM_PRINCIPAL` | See [Authentication and access](auth.md) |
+| A task is in the queue, but the executor does not see it | `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1`, and the task is not assigned to its principal | Assign the task to the executor's CP principal (`assigneeId`) |
+| It does not see tasks of the required workspace | `CONTROL_PLANE_AGENT_WORKSPACE` points to another workspace | Fix the variable. Do not confuse it with `CONTROL_PLANE_AGENT_WORKTREE_ROOT`, which is the working copy directory |
+| The log shows `no task_types.read: leaving … alone` | The executor's binding lacks the `task_types.read` permission. Without it, the daemon cannot tell whether a task is a code task or a skill, and it fails closed by skipping typed work | Add `task_types.read` to the binding permissions (bootstrap includes it in the default agent permissions) |
+| The task is claimed, but nothing happens | A long turn of the coding agent is in progress; a turn is limited by `CONTROL_PLANE_CLAUDE_TIMEOUT` (3600 s by default) | Check whether the agent process is alive; the run trace shows tool calls live |
 
-!!! danger "Исполнитель берёт чужие задачи"
-    Без `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` и `CONTROL_PLANE_AGENT_WORKSPACE`
-    демон берёт **первую доступную задачу по приоритету** из всех, что ему
-    видны, — включая эпики и задачи других репозиториев. Для проверок
-    заведите отдельный workspace-песочницу.
+!!! danger "The executor claims other people's tasks"
+    Without `CONTROL_PLANE_AGENT_ONLY_ASSIGNED=1` and `CONTROL_PLANE_AGENT_WORKSPACE`,
+    the daemon claims the **first available task by priority** among all tasks
+    it can see, including epics and tasks of other repositories. For testing,
+    create a separate sandbox workspace.
 
-## Кодовый агент
+## Coding agent
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| В отчёте агента: каждый вызов инструмента требует подтверждения, работа идёт вслепую | Режим разрешений по умолчанию (`acceptEdits`) не разрешает команды без человека | `CONTROL_PLANE_CLAUDE_PERMISSION_MODE=bypassPermissions` — **только** внутри изолированного периметра (контейнер без секретов платформы или непривилегированный пользователь с `ProtectSystem=strict`) |
-| Claude Code не авторизован на runner-хосте | На сервере нет браузера для входа | Выпустить токен `claude setup-token` на машине с браузером и передать в `CLAUDE_CODE_OAUTH_TOKEN` (файл-секрет или env-файл `0600`) |
-| Агент стабильно проваливает задачи после отзыва подписки | Токен подписки отозван, демон продолжает брать задачи | Остановить исполнителя до замены токена |
-| Агент пишет код против выдуманного API соседнего сервиса, тесты зелёные на собственных моках | Агент не видит кода соседа, контракт восстанавливает по догадке | Добавить соседний репозиторий в `CONTROL_PLANE_AGENT_NEIGHBOURS` (читать код, а не угадывать); в постановке задачи явно указывать источник схем и требовать contract-тестов |
-| Тесты, которым нужен Docker, не запускаются в контейнерном исполнителе | Docker-сокет в контейнер намеренно не пробрасывается | Интеграционные тесты — в CI; для unit-тестов с БД исполнителю даны тестовые базы (`db-test`, `memory-db-test`) |
+| The agent's report says every tool call requires approval, and it works blind | The default permission mode (`acceptEdits`) does not allow commands without a human | `CONTROL_PLANE_CLAUDE_PERMISSION_MODE=bypassPermissions`, **only** inside an isolated perimeter (a container without platform secrets, or an unprivileged user with `ProtectSystem=strict`) |
+| Claude Code is not authenticated on the runner host | The server has no browser for sign-in | Issue a token with `claude setup-token` on a machine with a browser and pass it in `CLAUDE_CODE_OAUTH_TOKEN` (a secret file or an env file with mode `0600`) |
+| The agent consistently fails tasks after the subscription was revoked | The subscription token is revoked, but the daemon keeps claiming tasks | Stop the executor until the token is replaced |
+| The agent writes code against an invented API of a neighbouring service, and tests pass on its own mocks | The agent cannot see the neighbour's code and reconstructs the contract by guessing | Add the neighbouring repository to `CONTROL_PLANE_AGENT_NEIGHBOURS` (read the code instead of guessing); in the task statement, name the source of the schemas explicitly and require contract tests |
+| Tests that need Docker do not run in the container executor | The Docker socket is intentionally not passed into the container | Run integration tests in CI; for unit tests with a database, the executor has test databases (`db-test`, `memory-db-test`) |
 
-## Рабочие копии
+## Working copies
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Сборка рабочей копии падает: не найден `../platform-auth-sdk` | Не заданы соседи: path-зависимость ждёт SDK соседней папкой | Задать `CONTROL_PLANE_AGENT_NEIGHBOURS=platform-auth-sdk=<runner-root>/platform-auth-sdk.git` и `CONTROL_PLANE_AGENT_SUPERPROJECT` |
-| `git worktree add` падает с `invalid reference` | Суперпроект закрепил ревизию соседа, которой ещё нет в его зеркале | Демон сам делает `fetch` зеркала соседа перед созданием копии (best-effort). Если forge был недоступен — `git -C <зеркало> fetch origin '+refs/heads/*:refs/heads/*'` от пользователя исполнителя |
-| Агент чинит код, которого в `main` уже нет | Bare-зеркало репозитория задач давно не обновлялось | Обновить зеркало (entrypoint контейнера делает это при старте; в systemd-варианте — вручную или по таймеру) |
-| Каталог рабочих копий растёт | Копии хранятся для повторных попыток | `CONTROL_PLANE_AGENT_MAX_WORKSPACES` (по умолчанию 8) |
+| Building the working copy fails: `../platform-auth-sdk` not found | Neighbours are not configured: the path dependency expects the SDK in a sibling directory | Set `CONTROL_PLANE_AGENT_NEIGHBOURS=platform-auth-sdk=<runner-root>/platform-auth-sdk.git` and `CONTROL_PLANE_AGENT_SUPERPROJECT` |
+| `git worktree add` fails with `invalid reference` | The superproject pins a neighbour revision that is not yet in the neighbour's mirror | The daemon itself runs `fetch` on the neighbour's mirror before creating the copy (best-effort). If the forge was unavailable, run `git -C <mirror> fetch origin '+refs/heads/*:refs/heads/*'` as the executor user |
+| The agent fixes code that no longer exists in `main` | The bare mirror of the task repository has not been updated for a long time | Update the mirror (the container entrypoint does this on startup; in the systemd variant, do it manually or with a timer) |
+| The working copy directory keeps growing | Copies are kept for retries | `CONTROL_PLANE_AGENT_MAX_WORKSPACES` (8 by default) |
 
-## Публикация веток
+## Branch publishing
 
-Ветку `task/<publicId>` публикует демон, а не агент: claim и fencing token
-держит он. Push никогда не форсируется и никогда не трогает базовую ветку;
-неудача публикации не валит run.
+The `task/<publicId>` branch is published by the daemon, not by the agent: the
+daemon holds the claim and the fencing token. A push is never forced and never
+touches the base branch; a publishing failure does not fail the run.
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Run успешен, в артефакте `commit` поле `published: false` | Push не удался; причина — только в логе исполнителя | Смотреть лог исполнителя вокруг завершения run |
-| В логе: `could not read Username for 'https://…'` | Процессу не задан `HOME`, git не нашёл `~/.gitconfig` с credential helper. systemd не выставляет `HOME` даже сервисам от root. Выглядит как проблема прав в forge, но до forge запрос не дошёл | `Environment=HOME=/home/<пользователь>` в юните (drop-in); в контейнере `HOME` задан образом |
-| Push отклонён forge (`403`, `denied`) | Токен forge без права записи в репозиторий задач или отозван | Выпустить токен с `Contents: write` на репозиторий задач |
-| Push отклонён как non-fast-forward | Ветка в forge разошлась с локальной (её правил человек) | Разобрать вручную: демон намеренно не перезаписывает историю |
-| В логе `no changes in …; nothing to commit`, ветки нет | Агент не изменил файлы рабочей копии | Проверить постановку задачи и трассу run. Если агент закоммитил сам, демон всё равно публикует ветку |
-| Задача на код сразу `done`, ревью не запрошено | Нет опубликованного коммита: критерии `review` и `merge` пропущены (`skipped`) | Починить публикацию ветки; проверить артефакт `commit` (`published`) |
-| Прогон `failed: executor_blocked`, задача в `blocked` | Исполнитель сообщил, что не может сделать работу (checkpoint `blocked`) | Причина — в комментарии задачи; устранить и вернуть задачу в работу |
+| The run succeeded, but the `commit` artifact has `published: false` | The push failed; the cause is only in the executor log | Check the executor log around run completion |
+| The log shows `could not read Username for 'https://…'` | `HOME` is not set for the process, so git did not find `~/.gitconfig` with the credential helper. systemd does not set `HOME` even for services running as root. It looks like a permissions problem in the forge, but the request never reached the forge | `Environment=HOME=/home/<user>` in the unit (drop-in); in a container, the image sets `HOME` |
+| The forge rejects the push (`403`, `denied`) | The forge token has no write access to the task repository, or it is revoked | Issue a token with `Contents: write` on the task repository |
+| The push is rejected as non-fast-forward | The branch in the forge has diverged from the local one (a human edited it) | Resolve it manually: the daemon intentionally does not rewrite history |
+| The log shows `no changes in …; nothing to commit`, and there is no branch | The agent did not change any files in the working copy | Check the task statement and the run trace. If the agent committed on its own, the daemon still publishes the branch |
+| A code task goes straight to `done`, and no review is requested | There is no published commit: the `review` and `merge` criteria are skipped (`skipped`) | Fix branch publishing; check the `commit` artifact (`published`) |
+| The run is `failed: executor_blocked`, and the task is `blocked` | The executor reported that it cannot do the work (a `blocked` checkpoint) | The reason is in the task comment; resolve it and return the task to work |
 
-## Установка и обновление (systemd-вариант)
+## Installation and upgrade (systemd variant)
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| После `uv tool install --reinstall` исполнитель работает на старом коде | Установка выполнена от root и ушла в `/root/.local/share/uv/tools`, мимо каталога, из которого запускается сервис | Устанавливать от пользователя исполнителя с его `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR`, см. [Обновление и миграции](../operations/upgrades.md) |
-| `uv tool install` от пользователя исполнителя падает с `Permission denied` | В каталогах исходников или инструментов появились файлы root (после `git pull` или запуска python от root) | `chown -R <пользователь>:<группа> <runner-root>/src <runner-root>/tools`; дальше все операции — от пользователя исполнителя |
-| Юнит не находит `uv` или другие утилиты | `PATH` юнита не содержит `~/.local/bin` пользователя | Добавить каталог в `Environment=PATH=…` через drop-in |
-| Демон не видит переменные со значением из нескольких слов при ручном запуске | При `source` env-файла в shell значение без кавычек обрезается | Кавычки вокруг значений с пробелами |
+| After `uv tool install --reinstall`, the executor runs old code | The installation ran as root and went into `/root/.local/share/uv/tools`, bypassing the directory the service runs from | Install as the executor user with its `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR`, see [Upgrades and migrations](../operations/upgrades.md) |
+| `uv tool install` as the executor user fails with `Permission denied` | Root-owned files appeared in the source or tool directories (after `git pull` or running python as root) | `chown -R <user>:<group> <runner-root>/src <runner-root>/tools`; from then on, do everything as the executor user |
+| The unit cannot find `uv` or other utilities | The unit's `PATH` does not include the user's `~/.local/bin` | Add the directory to `Environment=PATH=…` via a drop-in |
+| When started manually, the daemon does not see variables whose values have several words | When a shell `source`s the env file, an unquoted value is truncated | Quote values that contain spaces |
 
-## Память и CPU
+## Memory and CPU
 
-| Симптом | Причина | Решение |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Runs закрываются `restart_recovery`, в `dmesg` / `journalctl -k` — `Out of memory: Killed process` | Процесс агента упёрся в `MemoryMax` (systemd) или `mem_limit` (контейнер) | Если повторяется на одной задаче — она слишком тяжела для машины: выполнять на машине крупнее |
-| OOM случается, когда работают два исполнителя одновременно | Сумма потолков памяти исполнителей больше физической памяти | Привести сумму `MemoryMax`/`mem_limit` к объёму RAM за вычетом ОС; см. [Ресурсы и масштабирование](../operations/capacity.md) |
-| Соседние сервисы на машине тормозят во время прогонов | Нет ограничения CPU/IO | `CPUQuota`, `IOWeight` в юните; `cpus` в compose |
+| Runs are closed with `restart_recovery`, and `dmesg` / `journalctl -k` shows `Out of memory: Killed process` | The agent process hit `MemoryMax` (systemd) or `mem_limit` (container) | If it repeats on the same task, the task is too heavy for the machine: run it on a larger machine |
+| OOM happens when two executors run at the same time | The sum of the executors' memory limits exceeds physical memory | Bring the sum of `MemoryMax`/`mem_limit` within RAM minus the OS; see [Resources and scaling](../operations/capacity.md) |
+| Other services on the machine slow down during runs | No CPU/IO limits | `CPUQuota`, `IOWeight` in the unit; `cpus` in compose |
 
-## Экстренные действия
+## Emergency actions
 
 ```bash
-# Остановить исполнителя (безопасно в любой момент)
-docker compose -f <compose-файл исполнителя> stop runner
-systemctl stop <юнит>
+# Stop the executor (safe at any time)
+docker compose -f <executor compose file> stop runner
+systemctl stop <unit>
 
-# Отобрать доступ: отозвать binding и PAT исполнителя
+# Revoke access: revoke the executor's binding and PAT
 #   POST /api/v1/iam-bindings/<binding-id>:revoke
 #   POST /api/v1/tenants/<t>/platform-access-tokens/<id>:revoke
 ```
 
-После отзыва PAT исполнитель не получает новых access token; уже выданный
-живёт до 300 с — отзыв binding закрывает вход в Control Plane сразу.
-Локальный principal и история работы сохраняются. Потеря runner-хоста —
-см. [Аварийные процедуры](../operations/emergency.md).
+After the PAT is revoked, the executor gets no new access tokens; one already
+issued lives for up to 300 s. Revoking the binding closes access to Control
+Plane immediately. The local principal and the work history are preserved. For
+loss of the runner host, see [Emergency procedures](../operations/emergency.md).
 
-## См. также
+## See also
 
-- [Конфигурация runner](../runner/configuration.md)
-- [Рабочие копии](../runner/execution-workspace.md)
-- [Исполнение — claims и runs](../control-plane/execution.md)
+- [Runner configuration](../runner/configuration.md)
+- [Working copies](../runner/execution-workspace.md)
+- [Execution: claims and runs](../control-plane/execution.md)

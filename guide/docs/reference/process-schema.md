@@ -1,203 +1,205 @@
-# Схема языка процессов
 
-Справочник полей языка пакетов процессов: вид каталога `Process`,
-производственный календарь `Calendar` и тесты пакета `*.test.yaml`. Таблицы
-построены из JSON Schema `packages/schema/v1` и повторяют её поле в поле.
-Статья для авторов пакетов; как этим пользоваться, объясняют
-[Процессы](../processes/index.md), [Выражения](../processes/expressions.md) и
-[Тесты пакета](../processes/package-tests.md).
+# Process language schema
 
-!!! note "Схема — первая ступень проверки"
-    Схема проверяет форму описания. Вторую ступень — типы выражений,
-    неизвестные поля данных, достижимость шагов, ссылки на типы задач и
-    скиллы, пробелы таблиц решений — выполняет ядро при проверке пакета
-    (см. [Тесты пакета](../processes/package-tests.md#check)).
+Field reference for the process package language: the catalog kind
+`Process`, the business calendar `Calendar`, and package tests
+`*.test.yaml`. The tables are built from the JSON Schema
+`packages/schema/v1` and follow it field for field. This page is for package
+authors; [Processes](../processes/index.md),
+[Expressions](../processes/expressions.md), and
+[Package tests](../processes/package-tests.md) explain how to use it.
 
-## Процесс (`kind: Process`)
+!!! note "The schema is the first stage of checking"
+    The schema checks the shape of the description. The core performs the
+    second stage when it checks a package: expression types, unknown data
+    fields, step reachability, references to task types and skills, gaps in
+    decision tables (see [Package tests](../processes/package-tests.md#check)).
+
+## Process (`kind: Process`)
 
 <!-- generated:schema-process -->
-_Раздел генерируется из кода — не правьте его руками._
+_This section is generated from code; do not edit it by hand._
 
-Источник: `packages/schema/v1/object.schema.json`.
+Source: `packages/schema/v1/object.schema.json`.
 
 ### `processSpec` { #schema-processspec }
 
-Процесс (TAI-ADR-0054, CP-ADR-0074): кейс со стадиями и блоками исполнения, данные по схеме, выражения CEL, проекция в память. Исполняет ядро
+Process (TAI-ADR-0054, CP-ADR-0074): a case with stages and execution blocks, data by schema, CEL expressions, projection into memory. The core executes it
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `version` | `integer` | да | Версия определения: опубликованная версия неизменяема |
-| `displayName` | `displayName` | да |  |
+| `version` | `integer` | yes | Definition version: a published version is immutable |
+| `displayName` | `displayName` | yes |  |
 | `description` | `string` |  |  |
 | `workspaceId` | `string` |  |  |
-| `identity` | [объект](#schema-processspec-identity) |  | От чьего имени действует процесс: описание агента вида service или agent |
-| `owner` | [`assignChain`](#schema-assignchain) |  | Владелец процесса — ему адресуются задачи о процессе: расхождение с регламентом, ошибки экземпляров (TAI-ADR-0054 п.5, амендмент 2026-09-27). Не обязателен; проверка пакета предупреждает, если его нет |
-| `calendar` | `typeKey` |  | Календарь по умолчанию для cal.* |
-| `data` | `jsonSchema` | да | JSON Schema данных экземпляра; {$ref: &lt;файл пакета&gt;} раскрывает cp_packages |
-| `start` | [объект](#schema-processspec-start) | да |  |
-| `correlate` | array of [объект](#schema-processspec-correlate-item) |  |  |
-| `stages` | array of [`processStage`](#schema-processstage) | да |  |
-| `onEvent` | array of [объект](#schema-processspec-onevent-item) |  |  |
+| `identity` | [object](#schema-processspec-identity) |  | On whose behalf the process acts: an agent description of kind service or agent |
+| `owner` | [`assignChain`](#schema-assignchain) |  | Process owner: tasks about the process are addressed to them: divergence from a regulation, instance errors (TAI-ADR-0054 item 5, amendment 2026-09-27). Optional; the package check warns if it is missing |
+| `calendar` | `typeKey` |  | Default calendar for cal.* |
+| `data` | `jsonSchema` | yes | JSON Schema of instance data; cp_packages expands {$ref: &lt;package file&gt;} |
+| `start` | [object](#schema-processspec-start) | yes |  |
+| `correlate` | array of [object](#schema-processspec-correlate-item) |  |  |
+| `stages` | array of [`processStage`](#schema-processstage) | yes |  |
+| `onEvent` | array of [object](#schema-processspec-onevent-item) |  |  |
 | `timers` | [`processTimers`](#schema-processtimers) |  |  |
 | `decisions` | array of [`decisionTable`](#schema-decisiontable) |  |  |
 | `governedBy` | [`governedBy`](#schema-governedby) |  |  |
 | `memory` | [`memoryProjection`](#schema-memoryprojection) |  |  |
-| `retrospective` | [объект](#schema-processspec-retrospective) |  | Разбор закрытого дела: агент предлагает уроки, человек подтверждает (TAI-ADR-0054 Р18) |
-| `migrations` | array of [объект](#schema-processspec-migrations-item) |  |  |
+| `retrospective` | [object](#schema-processspec-retrospective) |  | Review of a closed case: an agent proposes lessons, a human confirms (TAI-ADR-0054 D18) |
+| `migrations` | array of [object](#schema-processspec-migrations-item) |  |  |
 
 ### `processSpec.identity` { #schema-processspec-identity }
 
-От чьего имени действует процесс: описание агента вида service или agent
+On whose behalf the process acts: an agent description of kind service or agent
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `agent` | `slug` | да |  |
+| `agent` | `slug` | yes |  |
 
 ### `processSpec.start` { #schema-processspec-start }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `on` | [`processTrigger`](#schema-processtrigger) | да |  |
-| `key` | [`cel`](#schema-cel) | да | Ключ экземпляра: повтор события с тем же ключом — correlate, а не новый экземпляр |
+| `on` | [`processTrigger`](#schema-processtrigger) | yes |  |
+| `key` | [`cel`](#schema-cel) | yes | Instance key: a repeated event with the same key is a correlate, not a new instance |
 | `set` | [`celMap`](#schema-celmap) |  |  |
 
 ### `processSpec.correlate[]` { #schema-processspec-correlate-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `on` | [`processTrigger`](#schema-processtrigger) | да |  |
-| `key` | [`cel`](#schema-cel) | да |  |
+| `on` | [`processTrigger`](#schema-processtrigger) | yes |  |
+| `key` | [`cel`](#schema-cel) | yes |  |
 | `set` | [`celMap`](#schema-celmap) |  |  |
 | `do` | [`blocks`](#schema-blocks) |  |  |
 
 ### `processSpec.onEvent[]` { #schema-processspec-onevent-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `on` | [`processTrigger`](#schema-processtrigger) | да |  |
-| `do` | [`blocks`](#schema-blocks) | да |  |
+| `on` | [`processTrigger`](#schema-processtrigger) | yes |  |
+| `do` | [`blocks`](#schema-blocks) | yes |  |
 
 ### `processSpec.retrospective` { #schema-processspec-retrospective }
 
-Разбор закрытого дела: агент предлагает уроки, человек подтверждает (TAI-ADR-0054 Р18)
+Review of a closed case: an agent proposes lessons, a human confirms (TAI-ADR-0054 D18)
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `skill` | `string` |  | По умолчанию `process.retrospective@1`. |
-| `taskType` | `typeKey` | да |  |
-| `assign` | [`assignChain`](#schema-assignchain) | да |  |
-| `appliesTo` | array of `string` |  | Виды сущностей, к которым привязываются уроки |
+| `skill` | `string` |  | Default: `process.retrospective@1`. |
+| `taskType` | `typeKey` | yes |  |
+| `assign` | [`assignChain`](#schema-assignchain) | yes |  |
+| `appliesTo` | array of `string` |  | Entity kinds that lessons are attached to |
 | `when` | [`cel`](#schema-cel) |  |  |
 
 ### `processSpec.migrations[]` { #schema-processspec-migrations-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `from` | `integer` | да |  |
-| `to` | `integer` | да |  |
-| `policy` | `pin` \| `migrate` | да |  |
+| `from` | `integer` | yes |  |
+| `to` | `integer` | yes |  |
+| `policy` | `pin` \| `migrate` | yes |  |
 | `map` | map → [`processElementId`](#schema-processelementid) |  |  |
 
 ### `processStage` { #schema-processstage }
 
-Стадия кейса (CMMN): вход и выход по сторожам, вехи, обязательная и необязательная работа
+Case stage (CMMN): entry and exit by guards, milestones, required and discretionary work
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
 | `displayName` | `displayName` |  |  |
-| `entry` | [`cel`](#schema-cel) |  | Сторож входа; stage.&lt;id&gt;.completed, milestone.&lt;id&gt; и data доступны в выражении |
+| `entry` | [`cel`](#schema-cel) |  | Entry guard; stage.&lt;id&gt;.completed, milestone.&lt;id&gt;, and data are available in the expression |
 | `exit` | [`cel`](#schema-cel) |  |  |
 | `repeatable` | `boolean` |  |  |
 | `governedBy` | [`governedBy`](#schema-governedby) |  |  |
-| `steps` | [`blocks`](#schema-blocks) | да |  |
-| `discretionary` | array of [`processStep`](#schema-processstep) |  | Работа, которую человек добавляет по решению |
-| `milestones` | array of [объект](#schema-processstage-milestones-item) |  |  |
+| `steps` | [`blocks`](#schema-blocks) | yes |  |
+| `discretionary` | array of [`processStep`](#schema-processstep) |  | Work that a human adds at their discretion |
+| `milestones` | array of [object](#schema-processstage-milestones-item) |  |  |
 | `timers` | [`processTimers`](#schema-processtimers) |  |  |
 
 ### `processStage.milestones[]` { #schema-processstage-milestones-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
-| `when` | [`cel`](#schema-cel) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
+| `when` | [`cel`](#schema-cel) | yes |  |
 
 ### `processStep` { #schema-processstep }
 
-Шаг процесса: ровно один вид (human, approve, call, decide, recall, remember, listen, wait, set, raise, compensate, fork, try, do, suspend, resume, complete) плюс общие поля
+Process step: exactly one kind (human, approve, call, decide, recall, remember, listen, wait, set, raise, compensate, fork, try, do, suspend, resume, complete) plus common fields
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
 | `displayName` | `displayName` |  |  |
-| `when` | [`cel`](#schema-cel) |  | Сторож: шаг выполняется, только если истинно |
-| `input` | [объект](#schema-processstep-input) |  |  |
-| `output` | [объект](#schema-processstep-output) |  | Запись результата шага (step.result) в данные экземпляра |
-| `export` | [объект](#schema-processstep-export) |  |  |
+| `when` | [`cel`](#schema-cel) |  | Guard: the step runs only if it is true |
+| `input` | [object](#schema-processstep-input) |  |  |
+| `output` | [object](#schema-processstep-output) |  | Writes the step result (step.result) into instance data |
+| `export` | [object](#schema-processstep-export) |  |  |
 | `governedBy` | [`governedBy`](#schema-governedby) |  |  |
-| `onCompensate` | [`blocks`](#schema-blocks) |  | Компенсация сделанного шага: выполняется при compensate в обратном порядке |
-| `human` | [объект](#schema-processstep-human) |  |  |
-| `approve` | [объект](#schema-processstep-approve) |  |  |
-| `call` | [объект](#schema-processstep-call) |  |  |
-| `decide` | [объект](#schema-processstep-decide) |  |  |
-| `recall` | [объект](#schema-processstep-recall) |  | Запрос к памяти через ядро; ответ — событие журнала (детерминированный replay) |
-| `remember` | [объект](#schema-processstep-remember) |  | Запись в память наблюдением ядра от identity процесса, со ссылкой на дело |
-| `listen` | [объект](#schema-processstep-listen) |  | Ожидание первого из событий (отложенный выбор); timeout — таймер |
+| `onCompensate` | [`blocks`](#schema-blocks) |  | Compensation of a completed step: runs on compensate in reverse order |
+| `human` | [object](#schema-processstep-human) |  |  |
+| `approve` | [object](#schema-processstep-approve) |  |  |
+| `call` | [object](#schema-processstep-call) |  |  |
+| `decide` | [object](#schema-processstep-decide) |  |  |
+| `recall` | [object](#schema-processstep-recall) |  | A memory query through the core; the response is a log event (deterministic replay) |
+| `remember` | [object](#schema-processstep-remember) |  | A write to memory as a core observation from the process identity, with a reference to the case |
+| `listen` | [object](#schema-processstep-listen) |  | Waiting for the first of several events (deferred choice); timeout is a timer |
 | `wait` | [`durationOrCel`](#schema-durationorcel) |  |  |
 | `set` | [`celMap`](#schema-celmap) |  |  |
 | `raise` | [`processError`](#schema-processerror) |  |  |
-| `compensate` | = `all` или array of [`processElementId`](#schema-processelementid) |  | Выполнить onCompensate сделанных шагов в обратном порядке |
-| `fork` | [объект](#schema-processstep-fork) |  |  |
-| `try` | [объект](#schema-processstep-try) |  |  |
+| `compensate` | = `all` or array of [`processElementId`](#schema-processelementid) |  | Run onCompensate of completed steps in reverse order |
+| `fork` | [object](#schema-processstep-fork) |  |  |
+| `try` | [object](#schema-processstep-try) |  |  |
 | `do` | [`blocks`](#schema-blocks) |  |  |
-| `suspend` | [объект](#schema-processstep-suspend) |  |  |
-| `resume` | [объект](#schema-processstep-resume) |  |  |
-| `complete` | [объект](#schema-processstep-complete) |  |  |
+| `suspend` | [object](#schema-processstep-suspend) |  |  |
+| `resume` | [object](#schema-processstep-resume) |  |  |
+| `complete` | [object](#schema-processstep-complete) |  |  |
 
-Ровно одно из: `human`, `approve`, `call`, `decide`, `recall`, `remember`, `listen`, `wait`, `set`, `raise`, `compensate`, `fork`, `try`, `do`, `suspend`, `resume`, `complete`.
+Exactly one of: `human`, `approve`, `call`, `decide`, `recall`, `remember`, `listen`, `wait`, `set`, `raise`, `compensate`, `fork`, `try`, `do`, `suspend`, `resume`, `complete`.
 
 ### `processStep.input` { #schema-processstep-input }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `from` | [`cel`](#schema-cel) |  |  |
 
 ### `processStep.output` { #schema-processstep-output }
 
-Запись результата шага (step.result) в данные экземпляра
+Writes the step result (step.result) into instance data
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `as` | [`celMap`](#schema-celmap) |  |  |
 
 ### `processStep.export` { #schema-processstep-export }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `as` | [`celMap`](#schema-celmap) |  |  |
 
 ### `processStep.human` { #schema-processstep-human }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `taskType` | `typeKey` | да |  |
+| `taskType` | `typeKey` | yes |  |
 | `title` | [`cel`](#schema-cel) |  |  |
 | `form` | [`processForm`](#schema-processform) |  |  |
-| `assign` | [`assignChain`](#schema-assignchain) | да |  |
+| `assign` | [`assignChain`](#schema-assignchain) | yes |  |
 | `due` | [`durationOrCel`](#schema-durationorcel) |  |  |
 | `escalations` | array of [`escalation`](#schema-escalation) |  |  |
 | `context` | [`stepContext`](#schema-stepcontext) |  |  |
 
 ### `processStep.approve` { #schema-processstep-approve }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `taskType` | `typeKey` |  |  |
-| `approvers` | [`assignChain`](#schema-assignchain) | да |  |
-| `mode` | `parallel` \| `sequential` |  | По умолчанию `parallel`. |
-| `quorum` | `all` \| `any` или объект `{atLeast}` или объект `{percent}` | да |  |
-| `earlyDecision` | `boolean` |  | По умолчанию `true`. |
-| `separationOfDuties` | [`cel`](#schema-cel) |  | CEL → список principal, которым голосовать нельзя; проверяет ядро при решении |
+| `approvers` | [`assignChain`](#schema-assignchain) | yes |  |
+| `mode` | `parallel` \| `sequential` |  | Default: `parallel`. |
+| `quorum` | `all` \| `any` or object `{atLeast}` or object `{percent}` | yes |  |
+| `earlyDecision` | `boolean` |  | Default: `true`. |
+| `separationOfDuties` | [`cel`](#schema-cel) |  | CEL → a list of principals who must not vote; the core checks it at decision time |
 | `due` | [`durationOrCel`](#schema-durationorcel) |  |  |
 | `onDue` | `approve` \| `reject` \| `escalate` |  |  |
 | `escalations` | array of [`escalation`](#schema-escalation) |  |  |
@@ -205,7 +207,7 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `processStep.call` { #schema-processstep-call }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `skill` | `string` |  |  |
 | `agent` | `slug` |  |  |
@@ -214,24 +216,24 @@ _Раздел генерируется из кода — не правьте е�
 | `timeout` | [`durationOrCel`](#schema-durationorcel) |  |  |
 | `context` | [`stepContext`](#schema-stepcontext) |  |  |
 
-Ровно одно из: `skill`, `agent`, `process`.
+Exactly one of: `skill`, `agent`, `process`.
 
 ### `processStep.decide` { #schema-processstep-decide }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `table` | [`processElementId`](#schema-processelementid) | да |  |
+| `table` | [`processElementId`](#schema-processelementid) | yes |  |
 | `input` | [`celMap`](#schema-celmap) |  |  |
 
 ### `processStep.recall` { #schema-processstep-recall }
 
-Запрос к памяти через ядро; ответ — событие журнала (детерминированный replay)
+A memory query through the core; the response is a log event (deterministic replay)
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `anchors` | array of [`memoryAnchor`](#schema-memoryanchor) | да |  |
+| `anchors` | array of [`memoryAnchor`](#schema-memoryanchor) | yes |  |
 | `traverse` | [`memoryTraverse`](#schema-memorytraverse) |  |  |
-| `query` | [`cel`](#schema-cel) |  | Текст смыслового добора |
+| `query` | [`cel`](#schema-cel) |  | Text for semantic enrichment |
 | `kinds` | array of `string` |  |  |
 | `limit` | `integer` |  |  |
 | `timeout` | [`duration`](#schema-duration) |  |  |
@@ -239,239 +241,239 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `processStep.remember` { #schema-processstep-remember }
 
-Запись в память наблюдением ядра от identity процесса, со ссылкой на дело
+A write to memory as a core observation from the process identity, with a reference to the case
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `entity` | [объект](#schema-processstep-remember-entity) |  |  |
-| `facts` | [`celMap`](#schema-celmap) |  | Имя факта дела → значение |
+| `entity` | [object](#schema-processstep-remember-entity) |  |  |
+| `facts` | [`celMap`](#schema-celmap) |  | Case fact name → value |
 
-Ровно одно из: `facts`, `entity`.
+Exactly one of: `facts`, `entity`.
 
 ### `processStep.remember.entity` { #schema-processstep-remember-entity }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `kind` | `string` | да |  |
-| `key` | [`cel`](#schema-cel) | да |  |
+| `kind` | `string` | yes |  |
+| `key` | [`cel`](#schema-cel) | yes |  |
 | `name` | [`cel`](#schema-cel) |  |  |
 | `text` | [`cel`](#schema-cel) |  |  |
-| `links` | array of [объект](#schema-processstep-remember-entity-links-item) |  |  |
+| `links` | array of [object](#schema-processstep-remember-entity-links-item) |  |  |
 
 ### `processStep.remember.entity.links[]` { #schema-processstep-remember-entity-links-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `rel` | `string` | да |  |
-| `kind` | `string` | да |  |
-| `key` | [`cel`](#schema-cel) | да |  |
+| `rel` | `string` | yes |  |
+| `kind` | `string` | yes |  |
+| `key` | [`cel`](#schema-cel) | yes |  |
 
 ### `processStep.listen` { #schema-processstep-listen }
 
-Ожидание первого из событий (отложенный выбор); timeout — таймер
+Waiting for the first of several events (deferred choice); timeout is a timer
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `any` | array of [объект](#schema-processstep-listen-any-item) | да |  |
+| `any` | array of [object](#schema-processstep-listen-any-item) | yes |  |
 | `timeout` | [`durationOrCel`](#schema-durationorcel) |  |  |
 | `onTimeout` | [`blocks`](#schema-blocks) |  |  |
 
 ### `processStep.listen.any[]` { #schema-processstep-listen-any-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `on` | [`processTrigger`](#schema-processtrigger) | да |  |
+| `on` | [`processTrigger`](#schema-processtrigger) | yes |  |
 | `do` | [`blocks`](#schema-blocks) |  |  |
 
 ### `processStep.fork` { #schema-processstep-fork }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `mode` | `all` \| `compete` |  | По умолчанию `all`. |
-| `branches` | array of [объект](#schema-processstep-fork-branches-item) | да |  |
+| `mode` | `all` \| `compete` |  | Default: `all`. |
+| `branches` | array of [object](#schema-processstep-fork-branches-item) | yes |  |
 
 ### `processStep.fork.branches[]` { #schema-processstep-fork-branches-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
-| `do` | [`blocks`](#schema-blocks) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
+| `do` | [`blocks`](#schema-blocks) | yes |  |
 
 ### `processStep.try` { #schema-processstep-try }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `do` | [`blocks`](#schema-blocks) | да |  |
-| `retry` | [объект](#schema-processstep-try-retry) |  |  |
-| `catch` | array of [объект](#schema-processstep-try-catch-item) |  |  |
+| `do` | [`blocks`](#schema-blocks) | yes |  |
+| `retry` | [object](#schema-processstep-try-retry) |  |  |
+| `catch` | array of [object](#schema-processstep-try-catch-item) |  |  |
 
 ### `processStep.try.retry` { #schema-processstep-try-retry }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `limit` | `integer` | да |  |
+| `limit` | `integer` | yes |  |
 | `delay` | [`duration`](#schema-duration) |  |  |
 | `backoff` | `constant` \| `exponential` |  |  |
 | `maxDelay` | [`duration`](#schema-duration) |  |  |
-| `on` | array of `string` |  | Типы ошибок для повтора; по умолчанию все |
+| `on` | array of `string` |  | Error types to retry; all by default |
 
 ### `processStep.try.catch[]` { #schema-processstep-try-catch-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `errors` | [объект](#schema-processstep-try-catch-item-errors) |  |  |
+| `errors` | [object](#schema-processstep-try-catch-item-errors) |  |  |
 | `as` | `string` |  |  |
-| `do` | [`blocks`](#schema-blocks) | да |  |
+| `do` | [`blocks`](#schema-blocks) | yes |  |
 
 ### `processStep.try.catch[].errors` { #schema-processstep-try-catch-item-errors }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `type` | `string` |  |  |
 | `status` | `integer` |  |  |
 
 ### `processStep.suspend` { #schema-processstep-suspend }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `reason` | [`cel`](#schema-cel) |  |  |
 
 ### `processStep.resume` { #schema-processstep-resume }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `reason` | [`cel`](#schema-cel) |  |  |
 
 ### `processStep.complete` { #schema-processstep-complete }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `outcome` | `string` | да |  |
+| `outcome` | `string` | yes |  |
 
 ### `processTimers` { #schema-processtimers }
 
-Граничные таймеры: срабатывают, пока стадия (процесс) открыта; at от данных пересчитывается при их изменении
+Boundary timers: fire while the stage (process) is open; an at derived from data is recalculated when the data changes
 
-Значение: array of [объект](#schema-processtimers-item).
+Value: array of [object](#schema-processtimers-item).
 
 ### `processTimers[]` { #schema-processtimers-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
-| `at` | [`durationOrCel`](#schema-durationorcel) | да |  |
-| `interrupting` | `boolean` |  | По умолчанию `false`. |
-| `do` | [`blocks`](#schema-blocks) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
+| `at` | [`durationOrCel`](#schema-durationorcel) | yes |  |
+| `interrupting` | `boolean` |  | Default: `false`. |
+| `do` | [`blocks`](#schema-blocks) | yes |  |
 
 ### `decisionTable` { #schema-decisiontable }
 
-Таблица решений (DMN по смыслу). Ячейка условия: '-' (любое), литерал, список 'a,b', диапазон '[a..b)'
+Decision table (DMN in spirit). Condition cell: '-' (any), a literal, a list 'a,b', a range '[a..b)'
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
 | `displayName` | `displayName` |  |  |
-| `hitPolicy` | `first` \| `unique` \| `collect` | да |  |
+| `hitPolicy` | `first` \| `unique` \| `collect` | yes |  |
 | `governedBy` | [`governedBy`](#schema-governedby) |  |  |
-| `inputs` | array of [объект](#schema-decisiontable-inputs-item) | да |  |
-| `outputs` | array of [объект](#schema-decisiontable-outputs-item) | да |  |
-| `rules` | array of [объект](#schema-decisiontable-rules-item) | да |  |
+| `inputs` | array of [object](#schema-decisiontable-inputs-item) | yes |  |
+| `outputs` | array of [object](#schema-decisiontable-outputs-item) | yes |  |
+| `rules` | array of [object](#schema-decisiontable-rules-item) | yes |  |
 
 ### `decisionTable.inputs[]` { #schema-decisiontable-inputs-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
-| `expr` | [`cel`](#schema-cel) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
+| `expr` | [`cel`](#schema-cel) | yes |  |
 | `type` | `string` \| `number` \| `boolean` \| `date` \| `timestamp` |  |  |
 
 ### `decisionTable.outputs[]` { #schema-decisiontable-outputs-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | [`processElementId`](#schema-processelementid) | да |  |
+| `id` | [`processElementId`](#schema-processelementid) | yes |  |
 | `type` | `string` \| `number` \| `boolean` \| `date` \| `duration` \| `object` \| `array` |  |  |
 
 ### `decisionTable.rules[]` { #schema-decisiontable-rules-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `when` | map → `string` \| `number` \| `boolean` | да |  |
-| `then` | `object` | да |  |
+| `when` | map → `string` \| `number` \| `boolean` | yes |  |
+| `then` | `object` | yes |  |
 | `note` | `string` |  |  |
 | `governedBy` | [`governedBy`](#schema-governedby) |  |  |
 
 ### `memoryProjection` { #schema-memoryprojection }
 
-Проекция дела в граф памяти (TAI-ADR-0054 Р15): доставляется событиями, в граф идут только объявленные поля
+Projection of the case into the memory graph (TAI-ADR-0054 D15): delivered by events; only declared fields go into the graph
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `case` | [объект](#schema-memoryprojection-case) | да |  |
-| `facts` | [`celMap`](#schema-celmap) |  | Имя факта дела → значение; изменение закрывает прежний факт сроком действия |
-| `entities` | array of [объект](#schema-memoryprojection-entities-item) |  |  |
-| `documents` | [объект](#schema-memoryprojection-documents) |  |  |
+| `case` | [object](#schema-memoryprojection-case) | yes |  |
+| `facts` | [`celMap`](#schema-celmap) |  | Case fact name → value; a change closes the previous fact with a validity period |
+| `entities` | array of [object](#schema-memoryprojection-entities-item) |  |  |
+| `documents` | [object](#schema-memoryprojection-documents) |  |  |
 
 ### `memoryProjection.case` { #schema-memoryprojection-case }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `kind` | `string` |  | По умолчанию `case`. |
-| `key` | [`cel`](#schema-cel) | да |  |
+| `kind` | `string` |  | Default: `case`. |
+| `key` | [`cel`](#schema-cel) | yes |  |
 | `title` | [`cel`](#schema-cel) |  |  |
 
 ### `memoryProjection.entities[]` { #schema-memoryprojection-entities-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `kind` | `string` | да |  |
-| `key` | [`cel`](#schema-cel) | да |  |
+| `kind` | `string` | yes |  |
+| `key` | [`cel`](#schema-cel) | yes |  |
 | `name` | [`cel`](#schema-cel) |  |  |
-| `rel` | `string` | да |  |
+| `rel` | `string` | yes |  |
 | `when` | [`cel`](#schema-cel) |  |  |
-| `many` | `boolean` |  | key даёт список: по сущности на элемент |
+| `many` | `boolean` |  | key yields a list: one entity per element |
 
 ### `memoryProjection.documents` { #schema-memoryprojection-documents }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `artifacts` | array of `typeKey` |  |  |
 
 ### `stepContext` { #schema-stepcontext }
 
-Профиль контекста исполнителя шага из памяти (TAI-ADR-0054 Р16): явные связи первыми, смысловой добор с пометкой inferred
+Context profile of the step executor from memory (TAI-ADR-0054 D16): explicit links first, semantic enrichment marked inferred
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `anchors` | array of [`memoryAnchor`](#schema-memoryanchor) | да |  |
+| `anchors` | array of [`memoryAnchor`](#schema-memoryanchor) | yes |  |
 | `traverse` | [`memoryTraverse`](#schema-memorytraverse) |  |  |
-| `semantic` | `boolean` |  | Добор по смыслу (inferred); по умолчанию true |
+| `semantic` | `boolean` |  | Semantic enrichment (inferred); true by default |
 | `budgetTokens` | `integer` |  |  |
 
 ### `memoryAnchor` { #schema-memoryanchor }
 
-Якорь обхода графа: узел дела экземпляра или сущность по естественному ключу (CEL от данных)
+Graph traversal anchor: the instance's case node or an entity by natural key (CEL over data)
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `case` | = `true` |  |  |
 | `kind` | `string` |  |  |
 | `key` | [`cel`](#schema-cel) |  |  |
 | `via` | `string` |  |  |
 
-Ровно одно из: `case`, `key` + `kind`.
+Exactly one of: `case`, `key` + `kind`.
 
 ### `memoryTraverse` { #schema-memorytraverse }
 
-Шаги обхода от якорей — та же форма, что traverse в contextSchema (CP-ADR-0064)
+Traversal steps from anchors: the same form as traverse in contextSchema (CP-ADR-0064)
 
-Значение: array of [объект](#schema-memorytraverse-item).
+Value: array of [object](#schema-memorytraverse-item).
 
 ### `memoryTraverse[]` { #schema-memorytraverse-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `relation` | `string` | да |  |
+| `relation` | `string` | yes |  |
 | `direction` | `in` \| `out` \| `both` |  |  |
 | `depth` | `integer` |  |  |
 | `limit` | `integer` |  |  |
@@ -479,262 +481,262 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `processTrigger` { #schema-processtrigger }
 
-Источник события: событие журнала ядра или наблюдение. where — фильтр CEL над event
+Event source: a core log event or an observation. where is a CEL filter over event
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `event` | `string` |  |  |
 | `observation` | `string` |  |  |
 | `source` | `string` |  |  |
 | `where` | [`cel`](#schema-cel) |  |  |
 
-Ровно одно из: `event`, `observation`.
+Exactly one of: `event`, `observation`.
 
 ### `assignee` { #schema-assignee }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `principal` | `envOrUuid` |  |  |
 | `role` | `slug` |  |  |
 | `agent` | `slug` |  |  |
-| `expr` | [`cel`](#schema-cel) |  | CEL → id principal, agent:&lt;key&gt; или role:&lt;slug&gt; |
+| `expr` | [`cel`](#schema-cel) |  | CEL → a principal id, agent:&lt;key&gt;, or role:&lt;slug&gt; |
 
-Ровно одно из: `principal`, `role`, `agent`, `expr`.
+Exactly one of: `principal`, `role`, `agent`, `expr`.
 
 ### `assignChain` { #schema-assignchain }
 
-Кандидаты по порядку: берётся первый разрешимый
+Candidates in order: the first resolvable one is taken
 
-Значение: array of [`assignee`](#schema-assignee).
+Value: array of [`assignee`](#schema-assignee).
 
 ### `escalation` { #schema-escalation }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `after` | = `due` или [`durationOrCel`](#schema-durationorcel) | да | due — в момент срока; длительность — после срока |
-| `action` | `remind` \| `reassign` \| `notify` \| `raise` | да |  |
+| `after` | = `due` or [`durationOrCel`](#schema-durationorcel) | yes | due: at the deadline; a duration: after the deadline |
+| `action` | `remind` \| `reassign` \| `notify` \| `raise` | yes |  |
 | `to` | [`assignChain`](#schema-assignchain) |  |  |
 | `error` | [`processError`](#schema-processerror) |  |  |
 
 ### `processError` { #schema-processerror }
 
-Ошибка в форме RFC 7807
+An error in RFC 7807 form
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `type` | `string` | да |  |
+| `type` | `string` | yes |  |
 | `status` | `integer` |  |  |
 | `detail` | [`cel`](#schema-cel) |  |  |
 
 ### `processForm` { #schema-processform }
 
-Форма шага: JSON Schema данных и uischema JSON Forms представления
+Step form: JSON Schema of the data and the JSON Forms uischema of the view
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `schema` | `jsonSchema` | да |  |
+| `schema` | `jsonSchema` | yes |  |
 | `uischema` | `object` |  |  |
 
 ### `governedBy` { #schema-governedby }
 
-Регламенты базы знаний, которым подчиняется элемент (TAI-ADR-0054 Р17): естественный ключ документа памяти и, при необходимости, пункт
+Knowledge base regulations that govern the element (TAI-ADR-0054 D17): the natural key of the memory document and, if needed, a section
 
-Значение: array of [объект](#schema-governedby-item).
+Value: array of [object](#schema-governedby-item).
 
 ### `governedBy[]` { #schema-governedby-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `document` | `string` | да |  |
+| `document` | `string` | yes |  |
 | `section` | `string` |  |  |
 
 ### `blocks` { #schema-blocks }
 
-Последовательность шагов (блок do)
+A sequence of steps (a do block)
 
-Значение: array of [`processStep`](#schema-processstep).
+Value: array of [`processStep`](#schema-processstep).
 
 ### `durationOrCel` { #schema-durationorcel }
 
-Длительность ISO 8601 или выражение CEL, дающее момент времени (timestamp) или длительность
+An ISO 8601 duration or a CEL expression that yields a point in time (timestamp) or a duration
 
-Значение: [`duration`](#schema-duration) или объект `{at}`.
+Value: [`duration`](#schema-duration) or object `{at}`.
 
 ### `duration` { #schema-duration }
 
-Длительность ISO 8601, например P3D, PT4H
+An ISO 8601 duration, for example P3D, PT4H
 
-Значение: `string`.
+Value: `string`.
 
 ### `cel` { #schema-cel }
 
-Выражение CEL в профиле taimen/1 (CP-ADR-0075): переменные data, event, step, task, instance; функции cal.*; без текущего времени. Типы и лимит стоимости проверяет ядро
+A CEL expression in the taimen/1 profile (CP-ADR-0075): variables data, event, step, task, instance; cal.* functions; no current time. The core checks types and the cost limit
 
-Значение: `string`.
+Value: `string`.
 
 ### `celMap` { #schema-celmap }
 
-Путь в данных экземпляра → выражение CEL
+Path in instance data → CEL expression
 
-Значение: map → [`cel`](#schema-cel).
+Value: map → [`cel`](#schema-cel).
 
 ### `processElementId` { #schema-processelementid }
 
-Стабильный id элемента процесса: на него ссылаются раскладка схемы, карты миграции, журнал и граф памяти. Переименование — только картой migrations
+Stable id of a process element: the schema layout, migration maps, the log, and the memory graph refer to it. Renaming only through the migrations map
 
-Значение: `string`.
+Value: `string`.
 <!-- /generated:schema-process -->
 
-## Календарь (`kind: Calendar`)
+## Calendar (`kind: Calendar`)
 
 <!-- generated:schema-calendar -->
-_Раздел генерируется из кода — не правьте его руками._
+_This section is generated from code; do not edit it by hand._
 
-Источник: `packages/schema/v1/object.schema.json`.
+Source: `packages/schema/v1/object.schema.json`.
 
 ### `calendarSpec` { #schema-calendarspec }
 
-Производственный календарь (TAI-ADR-0054 Р6): выходные по умолчанию, праздники и переносы по годам
+Business calendar (TAI-ADR-0054 D6): default weekend, holidays, and moved days by year
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `displayName` | `displayName` | да |  |
-| `timezone` | `string` | да |  |
-| `weekend` | array of `integer` |  | Дни недели ISO: 1 — понедельник. По умолчанию `[6, 7]`. |
-| `years` | array of [объект](#schema-calendarspec-years-item) | да |  |
+| `displayName` | `displayName` | yes |  |
+| `timezone` | `string` | yes |  |
+| `weekend` | array of `integer` |  | ISO weekdays: 1 is Monday. Default: `[6, 7]`. |
+| `years` | array of [object](#schema-calendarspec-years-item) | yes |  |
 
 ### `calendarSpec.years[]` { #schema-calendarspec-years-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `year` | `integer` | да |  |
-| `provisional` | `boolean` |  | Год ещё не утверждён: результаты cal.* помечаются «предварительно» |
+| `year` | `integer` | yes |  |
+| `provisional` | `boolean` |  | The year is not approved yet: cal.* results are marked "provisional" |
 | `source` | `string` |  |  |
 | `holidays` | array of `string` (date) |  |  |
-| `workdays` | array of `string` (date) |  | Перенесённые рабочие дни, выпавшие на выходные |
+| `workdays` | array of `string` (date) |  | Moved working days that fall on weekends |
 | `shortDays` | array of `string` (date) |  |  |
 <!-- /generated:schema-calendar -->
 
-## Тест пакета (`tests/*.test.yaml`)
+## Package test (`tests/*.test.yaml`)
 
 <!-- generated:schema-test -->
-_Раздел генерируется из кода — не правьте его руками._
+_This section is generated from code; do not edit it by hand._
 
-Источник: `packages/schema/v1/test.schema.json`.
+Source: `packages/schema/v1/test.schema.json`.
 
 ### `test` { #schema-test }
 
-Файл &lt;имя&gt;.test.yaml в каталоге tests/ пакета. Прогоняет ядро (POST /packages:test) тем же движком, что живой прогон, в песочнице: задачи, approvals и таймеры — в памяти, скиллы, агенты и память — заглушки, проверенные по схемам каталога, время виртуальное. Побочных эффектов нет.
+A &lt;name&gt;.test.yaml file in the package's tests/ directory. The core runs it (POST /packages:test) with the same engine as a live run, in a sandbox: tasks, approvals, and timers are in memory; skills, agents, and memory are stubs checked against the catalog schemas; time is virtual. There are no side effects.
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `$schema` | `string` |  |  |
-| `process` | `string` | да | Ключ процесса пакета |
-| `version` | `integer` |  | По умолчанию — версия в пакете |
-| `name` | `string` | да |  |
+| `process` | `string` | yes | Key of the package process |
+| `version` | `integer` |  | Defaults to the version in the package |
+| `name` | `string` | yes |  |
 | `description` | `string` |  |  |
-| `given` | [объект](#schema-test-given) |  |  |
-| `mocks` | [объект](#schema-test-mocks) |  |  |
-| `steps` | array of [`testStep`](#schema-teststep) | да |  |
-| `coverage` | [объект](#schema-test-coverage) |  |  |
+| `given` | [object](#schema-test-given) |  |  |
+| `mocks` | [object](#schema-test-mocks) |  |  |
+| `steps` | array of [`testStep`](#schema-teststep) | yes |  |
+| `coverage` | [object](#schema-test-coverage) |  |  |
 
 ### `test.given` { #schema-test-given }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `clock` | `string` (date-time) |  | Начальное виртуальное время |
-| `data` | `object` |  | Начальные данные экземпляра (без события старта) |
-| `stage` | `string` |  | Начать с открытой стадии |
-| `fromInstance` | `string` |  | Только пробный прогон на стенде: состояние копируется из живого экземпляра |
-| `calendar` | `string` |  | Ключ календаря вместо календаря процесса |
-| `principals` | map → array of `string` |  | Роль → вымышленные principal теста (для назначений и разделения обязанностей) |
+| `clock` | `string` (date-time) |  | Initial virtual time |
+| `data` | `object` |  | Initial instance data (without a start event) |
+| `stage` | `string` |  | Start with an open stage |
+| `fromInstance` | `string` |  | Only a trial run on a deployment: state is copied from a live instance |
+| `calendar` | `string` |  | Calendar key instead of the process calendar |
+| `principals` | map → array of `string` |  | Role → fictitious test principals (for assignments and separation of duties) |
 
 ### `test.mocks` { #schema-test-mocks }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `skills` | map → array of [`mockAnswer`](#schema-mockanswer) |  | name@version → ответы по порядку вызовов (или по when); выход проверяется по схеме скилла из каталога |
+| `skills` | map → array of [`mockAnswer`](#schema-mockanswer) |  | name@version → answers in call order (or by when); the output is checked against the skill schema from the catalog |
 | `agents` | map → array of [`mockAnswer`](#schema-mockanswer) |  |  |
-| `recall` | array of [`mockAnswer`](#schema-mockanswer) |  | Ответы памяти шагам recall; step — id шага, when — CEL над запросом |
+| `recall` | array of [`mockAnswer`](#schema-mockanswer) |  | Memory answers to recall steps; step is the step id, when is CEL over the query |
 
 ### `test.coverage` { #schema-test-coverage }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `minimum` | `number` |  | Порог покрытия элементов процесса этим тестом, % |
+| `minimum` | `number` |  | Coverage threshold of process elements by this test, % |
 
 ### `mockAnswer` { #schema-mockanswer }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `step` | `string` |  |  |
-| `when` | `string` |  | CEL над input вызова |
-| `output` | любое |  |  |
-| `error` | [объект](#schema-mockanswer-error) |  |  |
+| `when` | `string` |  | CEL over the call input |
+| `output` | any |  |  |
+| `error` | [object](#schema-mockanswer-error) |  |  |
 | `timeout` | = `true` |  |  |
 
-Ровно одно из: `output`, `error`, `timeout`.
+Exactly one of: `output`, `error`, `timeout`.
 
 ### `mockAnswer.error` { #schema-mockanswer-error }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `type` | `string` | да |  |
+| `type` | `string` | yes |  |
 | `status` | `integer` |  |  |
 | `detail` | `string` |  |  |
 
 ### `testStep` { #schema-teststep }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `emit` | [объект](#schema-teststep-emit) |  |  |
-| `advance` | `string` |  | Сдвиг виртуального времени (ISO 8601, P3D) или до момента: until:&lt;id таймера&gt; |
-| `complete` | [объект](#schema-teststep-complete) |  |  |
-| `approve` | [объект](#schema-teststep-approve) |  |  |
-| `expect` | [объект](#schema-teststep-expect) |  |  |
+| `emit` | [object](#schema-teststep-emit) |  |  |
+| `advance` | `string` |  | Advance virtual time (ISO 8601, P3D) or up to a moment: until:&lt;timer id&gt; |
+| `complete` | [object](#schema-teststep-complete) |  |  |
+| `approve` | [object](#schema-teststep-approve) |  |  |
+| `expect` | [object](#schema-teststep-expect) |  |  |
 
-Ровно одно из: `emit`, `advance`, `complete`, `approve`, `expect`.
+Exactly one of: `emit`, `advance`, `complete`, `approve`, `expect`.
 
 ### `testStep.emit` { #schema-teststep-emit }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `event` | `string` |  |  |
 | `observation` | `string` |  |  |
 | `source` | `string` |  |  |
 | `payload` | `object` |  |  |
 
-Ровно одно из: `event`, `observation`.
+Exactly one of: `event`, `observation`.
 
 ### `testStep.complete` { #schema-teststep-complete }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `step` | `string` | да |  |
-| `by` | `string` |  | principal теста или agent:&lt;key&gt; |
-| `output` | `object` |  | Данные формы или результат агента; проверяются по схеме формы |
+| `step` | `string` | yes |  |
+| `by` | `string` |  | a test principal or agent:&lt;key&gt; |
+| `output` | `object` |  | Form data or the agent result; checked against the form schema |
 | `cancel` | = `true` |  |  |
 
 ### `testStep.approve` { #schema-teststep-approve }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `step` | `string` | да |  |
-| `by` | `string` | да |  |
-| `decision` | `approve` \| `reject` | да |  |
-| `expectRefused` | `string` |  | Код отказа ядра, например separation_of_duties_violation |
+| `step` | `string` | yes |  |
+| `by` | `string` | yes |  |
+| `decision` | `approve` \| `reject` | yes |  |
+| `expectRefused` | `string` |  | Core denial code, for example separation_of_duties_violation |
 
 ### `testStep.expect` { #schema-teststep-expect }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `stages` | map → `open` \| `completed` \| `skipped` \| `not_started` |  |  |
 | `milestones` | array of `string` |  |  |
-| `tasks` | array of [объект](#schema-teststep-expect-tasks-item) |  |  |
-| `timers` | array of [объект](#schema-teststep-expect-timers-item) |  |  |
-| `data` | `object` |  | Путь в данных → ожидаемое значение |
-| `events` | array of `string` |  | Типы событий process.* с последнего expect |
-| `memory` | [объект](#schema-teststep-expect-memory) |  |  |
+| `tasks` | array of [object](#schema-teststep-expect-tasks-item) |  |  |
+| `timers` | array of [object](#schema-teststep-expect-timers-item) |  |  |
+| `data` | `object` |  | Path in data → expected value |
+| `events` | array of `string` |  | Types of process.* events since the last expect |
+| `memory` | [object](#schema-teststep-expect-memory) |  |  |
 | `outcome` | `string` |  |  |
 | `status` | `running` \| `suspended` \| `completed` \| `failed` \| `cancelled` |  |  |
 | `error` | `string` |  |  |
@@ -742,7 +744,7 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `testStep.expect.tasks[]` { #schema-teststep-expect-tasks-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `step` | `string` |  |  |
 | `status` | `string` |  |  |
@@ -751,7 +753,7 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `testStep.expect.timers[]` { #schema-teststep-expect-timers-item }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `id` | `string` |  |  |
 | `at` | `string` |  |  |
@@ -759,15 +761,15 @@ _Раздел генерируется из кода — не правьте е�
 
 ### `testStep.expect.memory` { #schema-teststep-expect-memory }
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
 | `recalled` | array of `string` |  |  |
 | `remembered` | array of `object` |  |  |
 <!-- /generated:schema-test -->
 
-## См. также
+## See also
 
-- [Процессы](../processes/index.md)
-- [Выражения](../processes/expressions.md)
-- [Тесты пакета](../processes/package-tests.md)
-- [Пакеты каталога](../control-plane/catalog-packages.md#processes)
+- [Processes](../processes/index.md)
+- [Expressions](../processes/expressions.md)
+- [Package tests](../processes/package-tests.md)
+- [Catalog packages](../control-plane/catalog-packages.md#processes)

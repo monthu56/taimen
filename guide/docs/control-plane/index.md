@@ -1,159 +1,160 @@
+
 # Control Plane
 
-Control Plane — координационное ядро платформы Taimen: он хранит
-авторитетное состояние работы (задачи, цели, claims, runs, approvals,
-артефакты) и журнал событий, по которому люди, агенты и сервисы
-синхронизируются между собой. Раздел адресован архитекторам, разработчикам
-интеграций и операторам, которым нужно понимать, как ядро устроено и как
-с ним работать через HTTP API.
+Control Plane is the coordination core of the Taimen platform: it stores the
+authoritative state of work (tasks, goals, claims, runs, approvals,
+artifacts) and the event log that people, agents, and services use to
+stay in sync with each other. This section is for architects, integration
+developers, and operators who need to understand how the core is built and how
+to work with it through the HTTP API.
 
-!!! note "Чего Control Plane не делает"
-    Ядро **не исполняет** LLM- или агентную логику. Оно отвечает на вопросы
-    «что нужно сделать», «кто сейчас этим владеет», «что произошло» и «можно
-    ли это делать». Исполнение — задача харнессов и runner'ов
-    (см. [Агенты и runner](../runner/index.md)).
+!!! note "What Control Plane does not do"
+    The core **does not execute** LLM or agent logic. It answers the questions
+    "what needs to be done", "who owns it right now", "what happened", and "is
+    this allowed". Execution is the job of harnesses and runners
+    (see [Agents and runner](../runner/index.md)).
 
-## Место в платформе
+## Place in the platform
 
 ```mermaid
 flowchart LR
-    subgraph clients["Клиенты"]
-        H["Человек<br/>(рабочее место, MCP-плагин)"]
-        A["Агент<br/>(runner, харнесс)"]
-        S["Сервисы<br/>(вертикальные пакеты, процессы)"]
+    subgraph clients["Clients"]
+        H["Human<br/>(workplace, MCP plugin)"]
+        A["Agent<br/>(runner, harness)"]
+        S["Services<br/>(vertical packages, processes)"]
     end
     subgraph cp["Control Plane"]
         API["control-plane-api<br/>HTTP /api/v1"]
-        W["control-plane-worker<br/>фоновые циклы"]
-        CA["context-adapter<br/>журнал → память"]
-        DB[("PostgreSQL<br/>состояние + журнал")]
+        W["control-plane-worker<br/>background loops"]
+        CA["context-adapter<br/>log → memory"]
+        DB[("PostgreSQL<br/>state + log")]
     end
-    IAM["IAM<br/>(токены, bindings)"]
+    IAM["IAM<br/>(tokens, bindings)"]
     MEM["Memory Service"]
 
     H & A & S -->|Bearer token| API
     API --> DB
     W --> DB
     CA --> DB
-    CA -->|наблюдения| MEM
+    CA -->|observations| MEM
     API -->|/context, knowledge| MEM
-    API -.->|JWKS, проверка токенов| IAM
+    API -.->|JWKS, token verification| IAM
 ```
 
-Ключевой принцип: **непрерывность работы живёт не в разговоре с моделью, а в
-связке** `principal + workspace + task + run + checkpoints + artifacts + events`.
-Агент может упасть, смениться или передать работу человеку — всё, что нужно
-для продолжения, остаётся в ядре.
+The key principle: **continuity of work lives not in the conversation with a model but in the
+bundle** `principal + workspace + task + run + checkpoints + artifacts + events`.
+An agent can crash, be replaced, or hand the work over to a human — everything needed
+to continue stays in the core.
 
-## Основные сущности
+## Core entities
 
-| Сущность | Что это | Статья |
+| Entity | What it is | Article |
 |---|---|---|
-| Tenant | Изолированное пространство данных; всё остальное принадлежит ровно одному tenant'у | [Модель работы](work-model.md) |
-| Principal | Identity участника: `human`, `agent` или `service`. Человек и агент равноправны в протоколе | [Авторизация и права](authorization.md) |
-| Workspace | Узел иерархии, в которой живёт работа; бывает проектом, командой, потоком работ | [Модель работы](work-model.md) |
-| Project | Профиль проекта, привязанный к workspace один-к-одному | [Модель работы](work-model.md) |
-| Task (work item) | Единица работы с типом, статусом, полями, датами, связями | [Модель работы](work-model.md) |
-| Task type | Версионируемый реестр: схема полей, lifecycle, исходы approval | [Типы задач и статусы](task-types.md) |
-| Goal | Желаемое состояние, которому служит работа | [Цели, приёмка и evidence](goals-and-evidence.md) |
-| Session | Живое подключение клиента (lease + heartbeat) | [Исполнение](execution.md) |
-| Claim | Эксклюзивное арендованное владение задачей с fencing token | [Исполнение](execution.md) |
-| Run | Одна попытка исполнения задачи под claim | [Исполнение](execution.md) |
-| Approval | Решение человека или агента; gate блокирует задачу до решения | [Approvals](approvals.md) |
-| Artifact | Append-only ссылка на результат работы | [Артефакты и комментарии](artifacts.md) |
-| Comment | Реплика в треде задачи с историей правок | [Артефакты и комментарии](artifacts.md) |
-| Event | Запись append-only журнала, основа аудита и синхронизации | [События](events.md) |
+| Tenant | An isolated data space; everything else belongs to exactly one tenant | [Work model](work-model.md) |
+| Principal | The identity of a participant: `human`, `agent`, or `service`. Humans and agents are equal in the protocol | [Authorization and permissions](authorization.md) |
+| Workspace | A node of the hierarchy where work lives; it can be a project, a team, a work stream | [Work model](work-model.md) |
+| Project | A project profile bound one-to-one to a workspace | [Work model](work-model.md) |
+| Task (work item) | A unit of work with a type, status, fields, dates, relations | [Work model](work-model.md) |
+| Task type | A versioned registry: field schema, lifecycle, approval outcomes | [Task types and statuses](task-types.md) |
+| Goal | A desired state that the work serves | [Goals, acceptance, and evidence](goals-and-evidence.md) |
+| Session | A live client connection (lease + heartbeat) | [Execution](execution.md) |
+| Claim | Exclusive leased ownership of a task with a fencing token | [Execution](execution.md) |
+| Run | One attempt to execute a task under a claim | [Execution](execution.md) |
+| Approval | A decision by a human or an agent; a gate blocks the task until the decision | [Approvals](approvals.md) |
+| Artifact | An append-only reference to a work result | [Artifacts and comments](artifacts.md) |
+| Comment | A message in a task thread with edit history | [Artifacts and comments](artifacts.md) |
+| Event | An append-only log record, the basis for audit and synchronization | [Events](events.md) |
 
-Различие сущностей исполнения стоит запомнить сразу:
+Remember the difference between the execution entities right away:
 
 ```text
-Principal = identity             (кто)
-Session   = live-контекст        (живое подключение, lease + heartbeat)
-Claim     = exclusive ownership  (арендованное владение задачей, fencing token)
-Run       = execution attempt    (конкретная попытка; результат, артефакты)
+Principal = identity             (who)
+Session   = live context         (live connection, lease + heartbeat)
+Claim     = exclusive ownership  (leased ownership of a task, fencing token)
+Run       = execution attempt    (a specific attempt; result, artifacts)
 ```
 
-## Процессы
+## Processes
 
-Один образ `control-plane` запускается тремя процессами. В корневом
-`compose.yml` суперпроекта они входят в профиль `core`.
+A single `control-plane` image runs as three processes. In the superproject's root
+`compose.yml` they belong to the `core` profile.
 
-| Сервис compose | Команда | Назначение |
+| Compose service | Command | Purpose |
 |---|---|---|
-| `control-plane-api` | `alembic upgrade head && uvicorn control_plane.main:app --port 8000` | HTTP API `/api/v1`, WebSocket журнала, `/health/*`, `/metrics`, `/openapi.json`, `/docs`. Применяет миграции при старте |
-| `control-plane-worker` | `python -m control_plane.worker` | Фоновые циклы: доставка outbox, исполнение исходов approval, sweep истёкших sessions/claims, возврат просроченных lease вызовов skill, очистка ключей идемпотентности |
-| `context-adapter` | `python -m control_plane.worker.context_adapter` | Переносит журнал событий в Memory Service как наблюдения: per-tenant курсор, at-least-once, парковка «ядовитых» пакетов |
-| `control-plane-db` | `postgres:16-alpine` | Единственный источник истины: состояние, журнал, outbox, idempotency |
+| `control-plane-api` | `alembic upgrade head && uvicorn control_plane.main:app --port 8000` | HTTP API `/api/v1`, event log WebSocket, `/health/*`, `/metrics`, `/openapi.json`, `/docs`. Applies migrations on startup |
+| `control-plane-worker` | `python -m control_plane.worker` | Background loops: outbox delivery, execution of approval outcomes, sweep of expired sessions/claims, return of expired skill invocation leases, cleanup of idempotency keys |
+| `context-adapter` | `python -m control_plane.worker.context_adapter` | Moves the event log into Memory Service as observations: per-tenant cursor, at-least-once, parking of "poison" batches |
+| `control-plane-db` | `postgres:16-alpine` | The single source of truth: state, log, outbox, idempotency |
 
 ### control-plane-api
 
-Обработчик маршрута делает ровно четыре вещи: валидирует HTTP-контракт,
-получает контекст аутентификации из credentials, вызывает команду или запрос
-прикладного слоя и превращает результат в HTTP-ответ. Бизнес-правил в
-обработчиках нет; команды повторно проверяют права сами.
+A route handler does exactly four things: it validates the HTTP contract,
+obtains the authentication context from credentials, calls a command or query
+of the application layer, and turns the result into an HTTP response. There are no
+business rules in handlers; commands re-check permissions themselves.
 
-Каждая мутирующая команда выполняется **в одной транзакции** PostgreSQL:
-состояние меняется в таблицах, в `events` пишется событие, в `outbox` —
-запись для доставки, `pg_notify` будит подписчиков только после commit.
-Откат не оставляет ничего — ни состояния, ни события.
+Every mutating command runs **in a single PostgreSQL transaction**:
+state changes in the tables, an event is written to `events`, a delivery record
+to `outbox`, and `pg_notify` wakes subscribers only after commit.
+A rollback leaves nothing behind — neither state nor event.
 
 ### control-plane-worker
 
-Цикл воркера (интервал `CP_WORKER_POLL_INTERVAL_SECONDS`, по умолчанию 1 с)
-выполняет подзадачи, каждую в своей транзакции:
+The worker loop (interval `CP_WORKER_POLL_INTERVAL_SECONDS`, 1 s by default)
+performs subtasks, each in its own transaction:
 
-1. **outbox** — батчи по `FOR UPDATE SKIP LOCKED`, ограниченные повторы с
-   экспоненциальным backoff (`CP_OUTBOX_*`); в базовой поставке целевая точка
-   доставки — структурированный лог;
-2. **исходы approval** — исполнение действий, объявленных типом задачи
-   (см. [Approvals](approvals.md));
-3. **sweep sessions** и **sweep claims** — перевод истёкших аренд в `stale`
-   с событиями `session.expired` / `claim.expired`;
-4. **lease вызовов skill** — возврат просроченных вызовов в очередь;
-5. **GC идемпотентности** — удаление истёкших ключей.
+1. **outbox** — batches with `FOR UPDATE SKIP LOCKED`, bounded retries with
+   exponential backoff (`CP_OUTBOX_*`); in the base delivery the delivery target
+   is a structured log;
+2. **approval outcomes** — execution of the actions declared by the task type
+   (see [Approvals](approvals.md));
+3. **sweep sessions** and **sweep claims** — moving expired leases to `stale`
+   with `session.expired` / `claim.expired` events;
+4. **skill invocation leases** — returning expired invocations to the queue;
+5. **idempotency GC** — deleting expired keys.
 
-!!! tip "Воркер — оптимизация, а не условие корректности"
-    Истёкшие claims реквизируются и самой командой захвата, а просроченные
-    аренды отклоняются лениво любой командой, которая их встретила. Остановка
-    воркера замедляет сходимость, но не ломает инварианты. Исключения —
-    исходы approval и доставка outbox: без воркера они не исполняются.
+!!! tip "The worker is an optimization, not a correctness requirement"
+    Expired claims are also reclaimed by the claim command itself, and expired
+    leases are rejected lazily by any command that encounters them. Stopping
+    the worker slows convergence but does not break invariants. The exceptions are
+    approval outcomes and outbox delivery: without the worker they are not executed.
 
-Несколько воркеров могут работать параллельно: все выборки идут с
+Several workers can run in parallel: all selects use
 `SKIP LOCKED`.
 
 ### context-adapter
 
-Отдельный процесс-одиночка (второй экземпляр ждёт advisory lock, а не
-потребляет повторно). Читает журнал по надёжному курсору, переводит события
-в наблюдения по явному whitelist полей и отправляет их в память tenant'а;
-курсор двигается только после подтверждения доставки. Сбой одного tenant'а
-паркует только его строку. Недоступность памяти не влияет на API и воркер —
-события просто накапливаются. Подробнее — в [Контекст задачи и память](context.md).
+A separate singleton process (a second instance waits on an advisory lock rather than
+consuming again). It reads the log by a durable cursor, turns events
+into observations using an explicit field whitelist, and sends them to the tenant's memory;
+the cursor advances only after delivery is confirmed. A failure of one tenant
+parks only its row. Memory unavailability does not affect the API or the worker —
+events simply accumulate. See [Task context and memory](context.md) for details.
 
-## Как устроен вызов
+## How a call works
 
-Все endpoint'ы — под `/api/v1`, поля в JSON — `camelCase`. Полная схема
-доступна по `GET /openapi.json`, интерактивная — `/docs`.
+All endpoints are under `/api/v1`, JSON fields are `camelCase`. The full schema
+is available at `GET /openapi.json`, the interactive one at `/docs`.
 
 ```bash
 export CP=https://platform.example.com/api/v1
-export TOKEN=<access-token>   # см. IAM: токены, audiences, scopes
+export TOKEN=<access-token>   # see IAM: tokens, audiences, scopes
 
 curl -s "$CP/tasks?limit=5" -H "Authorization: Bearer $TOKEN"
 ```
 
-Общие правила протокола, на которые опираются все статьи раздела:
+General protocol rules that all articles of this section rely on:
 
-| Механизм | Как работает |
+| Mechanism | How it works |
 |---|---|
-| Аутентификация | `Authorization: Bearer <token>`; actor всегда берётся из credential, `actorId` в теле не принимается |
-| Оптимистическая конкурентность | `GET` отдаёт `ETag: "<entity>-<version>"`; `PATCH` и ряд action требуют `If-Match`. Нет заголовка — `428 if_match_required`, несовпадение — `409 version_conflict`, мусор — `400 invalid_if_match` |
-| Идемпотентность | Заголовок `Idempotency-Key` на создающих и action-запросах: повтор возвращает сохранённый ответ с `Idempotency-Replayed: true`; тот же ключ с другим телом — `409 idempotency_key_reused` |
-| Пагинация | `?limit=` (по умолчанию 50, максимум 200, иначе `422 invalid_limit`) и `?cursor=`; ответ `{"items": [...], "nextCursor": ...}` |
-| Строгие query-параметры | Неизвестный параметр — `400 invalid_request` с `details.errors[].loc = "query.<имя>"`; фильтр никогда не игнорируется молча |
-| Корреляция | `X-Request-ID` (echo в ответе и ошибках), `X-Correlation-ID` (попадает в события), `X-Run-Id` (trace-корреляция, не доменный Run) |
+| Authentication | `Authorization: Bearer <token>`; the actor is always taken from the credential, `actorId` in the body is not accepted |
+| Optimistic concurrency | `GET` returns `ETag: "<entity>-<version>"`; `PATCH` and a number of actions require `If-Match`. Missing header — `428 if_match_required`, mismatch — `409 version_conflict`, garbage — `400 invalid_if_match` |
+| Idempotency | The `Idempotency-Key` header on creating and action requests: a retry returns the stored response with `Idempotency-Replayed: true`; the same key with a different body — `409 idempotency_key_reused` |
+| Pagination | `?limit=` (50 by default, maximum 200, otherwise `422 invalid_limit`) and `?cursor=`; response `{"items": [...], "nextCursor": ...}` |
+| Strict query parameters | An unknown parameter — `400 invalid_request` with `details.errors[].loc = "query.<name>"`; a filter is never silently ignored |
+| Correlation | `X-Request-ID` (echoed in the response and errors), `X-Correlation-ID` (goes into events), `X-Run-Id` (trace correlation, not the domain Run) |
 
-Формат ошибки единый:
+The error format is uniform:
 
 ```json
 {
@@ -166,56 +167,56 @@ curl -s "$CP/tasks?limit=5" -H "Authorization: Bearer $TOKEN"
 }
 ```
 
-Клиенту следует опираться на `error.code`, а не на текст `message`. Полный
-перечень кодов — в [Справочнике ошибок](../reference/errors.md).
+A client should rely on `error.code`, not on the `message` text. The full
+list of codes is in the [Error reference](../reference/errors.md).
 
-## Типичный цикл работы
+## Typical work cycle
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Харнесс / runner
+    participant C as Harness / runner
     participant CP as Control Plane
     C->>CP: POST /sessions (lease)
     C->>CP: GET /work/available
     C->>CP: POST /tasks/{id}:claim {sessionId}
     CP-->>C: claim (id, fencingToken, expiresAt)
     C->>CP: POST /tasks/{id}:start-run {claimId, fencingToken}
-    loop работа
+    loop work
         C->>CP: POST /claims/{id}:heartbeat
         C->>CP: POST /runs/{id}/checkpoints, /actions
     end
     C->>CP: POST /artifacts {runId, type, ...}
     C->>CP: POST /runs/{id}:succeed {completeTask: true}
-    CP-->>C: run succeeded + task в completionStatus
+    CP-->>C: run succeeded + task in completionStatus
 ```
 
-Подробный разбор каждого шага — в [Исполнении](execution.md); пошаговый
-пример для первого знакомства — в [Первой задаче](../getting-started/first-task.md).
+Each step is covered in detail in [Execution](execution.md); a step-by-step
+example for a first look is in [First task](../getting-started/first-task.md).
 
-## Инварианты, которые держит база
+## Invariants enforced by the database
 
-Корректность не зависит от аккуратности клиента или кода: ключевые правила
-закреплены в PostgreSQL.
+Correctness does not depend on the carefulness of the client or the code: the key rules
+are enforced in PostgreSQL.
 
-| Механизм | Что защищает |
+| Mechanism | What it protects |
 |---|---|
-| `SELECT … FOR UPDATE` строки задачи | Критическая секция claim / update / complete |
-| Частичный уникальный индекс на `task_claims(task_id) WHERE status='active'` | Не больше одного активного claim на задачу |
-| Частичный уникальный индекс на `runs(task_id) WHERE status='running'` | Не больше одного запущенного run на задачу |
-| `tasks.version` + `If-Match` | Потерянные обновления |
-| `tasks.claim_epoch` = fencing token | Запись «проснувшегося» старого владельца |
-| Триггеры неизменяемости | Версии типов задач и шаблонов, append-only журнал, история правок комментариев |
-| Advisory lock на tenant + рекурсивный CTE | Ацикличность дерева workspaces и графа зависимостей |
+| `SELECT … FOR UPDATE` on the task row | The claim / update / complete critical section |
+| Partial unique index on `task_claims(task_id) WHERE status='active'` | At most one active claim per task |
+| Partial unique index on `runs(task_id) WHERE status='running'` | At most one running run per task |
+| `tasks.version` + `If-Match` | Lost updates |
+| `tasks.claim_epoch` = fencing token | Writes by a "woken up" former owner |
+| Immutability triggers | Versions of task types and templates, the append-only log, comment edit history |
+| Advisory lock per tenant + recursive CTE | Acyclicity of the workspace tree and the dependency graph |
 
-Глобальный порядок блокировок — **session → task → claim → run**; он
-исключает взаимные блокировки между командами.
+The global lock order is **session → task → claim → run**; it
+rules out deadlocks between commands.
 
-## См. также
+## See also
 
-- [Модель работы](work-model.md) — tenant, workspace, проект, задача.
-- [Исполнение — claims и runs](execution.md) — протокол владения и попыток.
-- [Харнесс-протокол](harness-protocol.md) — как клиенты подключаются к ядру.
-- [API](api.md) и [Конфигурация](configuration.md) — справочные сведения.
-- [Авторизация и права](authorization.md) — permissions, eligibility, PDP.
-- [Архитектура платформы](../overview/architecture.md).
+- [Work model](work-model.md) — tenant, workspace, project, task.
+- [Execution — claims and runs](execution.md) — the ownership and attempt protocol.
+- [Harness protocol](harness-protocol.md) — how clients connect to the core.
+- [API](api.md) and [Configuration](configuration.md) — reference information.
+- [Authorization and permissions](authorization.md) — permissions, eligibility, PDP.
+- [Platform architecture](../overview/architecture.md).

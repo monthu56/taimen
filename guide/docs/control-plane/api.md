@@ -1,65 +1,66 @@
+
 # API
 
-Справочник HTTP API Control Plane. Все endpoints живут под `/api/v1`, поля
-тела и ответа в camelCase. Статья описывает общие правила (аутентификация,
-заголовки, пагинация, идемпотентность, формат ошибок) и перечисляет каждый
-endpoint с правом и назначением, сгруппировав их по ресурсам. Справочник для
-разработчиков интеграций и харнессов.
+Reference for the Control Plane HTTP API. All endpoints live under `/api/v1`,
+and request and response body fields use camelCase. This page describes the
+common rules (authentication, headers, pagination, idempotency, error format)
+and lists every endpoint with its permission and purpose, grouped by resource.
+It is a reference for developers of integrations and harnesses.
 
-!!! tip "Машинная схема"
-    Полная схема OpenAPI отдаётся самим сервисом: `GET /openapi.json`,
-    Swagger UI — `GET /docs`. Справочник ниже составлен по той же схеме и по
-    коду команд, которые проверяют права.
+!!! tip "Machine-readable schema"
+    The service itself serves the full OpenAPI schema: `GET /openapi.json`,
+    Swagger UI at `GET /docs`. The reference below is built from the same schema
+    and from the command code that checks permissions.
 
-## Базовый адрес
+## Base address
 
-| Где | Адрес |
+| Where | Address |
 |---|---|
-| Внутри сети compose | `http://control-plane-api:8000` |
-| С хоста (по умолчанию только loopback) | `http://127.0.0.1:${CP_HOST_PORT:-18000}` |
-| Снаружи через периметр | `https://platform.example.com` (маршруты `/api/v1/*`, `/health/*`, `/metrics`, `/docs*`, `/openapi.json`) |
+| Inside the compose network | `http://control-plane-api:8000` |
+| From the host (loopback only by default) | `http://127.0.0.1:${CP_HOST_PORT:-18000}` |
+| From outside through the edge | `https://platform.example.com` (routes `/api/v1/*`, `/health/*`, `/metrics`, `/docs*`, `/openapi.json`) |
 
-Схема периметра описана в статье [Периметр и TLS](../operations/edge-and-tls.md).
+The edge layout is described in [Edge and TLS](../operations/edge-and-tls.md).
 
-## Аутентификация
+## Authentication
 
 ```http
 Authorization: Bearer <access-token IAM audience control-plane>
 ```
 
-- IAM access token: права берутся из привязки identity к principal и
-  сужаются scopes токена (`control-plane:read`, `control-plane:write`,
-  `control-plane:admin`).
-- Legacy-ключ `cp_<prefix>_<secret>` принимается только при
+- IAM access token: permissions come from the binding of the identity to a
+  principal and are narrowed by the token scopes (`control-plane:read`,
+  `control-plane:write`, `control-plane:admin`).
+- A legacy key `cp_<prefix>_<secret>` is accepted only when
   `CP_LEGACY_API_KEYS_ENABLED=true`.
-- `POST /api/v1/bootstrap` принимает только `Bearer <CP_BOOTSTRAP_TOKEN>`.
-- `/health/live`, `/health/ready` и `/metrics` открыты без аутентификации.
+- `POST /api/v1/bootstrap` accepts only `Bearer <CP_BOOTSTRAP_TOKEN>`.
+- `/health/live`, `/health/ready`, and `/metrics` are open without authentication.
 
-Actor всегда вычисляется из credential. Подробности — в статье
-[Авторизация и права](authorization.md).
+The actor is always derived from the credential. Details are in
+[Authorization and permissions](authorization.md).
 
-## Заголовки протокола
+## Protocol headers
 
-| Заголовок | Направление | Семантика |
+| Header | Direction | Semantics |
 |---|---|---|
-| `Idempotency-Key` | запрос, мутации | идемпотентное выполнение, см. раздел [Идемпотентность](#idempotency) |
-| `Idempotency-Replayed: true` | ответ | ответ взят из сохранённого, команда не выполнялась повторно |
-| `If-Match: "<entity>-<version>"` | запрос | оптимистичная блокировка: PATCH задачи, workspace, типа workspace, проекта, роли, скилла, цели и комментария; `:complete` задачи; `:transition` проекта; `config-revisions/{n}:activate` |
-| `ETag` | ответ | `"<entity>-<version>"` у GET задачи (`task-`), workspace (`workspace-`), типа workspace (`workspace_type-`), проекта (`project-`), роли (`role-`), скилла (`skill-<rowVersion>`), цели (`goal-`), комментария (`comment-`); у `GET /tools` — `viewHash` |
-| `If-None-Match` | запрос | для `GET /tools`: `304`, пока ревизии каталога и политики не изменились |
-| `X-Request-ID` | оба | принимается или генерируется; возвращается в ответе и в `error.requestId` |
-| `X-Correlation-ID` | запрос | попадает в `correlationId` событий |
-| `X-Run-Id` | оба | сквозной trace-коррелятор (`^[A-Za-z0-9._:-]{1,128}$`, иначе генерируется); пишется в `traceRunId` событий, outbox, логи и заголовок к memory-service. Это **не** сущность Run |
+| `Idempotency-Key` | request, mutations | idempotent execution, see [Idempotency](#idempotency) |
+| `Idempotency-Replayed: true` | response | the response comes from storage; the command was not executed again |
+| `If-Match: "<entity>-<version>"` | request | optimistic locking: PATCH of a task, workspace, workspace type, project, role, skill, goal, and comment; task `:complete`; project `:transition`; `config-revisions/{n}:activate` |
+| `ETag` | response | `"<entity>-<version>"` on GET of a task (`task-`), workspace (`workspace-`), workspace type (`workspace_type-`), project (`project-`), role (`role-`), skill (`skill-<rowVersion>`), goal (`goal-`), comment (`comment-`); on `GET /tools` it is the `viewHash` |
+| `If-None-Match` | request | for `GET /tools`: `304` while the catalog and policy revisions are unchanged |
+| `X-Request-ID` | both | accepted or generated; returned in the response and in `error.requestId` |
+| `X-Correlation-ID` | request | goes into the `correlationId` of events |
+| `X-Run-Id` | both | end-to-end trace correlator (`^[A-Za-z0-9._:-]{1,128}$`, otherwise generated); written to the `traceRunId` of events, the outbox, logs, and the header sent to memory-service. It is **not** the Run entity |
 
-Ошибки `If-Match`:
+`If-Match` errors:
 
-| Ситуация | Ответ |
+| Situation | Response |
 |---|---|
-| заголовка нет | `428 if_match_required` |
-| заголовок нельзя разобрать | `400 invalid_if_match` |
-| версия не совпала | `409 version_conflict`, в `details.currentVersion` — текущая версия |
+| header missing | `428 if_match_required` |
+| header cannot be parsed | `400 invalid_if_match` |
+| version mismatch | `409 version_conflict`, `details.currentVersion` holds the current version |
 
-## Пагинация
+## Pagination
 
 ```text
 GET /api/v1/tasks?limit=50&cursor=<opaque>
@@ -69,49 +70,50 @@ GET /api/v1/tasks?limit=50&cursor=<opaque>
 {"items": [ ... ], "nextCursor": "..."}
 ```
 
-- `limit`: по умолчанию 50, максимум 200. Значение вне диапазона даёт
+- `limit`: 50 by default, 200 maximum. A value out of range returns
   `422 invalid_limit`.
-- Курсор непрозрачен. Чужой курсор или курсор от другого порядка сортировки
-  даёт `422 invalid_cursor`.
-- Списки сущностей сортируются стабильно по `(created_at, id)`, новые первыми.
-- Журналы прогона (`/runs/{id}/checkpoints`, `/runs/{id}/actions`) идут по
-  `seq`, старые первыми, курсор привязан к прогону. Без `limit` и `cursor`
-  журнал отдаётся целиком одной страницей (`nextCursor: null`).
-- Комментарии задачи — единственная сущностная выборка от старых к новым. Её
-  курсор имеет собственный формат.
-- `GET /tasks?sort=startDate|dueDate`: ближайшие первыми, задачи без даты — в
-  конце. Неизвестный `sort` даёт `422 invalid_sort`.
-- `GET /work/available` может вернуть страницу короче `limit` при непустом
+- The cursor is opaque. A foreign cursor or a cursor from a different sort
+  order returns `422 invalid_cursor`.
+- Entity lists are sorted stably by `(created_at, id)`, newest first.
+- Run logs (`/runs/{id}/checkpoints`, `/runs/{id}/actions`) are ordered by
+  `seq`, oldest first, and the cursor is bound to the run. Without `limit` and
+  `cursor` the whole log is returned as a single page (`nextCursor: null`).
+- Task comments are the only entity listing ordered from oldest to newest. Its
+  cursor has its own format.
+- `GET /tasks?sort=startDate|dueDate`: nearest first, tasks without a date at
+  the end. An unknown `sort` returns `422 invalid_sort`.
+- `GET /work/available` can return a page shorter than `limit` with a non-empty
   `nextCursor`.
 
-### События
+### Events
 
-`GET /events` — отдельный контракт:
+`GET /events` has its own contract:
 
-| Параметр | Смысл |
+| Parameter | Meaning |
 |---|---|
-| `cursor` | непрозрачный курсор `ec1_…` |
-| `after` | целочисленный `sequence` старого формата; адаптируется сервером |
-| `tail=N` | последние N стабильных событий |
-| `entityType`, `entityId` | фильтр по сущности |
-| `types` | префиксы типа событий, до 20 |
-| `workspaceId` | поддерево workspace; `events.read` проверяется на нём |
-| `limit` | размер страницы |
+| `cursor` | opaque cursor `ec1_…` |
+| `after` | integer `sequence` in the old format; the server adapts it |
+| `tail=N` | the last N stable events |
+| `entityType`, `entityId` | filter by entity |
+| `types` | event type prefixes, up to 20 |
+| `workspaceId` | workspace subtree; `events.read` is checked on it |
+| `limit` | page size |
 
-Ответ: `{items[], nextCursor, hasMore}`, у каждого события есть своё поле
-`cursor`. При пустой странице `nextCursor` повторяет переданный.
-Малформированный курсор даёт `422 invalid_cursor`, курсор будущей версии —
+Response: `{items[], nextCursor, hasMore}`; each event has its own `cursor`
+field. On an empty page `nextCursor` repeats the one you passed. A malformed
+cursor returns `422 invalid_cursor`, a cursor from a future version returns
 `422 unsupported_cursor_version`.
 
-WebSocket: `WS /api/v1/events/ws?after=<cursor>`, право `events.read`. Коды
-закрытия: `4401` — нет credentials, `4403` — нет права, `4404` — нет workspace
-фильтра, `4400` — плохой курсор или фильтр, `4503` — PDP недоступен. Фильтры
-и SDK потребителя — в статье [Подписки на события](event-subscriptions.md).
+WebSocket: `WS /api/v1/events/ws?after=<cursor>`, permission `events.read`.
+Close codes: `4401` — no credentials, `4403` — no permission, `4404` — no
+workspace for the filter, `4400` — bad cursor or filter, `4503` — PDP
+unavailable. Filters and the consumer SDK are covered in
+[Event subscriptions](event-subscriptions.md).
 
-## Неизвестные query-параметры
+## Unknown query parameters
 
-Сервер не игнорирует query-параметры молча. Параметр, которого endpoint не
-объявляет, даёт `400 invalid_request`, и выборка не выполняется:
+The server does not silently ignore query parameters. A parameter the endpoint
+does not declare returns `400 invalid_request`, and the query is not executed:
 
 ```json
 {
@@ -124,40 +126,40 @@ WebSocket: `WS /api/v1/events/ws?after=<cursor>`, право `events.read`. Ко
 }
 ```
 
-Правило действует на всех endpoints `/api/v1`, кроме WebSocket. Не добавляйте
-служебные параметры вроде cache-buster `_=`: они тоже будут отклонены.
-Неизвестные поля в JSON-теле также отклоняются (`extra="forbid"`), кроме тела
-компиляции манифеста.
+The rule applies to all `/api/v1` endpoints except the WebSocket. Do not add
+auxiliary parameters such as a cache-buster `_=`: they are rejected too.
+Unknown fields in a JSON body are also rejected (`extra="forbid"`), except in
+the manifest compilation body.
 
-## Идемпотентность {#idempotency}
+## Idempotency {#idempotency}
 
-Любая мутация (POST-команда или PATCH) принимает заголовок `Idempotency-Key`
-длиной 1–200 символов, иначе `422 invalid_idempotency_key`.
+Any mutation (a POST command or PATCH) accepts an `Idempotency-Key` header of
+1–200 characters, otherwise `422 invalid_idempotency_key`.
 
-| Ситуация | Результат |
+| Situation | Result |
 |---|---|
-| первый запрос | выполняется, ответ сохраняется на `CP_IDEMPOTENCY_TTL_SECONDS` (сутки) |
-| повтор с тем же ключом, методом, путём, телом и principal | сохранённый ответ и `Idempotency-Replayed: true` |
-| тот же ключ с другим телом **или другим principal** | `409 idempotency_key_reused` |
-| параллельный дубль, пока первый не завершился | ждёт до `CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS` (10 с), затем `409 idempotency_in_flight` |
-| исполнитель упал на полпути | незавершённая запись живёт не дольше `CP_IDEMPOTENCY_PENDING_TTL_SECONDS` (60 с) |
+| first request | executed, the response is stored for `CP_IDEMPOTENCY_TTL_SECONDS` (one day) |
+| repeat with the same key, method, path, body, and principal | the stored response and `Idempotency-Replayed: true` |
+| the same key with a different body **or a different principal** | `409 idempotency_key_reused` |
+| parallel duplicate while the first one has not finished | waits up to `CP_IDEMPOTENCY_WAIT_TIMEOUT_SECONDS` (10 s), then `409 idempotency_in_flight` |
+| the executor crashed halfway | the unfinished record lives no longer than `CP_IDEMPOTENCY_PENDING_TTL_SECONDS` (60 s) |
 
-Одноразовые секреты не сохраняются: повтор выпуска API-ключа вернёт
-`key: null`. Для двух команд ключ обязателен: `POST /runs/{id}/control-messages`
-и `POST /runs/{id}/child-handles` (без него `422 idempotency_key_required`).
-Для `:handoff`, `harness-manifest:compile` и `:revoke` дочернего handle ключ
-настоятельно рекомендуется: повтор без него после неоднозначного ответа
-становится новой командой.
+One-time secrets are not stored: repeating an API key issuance returns
+`key: null`. Two commands require the key: `POST /runs/{id}/control-messages`
+and `POST /runs/{id}/child-handles` (without it, `422 idempotency_key_required`).
+For `:handoff`, `harness-manifest:compile`, and `:revoke` of a child handle the
+key is strongly recommended: a repeat without it after an ambiguous response
+becomes a new command.
 
-!!! tip "Правило клиента"
-    Один логический вызов — один ключ на все транспортные повторы. Повтор
-    HTTP-запроса не должен превращаться во вторую бизнес-команду. SDK
-    `control_plane_client` делает это сам.
+!!! tip "Client rule"
+    One logical call, one key for all transport retries. A retried HTTP request
+    must not turn into a second business command. The `control_plane_client`
+    SDK does this for you.
 
-## Формат ошибок {#errors}
+## Error format {#errors}
 
-Единый конверт с честными HTTP-кодами. Ответа `200` с ошибкой внутри не
-бывает.
+A single envelope with honest HTTP codes. There is never a `200` response with
+an error inside.
 
 ```json
 {
@@ -170,116 +172,116 @@ WebSocket: `WS /api/v1/events/ws?after=<cursor>`, право `events.read`. Ко
 }
 ```
 
-Клиенту следует опираться на `code` и `details`, а не на текст `message`.
+Clients should rely on `code` and `details`, not on the `message` text.
 
-| HTTP | Типичные `error.code` |
+| HTTP | Typical `error.code` |
 |---|---|
-| 400 | `invalid_request` (нарушение контракта, в т.ч. неизвестный параметр; `details.errors[].loc`), `invalid_if_match`, `invalid_skill_inputs`, `idempotency_key_required` |
+| 400 | `invalid_request` (contract violation, including an unknown parameter; `details.errors[].loc`), `invalid_if_match`, `invalid_skill_inputs`, `idempotency_key_required` |
 | 401 | `invalid_credentials` |
 | 403 | `permission_denied` (`details.required`), `principal_not_active`, `delegation_required`, `claim_holder_mismatch`, `session_owner_mismatch`, `bootstrap_disabled`, `permission_escalation`, `not_eligible`, `run_holder_mismatch`, `tool_not_authorized`, `child_grant_exceeded`, `skill_permission_denied`, `skill_side_effect_not_authorized`, `run_owner_mismatch`, `run_id_required`, `scope_not_granted` |
-| 404 | `not_found`, `tool_not_found` (объект чужого tenant'а тоже даёт 404: существование не раскрывается) |
-| 409 | `version_conflict`, `stale_claim`, `task_already_claimed`, `task_claimed`, `session_expired`, `session_not_active`, `claim_expired`, `claim_not_active`, `claim_not_expired`, `idempotency_key_reused`, `idempotency_in_flight`, `already_bootstrapped`, `task_already_completed`, `task_not_ready`, `run_already_active`, `run_not_active`, `run_in_progress`, `approval_required`, `approval_already_decided`, `budget_exceeded`, `action_already_finished`, `skill_not_invocable`, `stale_invocation_lease`, `outcome_not_replayable`, `snapshot_stale`, `pack_version_conflict`, `retention_blocked_by_consumer`, конфликты уникальности (`*_exists`, `*_conflict`) |
-| 413 | `request_too_large` — тело больше `CP_MAX_BODY_BYTES` |
-| 422 | доменная валидация: `invalid_*`, `task_not_claimable`, `task_cancelled`, `empty_update`, `dependency_cycle`, `workspace_cycle`, `workspace_archived`, `unsupported_protocol_version`, `server_authoritative_section`, `secret_material_rejected`, `child_grant_exceeds_parent`, `child_result_too_large`, `cursor_must_not_advance`, `workspace_not_root`, `pack_*`, `snapshot_invalid` и др. |
+| 404 | `not_found`, `tool_not_found` (an object of another tenant also returns 404: existence is not disclosed) |
+| 409 | `version_conflict`, `stale_claim`, `task_already_claimed`, `task_claimed`, `session_expired`, `session_not_active`, `claim_expired`, `claim_not_active`, `claim_not_expired`, `idempotency_key_reused`, `idempotency_in_flight`, `already_bootstrapped`, `task_already_completed`, `task_not_ready`, `run_already_active`, `run_not_active`, `run_in_progress`, `approval_required`, `approval_already_decided`, `budget_exceeded`, `action_already_finished`, `skill_not_invocable`, `stale_invocation_lease`, `outcome_not_replayable`, `snapshot_stale`, `pack_version_conflict`, `retention_blocked_by_consumer`, uniqueness conflicts (`*_exists`, `*_conflict`) |
+| 413 | `request_too_large` — body larger than `CP_MAX_BODY_BYTES` |
+| 422 | domain validation: `invalid_*`, `task_not_claimable`, `task_cancelled`, `empty_update`, `dependency_cycle`, `workspace_cycle`, `workspace_archived`, `unsupported_protocol_version`, `server_authoritative_section`, `secret_material_rejected`, `child_grant_exceeds_parent`, `child_result_too_large`, `cursor_must_not_advance`, `workspace_not_root`, `pack_*`, `snapshot_invalid`, and others |
 | 428 | `if_match_required` |
-| 500 | `internal_error` — без стектрейса, подробности в логе по `requestId` |
-| 502 | `memory_unavailable` — memory-service не обработал проксируемый запрос (`details.memoryStatus`, `details.retryable`) |
-| 503 | `policy_unavailable`, `memory_disabled`; readiness — БД недоступна или миграции не применены |
+| 500 | `internal_error` — no stack trace; details are in the log by `requestId` |
+| 502 | `memory_unavailable` — memory-service did not process the proxied request (`details.memoryStatus`, `details.retryable`) |
+| 503 | `policy_unavailable`, `memory_disabled`; readiness — the database is unreachable or migrations are not applied |
 
-Полный реестр кодов всех сервисов — в [Коды ошибок](../reference/errors.md).
+The full registry of codes for all services is in [Error codes](../reference/errors.md).
 
-## Служебные endpoints
+## Service endpoints
 
-| Метод и путь | Аутентификация | Ответ |
+| Method and path | Authentication | Response |
 |---|---|---|
-| `GET /health/live` | нет | `{"status": "alive"}` |
-| `GET /health/ready` | нет | `200 {"status": "ready", "revision": "<alembic>"}`; `503` с `reason: database_unreachable` или `migrations_pending` (`dbRevision`, `headRevision`) |
-| `GET /metrics` | нет | метрики в формате Prometheus: `http_requests_total`, `active_harness_sessions`, `active_claims`, `active_runs`, `context_adapter_*`, `stale_fencing_rejections_total`, `authz_*` и др. |
-| `GET /openapi.json`, `GET /docs` | нет | схема OpenAPI и Swagger UI |
+| `GET /health/live` | none | `{"status": "alive"}` |
+| `GET /health/ready` | none | `200 {"status": "ready", "revision": "<alembic>"}`; `503` with `reason: database_unreachable` or `migrations_pending` (`dbRevision`, `headRevision`) |
+| `GET /metrics` | none | Prometheus metrics: `http_requests_total`, `active_harness_sessions`, `active_claims`, `active_runs`, `context_adapter_*`, `stale_fencing_rejections_total`, `authz_*`, and others |
+| `GET /openapi.json`, `GET /docs` | none | OpenAPI schema and Swagger UI |
 
-!!! warning "`/metrics` открыт"
-    Эндпоинт не аутентифицирован. Закрывайте его на уровне периметра, см.
-    [Мониторинг и здоровье](../operations/monitoring.md).
+!!! warning "`/metrics` is open"
+    The endpoint is not authenticated. Close it at the edge, see
+    [Monitoring and health](../operations/monitoring.md).
 
-## Справочник endpoints
+## Endpoint reference
 
-Колонка «Право» перечисляет permission, которое проверяет сервер. «Владелец»
-означает держателя сессии, claim или прогона. `{ref}` у задачи — это UUID или
+The "Permission" column lists the permission the server checks. "Owner" means
+the holder of the session, claim, or run. `{ref}` for a task is a UUID or a
 `publicId` (`TASK-000123`).
 
 ### Bootstrap
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/bootstrap` | `Bearer <CP_BOOTSTRAP_TOKEN>` | один раз создать tenant, admin-principal, admin API-ключ и (с `iamBinding`) IAM-привязку администратора |
+| POST | `/bootstrap` | `Bearer <CP_BOOTSTRAP_TOKEN>` | create, once, the tenant, the admin principal, the admin API key, and (with `iamBinding`) the administrator's IAM binding |
 
-Тело: `tenantSlug` (`^[a-z0-9][a-z0-9-]*$`, 2–63), `tenantName`,
-`adminDisplayName`, `tenantId?` (UUID tenant'а, общий с IAM),
-`iamBinding? {issuer, iamTenantId, iamPrincipalId}`. Ответ `201`:
-`{tenant, adminPrincipal, apiKey (с полным key), iamBinding}`.
+Body: `tenantSlug` (`^[a-z0-9][a-z0-9-]*$`, 2–63), `tenantName`,
+`adminDisplayName`, `tenantId?` (tenant UUID shared with IAM),
+`iamBinding? {issuer, iamTenantId, iamPrincipalId}`. Response `201`:
+`{tenant, adminPrincipal, apiKey (with the full key), iamBinding}`.
 
-### Principals, ключи, привязки, делегирование
+### Principals, keys, bindings, delegation
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/principals` | `principals.write` | создать principal (`kind`: `human`, `agent`, `service`; `displayName`, `status`, `metadata`) |
-| GET | `/principals` | `principals.read` | список (`?kind=`) |
+| POST | `/principals` | `principals.write` | create a principal (`kind`: `human`, `agent`, `service`; `displayName`, `status`, `metadata`) |
+| GET | `/principals` | `principals.read` | list (`?kind=`) |
 | GET | `/principals/{id}` | `principals.read` | principal |
-| POST | `/principals/{id}/api-keys` | `principals.write` | выпустить legacy-ключ `{permissions, expiresAt?}`; полный ключ — только в этом ответе |
-| POST | `/api-keys/{id}:revoke` | `principals.write` | отозвать ключ |
-| GET | `/principals/{id}/iam-bindings` | `principals.read` | IAM-привязки principal, включая отозванные (без пагинации) |
-| POST | `/principals/{id}/iam-bindings` | `principals.write` | upsert привязки `{issuer, iamTenantId, iamPrincipalId, permissions}`; `201` / `200` |
-| POST | `/iam-bindings/{id}:revoke` | `principals.write` | закрыть вход identity |
-| POST | `/delegations` | `delegations.manage` | делегирование человек → агент |
-| GET | `/delegations` | `delegations.manage` | список |
-| POST | `/delegations/{id}:revoke` | `delegations.manage` | отозвать |
+| POST | `/principals/{id}/api-keys` | `principals.write` | issue a legacy key `{permissions, expiresAt?}`; the full key appears only in this response |
+| POST | `/api-keys/{id}:revoke` | `principals.write` | revoke a key |
+| GET | `/principals/{id}/iam-bindings` | `principals.read` | IAM bindings of the principal, including revoked ones (no pagination) |
+| POST | `/principals/{id}/iam-bindings` | `principals.write` | upsert a binding `{issuer, iamTenantId, iamPrincipalId, permissions}`; `201` / `200` |
+| POST | `/iam-bindings/{id}:revoke` | `principals.write` | close sign-in for the identity |
+| POST | `/delegations` | `delegations.manage` | delegation from a human to an agent |
+| GET | `/delegations` | `delegations.manage` | list |
+| POST | `/delegations/{id}:revoke` | `delegations.manage` | revoke |
 
-### Сессии и харнесс
+### Sessions and harness
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/sessions` | `sessions.open` | открыть сессию; блок `harness`, `onBehalfOf` требует delegation |
-| GET | `/sessions` | `sessions.manage` | список (`?status=`) |
-| GET | `/sessions/{id}` | владелец или `sessions.manage` | сессия |
-| POST | `/sessions/{id}:heartbeat` | владелец или `sessions.manage` | продлить аренду (`ttlSeconds?`) |
-| POST | `/sessions/{id}:close` | владелец или `sessions.manage` | закрыть и снять claims сессии |
-| GET | `/harness/context` | аутентификация | self-контекст харнесса (`?sessionId=`) |
-| GET | `/work/available` | `tasks.read` | доступная работа (`workspaceId`, `includeDescendants`, `projectId`, `includeSubprojects`, `assigneeId`, `assignedToMe`) |
-| GET | `/tools` | `tasks.read` | поиск инструментов (`query`, `runId`); ETag, `If-None-Match` |
-| GET | `/tools/{ref}` | `tasks.read` | инструмент по `uuid`, `name` или `name@version` (`?runId=`); вне политики — `404 tool_not_found` |
+| POST | `/sessions` | `sessions.open` | open a session; `harness` block; `onBehalfOf` requires a delegation |
+| GET | `/sessions` | `sessions.manage` | list (`?status=`) |
+| GET | `/sessions/{id}` | owner or `sessions.manage` | session |
+| POST | `/sessions/{id}:heartbeat` | owner or `sessions.manage` | extend the lease (`ttlSeconds?`) |
+| POST | `/sessions/{id}:close` | owner or `sessions.manage` | close and release the session's claims |
+| GET | `/harness/context` | authentication | harness self-context (`?sessionId=`) |
+| GET | `/work/available` | `tasks.read` | available work (`workspaceId`, `includeDescendants`, `projectId`, `includeSubprojects`, `assigneeId`, `assignedToMe`) |
+| GET | `/tools` | `tasks.read` | tool search (`query`, `runId`); ETag, `If-None-Match` |
+| GET | `/tools/{ref}` | `tasks.read` | tool by `uuid`, `name`, or `name@version` (`?runId=`); outside the policy — `404 tool_not_found` |
 
-Протокол подробно описан в статье [Харнесс-протокол](harness-protocol.md).
+The protocol is described in detail in [Harness protocol](harness-protocol.md).
 
-### Типы задач
+### Task types
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/task-types` | `task_types.manage` | следующая неизменяемая версия ключа (`lifecycleSchema`, `fieldSchema`, `approvalSchema`, `execution`) |
-| GET | `/task-types` | `task_types.read` | список (`?key=&status=`) |
-| GET | `/task-types/{id}` | `task_types.read` | версия типа |
-| POST | `/task-types/{id}:deprecate` | `task_types.manage` | вывести версию из оборота (идемпотентно) |
+| POST | `/task-types` | `task_types.manage` | the next immutable version of a key (`lifecycleSchema`, `fieldSchema`, `approvalSchema`, `execution`) |
+| GET | `/task-types` | `task_types.read` | list (`?key=&status=`) |
+| GET | `/task-types/{id}` | `task_types.read` | type version |
+| POST | `/task-types/{id}:deprecate` | `task_types.manage` | retire a version (idempotent) |
 
-См. [Типы задач и статусы](task-types.md) и [Пакеты каталога](catalog-packages.md).
+See [Task types and statuses](task-types.md) and [Catalog packages](catalog-packages.md).
 
-### Задачи
+### Tasks
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/tasks` | `tasks.write` | создать задачу |
-| GET | `/tasks` | `tasks.read` | список: `status`, `systemStatusCategory`, `typeKey`, `priority`, `ownerId`, `assigneeId`, `workspaceId`, `includeDescendants`, `projectId`, `includeSubprojects`, `startFrom`, `startTo`, `dueFrom`, `dueTo`, `sort` (`createdAt`, `startDate`, `dueDate`), `goalId` |
-| GET | `/tasks/{ref}` | `tasks.read` | задача (+ETag) |
-| PATCH | `/tasks/{ref}` | `tasks.write` | изменить (`If-Match`; при живом claim — `claimId` и `fencingToken`) |
-| GET | `/tasks/{ref}/claimability` | `tasks.read` | можно ли взять и почему нет |
-| GET | `/tasks/{ref}/transitions` | `tasks.read` | куда можно перейти из текущего статуса (`route`: `update` или `complete`) |
-| POST | `/tasks/{ref}:claim` | `tasks.claim` | атомарный claim `{sessionId, ttlSeconds?, intent?}` → fencing token |
-| POST | `/tasks/{ref}:complete` | `tasks.write` | завершить (`If-Match`; при живом claim — `claimId` и `fencingToken`) |
-| POST | `/tasks/{ref}:start-run` | `tasks.claim` | прогон под живым claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` |
-| POST | `/tasks/{ref}/relations` | `tasks.write` | связь `{toTask, type}`: `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`; циклы — `422` |
-| GET | `/tasks/{ref}/relations` | `tasks.read` | связи в обе стороны |
-| DELETE | `/tasks/{ref}/relations/{relationId}` | `tasks.write` | удалить связь |
-| GET | `/tasks/{ref}/requirements` | `tasks.read` | требования (roles, capabilities, skills) |
+| POST | `/tasks` | `tasks.write` | create a task |
+| GET | `/tasks` | `tasks.read` | list: `status`, `systemStatusCategory`, `typeKey`, `priority`, `ownerId`, `assigneeId`, `workspaceId`, `includeDescendants`, `projectId`, `includeSubprojects`, `startFrom`, `startTo`, `dueFrom`, `dueTo`, `sort` (`createdAt`, `startDate`, `dueDate`), `goalId` |
+| GET | `/tasks/{ref}` | `tasks.read` | task (+ETag) |
+| PATCH | `/tasks/{ref}` | `tasks.write` | update (`If-Match`; with a live claim — `claimId` and `fencingToken`) |
+| GET | `/tasks/{ref}/claimability` | `tasks.read` | whether the task can be claimed and why not |
+| GET | `/tasks/{ref}/transitions` | `tasks.read` | where the task can move from the current status (`route`: `update` or `complete`) |
+| POST | `/tasks/{ref}:claim` | `tasks.claim` | atomic claim `{sessionId, ttlSeconds?, intent?}` → fencing token |
+| POST | `/tasks/{ref}:complete` | `tasks.write` | complete (`If-Match`; with a live claim — `claimId` and `fencingToken`) |
+| POST | `/tasks/{ref}:start-run` | `tasks.claim` | run under a live claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` |
+| POST | `/tasks/{ref}/relations` | `tasks.write` | relation `{toTask, type}`: `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`; cycles — `422` |
+| GET | `/tasks/{ref}/relations` | `tasks.read` | relations in both directions |
+| DELETE | `/tasks/{ref}/relations/{relationId}` | `tasks.write` | delete a relation |
+| GET | `/tasks/{ref}/requirements` | `tasks.read` | requirements (roles, capabilities, skills) |
 
-Пример создания задачи:
+Example of creating a task:
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/tasks \
@@ -287,247 +289,247 @@ curl -s -X POST https://platform.example.com/api/v1/tasks \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
-    "title": "Добавить индекс на events(tenant_id, tx_id)",
-    "description": "Запросы журнала упираются в seq scan",
+    "title": "Add an index on events(tenant_id, tx_id)",
+    "description": "Event log queries hit a seq scan",
     "priority": "high",
     "typeKey": "coding-task",
     "workspaceId": "<workspace-id>",
     "requirements": {"skills": ["git.merge@1"]},
-    "acceptance": [{"key": "tests", "kind": "deterministic", "description": "make test проходит"}]
+    "acceptance": [{"key": "tests", "kind": "deterministic", "description": "make test passes"}]
   }'
 ```
 
-Поля `POST /tasks`: `title` (1–500), `description`, `priority` (`critical`,
-`high`, `medium`, `low`; по умолчанию `medium`), `status` (по умолчанию
-`initialStatus` типа), `typeId`, `typeKey`, `typeVersion` (по умолчанию
-системный тип `task`), `ownerId`, `assigneeId`, `workspaceId`, `customFields`
-(проверяются по `fieldSchema` версии типа), `startDate`, `dueDate`,
-`parentTask` (связь `parent` создаётся атомарно), `requirements`, `goalId`,
-`origin` (неизменяем; без него ядро выводит `parent`, `human` или `harness`),
-`acceptance[]`, `evidence[]`. Семантика — в статьях [Модель работы](work-model.md)
-и [Цели, приёмка и evidence](goals-and-evidence.md).
+`POST /tasks` fields: `title` (1–500), `description`, `priority` (`critical`,
+`high`, `medium`, `low`; `medium` by default), `status` (the type's
+`initialStatus` by default), `typeId`, `typeKey`, `typeVersion` (the system
+type `task` by default), `ownerId`, `assigneeId`, `workspaceId`, `customFields`
+(validated against the type version's `fieldSchema`), `startDate`, `dueDate`,
+`parentTask` (the `parent` relation is created atomically), `requirements`,
+`goalId`, `origin` (immutable; without it the core derives `parent`, `human`,
+or `harness`), `acceptance[]`, `evidence[]`. Semantics are covered in
+[Work model](work-model.md) and [Goals, acceptance, and evidence](goals-and-evidence.md).
 
-### Цели
+### Goals
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/goals` | `goals.write` | цель (`title`, `desiredState`, `criteria[]`, `ownerId`, `workspaceId`, `parentGoalId`, `createdFrom`) |
-| GET | `/goals` | `goals.read` | список (`status`, `workspaceId`, `ownerId`, `parentGoalId`) |
-| GET | `/goals/{id}` | `goals.read` | цель (+ETag `goal-<v>`) |
-| PATCH | `/goals/{id}` | `goals.write` | изменить (`If-Match`); `status`: `active`, `achieved`, `abandoned`; цикл — `422 goal_cycle` |
-| GET | `/goals/{id}/work` | `goals.read` + `tasks.read` | задачи цели, новые сверху (`includeSubgoals`, `systemStatusCategory`) |
+| POST | `/goals` | `goals.write` | goal (`title`, `desiredState`, `criteria[]`, `ownerId`, `workspaceId`, `parentGoalId`, `createdFrom`) |
+| GET | `/goals` | `goals.read` | list (`status`, `workspaceId`, `ownerId`, `parentGoalId`) |
+| GET | `/goals/{id}` | `goals.read` | goal (+ETag `goal-<v>`) |
+| PATCH | `/goals/{id}` | `goals.write` | update (`If-Match`); `status`: `active`, `achieved`, `abandoned`; a cycle — `422 goal_cycle` |
+| GET | `/goals/{id}/work` | `goals.read` + `tasks.read` | tasks of the goal, newest first (`includeSubgoals`, `systemStatusCategory`) |
 
-### Комментарии к задаче
+### Task comments
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/tasks/{ref}/comments` | `tasks.write` | добавить `{body, runId?, artifactId?}`; автор — вызывающий |
-| GET | `/tasks/{ref}/comments` | `tasks.read` | тред, от старых к новым |
-| GET | `/tasks/{ref}/comments/{id}` | `tasks.read` | комментарий (+ETag `comment-<v>`) |
-| PATCH | `/tasks/{ref}/comments/{id}` | `tasks.write`, только автор | исправить (`If-Match`); прежний текст — ревизия |
-| GET | `/tasks/{ref}/comments/{id}/revisions` | `tasks.read` | история правок (append-only) |
+| POST | `/tasks/{ref}/comments` | `tasks.write` | add `{body, runId?, artifactId?}`; the author is the caller |
+| GET | `/tasks/{ref}/comments` | `tasks.read` | thread, oldest to newest |
+| GET | `/tasks/{ref}/comments/{id}` | `tasks.read` | comment (+ETag `comment-<v>`) |
+| PATCH | `/tasks/{ref}/comments/{id}` | `tasks.write`, author only | correct (`If-Match`); the previous text becomes a revision |
+| GET | `/tasks/{ref}/comments/{id}/revisions` | `tasks.read` | edit history (append-only) |
 
 ### Claims
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| GET | `/claims` | `tasks.read` | список (`taskId`, `sessionId`, `status`) |
+| GET | `/claims` | `tasks.read` | list (`taskId`, `sessionId`, `status`) |
 | GET | `/claims/{id}` | `tasks.read` | claim |
-| POST | `/claims/{id}:heartbeat` | держатель или `claims.manage` | продлить аренду |
-| POST | `/claims/{id}:release` | держатель или `claims.manage` | освободить; задача → `releaseStatus` типа, если ребро объявлено |
-| POST | `/claims/{id}:reclaim` | `tasks.claim` | перехватить **истёкший** claim (новый token) |
+| POST | `/claims/{id}:heartbeat` | holder or `claims.manage` | extend the lease |
+| POST | `/claims/{id}:release` | holder or `claims.manage` | release; the task moves to the type's `releaseStatus` if the edge is declared |
+| POST | `/claims/{id}:reclaim` | `tasks.claim` | take over an **expired** claim (new token) |
 
-### Прогоны (runs)
+### Runs
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| GET | `/runs` | `tasks.read` | список (`taskId`, `claimId`, `status`) |
-| GET | `/runs/{id}` | `tasks.read` | прогон |
+| GET | `/runs` | `tasks.read` | list (`taskId`, `claimId`, `status`) |
+| GET | `/runs/{id}` | `tasks.read` | run |
 | GET | `/runs/{id}/context` | `tasks.read` | Run Context |
-| POST | `/runs/{id}:succeed` | `tasks.claim`, владелец | успех `{output?, completeTask=true}` |
-| POST | `/runs/{id}:fail` | владелец или `claims.manage` | неудача (задачу не трогает) |
-| POST | `/runs/{id}:cancel` | владелец или `claims.manage` | отмена |
-| POST | `/runs/{id}:suspend` | `tasks.claim`, владелец живого claim | приостановить `{reason, waitingForApprovalId?}` |
-| POST | `/runs/{id}:handoff` | `tasks.claim` | передать другому харнессу (рекомендуется `Idempotency-Key`) |
-| POST | `/runs/{id}:request-cancel` | `tasks.write` или `claims.manage` | кооперативный сигнал отмены |
-| POST | `/runs/{id}/checkpoints` | `tasks.claim`, владелец живого claim | checkpoint `{kind, data}` |
-| GET | `/runs/{id}/checkpoints` | `tasks.read` | checkpoints по `seq` |
-| POST | `/runs/{id}/actions` | `tasks.claim`, владелец живого claim | действие `{action, status, skill?, externalReference?, metadata}`; бюджет → `409 budget_exceeded` |
-| POST | `/runs/{id}/actions/{actionId}:finish` | `tasks.claim` | завершить `started`-действие |
-| GET | `/runs/{id}/actions` | `tasks.read` | журнал действий по `seq` |
-| GET | `/runs/{id}/harness-manifest` | `tasks.read` | манифест (`?version=`) |
-| GET | `/runs/{id}/harness-manifests` | `tasks.read` | история версий |
-| POST | `/runs/{id}/harness-manifest:compile` | `tasks.claim`, владелец живого claim | пересборка: `200` без изменений, `201` новая версия |
-| POST | `/runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | пометка `{kind, summary, data}` |
-| POST | `/runs/{id}/control-messages` | `tasks.write`; `force_cancel` — `claims.manage` | control-сообщение (`Idempotency-Key`, `expectedRunVersion` обязательны) |
-| GET | `/runs/{id}/control-messages` | `tasks.read` | сообщения, курсор `rc1_…` |
-| POST | `/runs/{id}/control-messages/{messageId}:acknowledge` | `tasks.claim`, держатель живого claim | подтвердить `applied`, `rejected` или `superseded` |
-| POST | `/runs/{id}/child-handles` | `tasks.claim` + `tasks.write`, владелец живого claim | запустить дочерний прогон; `201` новый, `200` повтор `correlationId` |
-| GET | `/runs/{id}/child-handles` | `tasks.read` | handles прогона (`?active=true`, курсор `cd1_…`) |
-| GET | `/child-handles/{idOrToken}` | `tasks.read` | статус и результат по id или `ch1_…` |
-| POST | `/child-handles/{id}:revoke` | держатель родительского прогона или `claims.manage` | отозвать `{reason, cancelChild}` |
+| POST | `/runs/{id}:succeed` | `tasks.claim`, owner | success `{output?, completeTask=true}` |
+| POST | `/runs/{id}:fail` | owner or `claims.manage` | failure (does not touch the task) |
+| POST | `/runs/{id}:cancel` | owner or `claims.manage` | cancellation |
+| POST | `/runs/{id}:suspend` | `tasks.claim`, owner of the live claim | suspend `{reason, waitingForApprovalId?}` |
+| POST | `/runs/{id}:handoff` | `tasks.claim` | hand off to another harness (`Idempotency-Key` recommended) |
+| POST | `/runs/{id}:request-cancel` | `tasks.write` or `claims.manage` | cooperative cancellation signal |
+| POST | `/runs/{id}/checkpoints` | `tasks.claim`, owner of the live claim | checkpoint `{kind, data}` |
+| GET | `/runs/{id}/checkpoints` | `tasks.read` | checkpoints by `seq` |
+| POST | `/runs/{id}/actions` | `tasks.claim`, owner of the live claim | action `{action, status, skill?, externalReference?, metadata}`; budget → `409 budget_exceeded` |
+| POST | `/runs/{id}/actions/{actionId}:finish` | `tasks.claim` | finish a `started` action |
+| GET | `/runs/{id}/actions` | `tasks.read` | action log by `seq` |
+| GET | `/runs/{id}/harness-manifest` | `tasks.read` | manifest (`?version=`) |
+| GET | `/runs/{id}/harness-manifests` | `tasks.read` | version history |
+| POST | `/runs/{id}/harness-manifest:compile` | `tasks.claim`, owner of the live claim | recompile: `200` unchanged, `201` new version |
+| POST | `/runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | note `{kind, summary, data}` |
+| POST | `/runs/{id}/control-messages` | `tasks.write`; `force_cancel` — `claims.manage` | control message (`Idempotency-Key` and `expectedRunVersion` are required) |
+| GET | `/runs/{id}/control-messages` | `tasks.read` | messages, cursor `rc1_…` |
+| POST | `/runs/{id}/control-messages/{messageId}:acknowledge` | `tasks.claim`, holder of the live claim | acknowledge `applied`, `rejected`, or `superseded` |
+| POST | `/runs/{id}/child-handles` | `tasks.claim` + `tasks.write`, owner of the live claim | launch a child run; `201` new, `200` repeated `correlationId` |
+| GET | `/runs/{id}/child-handles` | `tasks.read` | handles of the run (`?active=true`, cursor `cd1_…`) |
+| GET | `/child-handles/{idOrToken}` | `tasks.read` | status and result by id or `ch1_…` |
+| POST | `/child-handles/{id}:revoke` | holder of the parent run or `claims.manage` | revoke `{reason, cancelChild}` |
 
-См. [Исполнение — claims и runs](execution.md) и [Харнесс-протокол](harness-protocol.md).
+See [Execution — claims and runs](execution.md) and [Harness protocol](harness-protocol.md).
 
-### Артефакты
+### Artifacts
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/artifacts` | `artifacts.write` | append-only ссылка на результат: `type`, `name`, `task?`, `runId?`, `workspaceId?`, `uri?`, `content?`, `metadata`, `supersedesArtifactId?` |
-| GET | `/artifacts` | `artifacts.read` | список (`taskId`, `runId`, `workspaceId`, `type`) |
-| GET | `/artifacts/{id}` | `artifacts.read` | артефакт |
+| POST | `/artifacts` | `artifacts.write` | append-only reference to a result: `type`, `name`, `task?`, `runId?`, `workspaceId?`, `uri?`, `content?`, `metadata`, `supersedesArtifactId?` |
+| GET | `/artifacts` | `artifacts.read` | list (`taskId`, `runId`, `workspaceId`, `type`) |
+| GET | `/artifacts/{id}` | `artifacts.read` | artifact |
 
 ### Approvals
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/approvals` | `approvals.manage` | запрос; ровно одно из `requiredRoleId` / `assignedPrincipalId`; `gate: true` требует `task` и блокирует claim и complete |
-| GET | `/approvals` | `approvals.read` | список (`status`, `taskId`) |
+| POST | `/approvals` | `approvals.manage` | request; exactly one of `requiredRoleId` / `assignedPrincipalId`; `gate: true` requires `task` and blocks claim and complete |
+| GET | `/approvals` | `approvals.read` | list (`status`, `taskId`) |
 | GET | `/approvals/{id}` | `approvals.read` | approval |
-| POST | `/approvals/{id}:approve` | `approvals.decide` + eligibility | одобрить |
-| POST | `/approvals/{id}:reject` | `approvals.decide` + eligibility | отклонить |
-| POST | `/approvals/{id}:cancel` | `approvals.manage`; для gate — автор или eligible-решатель | отменить |
-| GET | `/approvals/{id}/outcome` | `approvals.read` | объявленный исход решения и статус каждого действия |
-| POST | `/approvals/{id}:replay-outcome` | `approvals.decide` (решивший или admin) | продолжить упавший или зависший исход с первого невыполненного действия; иначе `409 outcome_not_replayable` |
+| POST | `/approvals/{id}:approve` | `approvals.decide` + eligibility | approve |
+| POST | `/approvals/{id}:reject` | `approvals.decide` + eligibility | reject |
+| POST | `/approvals/{id}:cancel` | `approvals.manage`; for a gate — the author or an eligible decider | cancel |
+| GET | `/approvals/{id}/outcome` | `approvals.read` | the declared outcome of the decision and the status of each action |
+| POST | `/approvals/{id}:replay-outcome` | `approvals.decide` (the decider or an admin) | resume a failed or stuck outcome from the first unexecuted action; otherwise `409 outcome_not_replayable` |
 
-См. [Approvals](approvals.md).
+See [Approvals](approvals.md).
 
-### События и наблюдения
+### Events and observations
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| GET | `/events` | `events.read` | журнал (см. раздел [Пагинация событий](#events-pagination)) |
-| WS | `/events/ws?after=<cursor>` | `events.read` | поток событий |
-| POST | `/observations` | `observations.write` | явная запись знания; повтор (`source`, `dedupKey`) → `200 deduplicated` |
+| GET | `/events` | `events.read` | event log (see [Event pagination](#events-pagination)) |
+| WS | `/events/ws?after=<cursor>` | `events.read` | event stream |
+| POST | `/observations` | `observations.write` | explicit knowledge record; a repeat (`source`, `dedupKey`) → `200 deduplicated` |
 
-### Контекст и знания
+### Context and knowledge
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/context` | аутентификация (`task`/`runId` — `tasks.read`, `projectId` — `projects.read`, память — `events.read`) | operational-контекст и пакет памяти |
-| POST | `/knowledge/snapshots` | `observations.write` на `workspace:<workspaceId>` | снимок источника → memory-service (тело до 8 МиБ) |
-| POST | `/knowledge/packs` | principal из `CP_KNOWLEDGE_PACK_ADMINS` | регистрация пакета знаний |
-| PUT | `/workspaces/{id}/knowledge-packs` | `workspaces.manage` на `workspace:<id>` | пакеты и `strict` namespace дерева (только корень) |
+| POST | `/context` | authentication (`task`/`runId` — `tasks.read`, `projectId` — `projects.read`, memory — `events.read`) | operational context and memory pack |
+| POST | `/knowledge/snapshots` | `observations.write` on `workspace:<workspaceId>` | source snapshot → memory-service (body up to 8 MiB) |
+| POST | `/knowledge/packs` | a principal from `CP_KNOWLEDGE_PACK_ADMINS` | register a knowledge pack |
+| PUT | `/workspaces/{id}/knowledge-packs` | `workspaces.manage` on `workspace:<id>` | packs and `strict` namespace of the tree (root only) |
 
-См. [Контекст задачи и память](context.md).
+See [Task context and memory](context.md).
 
-### Workspaces и типы workspace
+### Workspaces and workspace types
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/workspace-types` | `workspaces.manage` | тип workspace |
-| GET | `/workspace-types` | `workspaces.read` | список (`status`) |
-| GET | `/workspace-types/{id}` | `workspaces.read` | тип (+ETag) |
-| PATCH | `/workspace-types/{id}` | `workspaces.manage` | изменить (`If-Match`) |
-| POST | `/workspace-types/{id}:archive` | `workspaces.manage` | архивировать; используется — `422 workspace_type_in_use` |
-| POST | `/workspaces` | `workspaces.manage` | workspace (`typeId` или `typeKey`, `customFields`) |
-| GET | `/workspaces` | `workspaces.read` | список (`parentId`, `rootsOnly`, `status`) |
-| GET | `/workspaces/tree` | `workspaces.read` | дерево (`rootId`, `depth`, `includeArchived`, `includeProjects`) → `{roots: [...]}` |
+| POST | `/workspace-types` | `workspaces.manage` | workspace type |
+| GET | `/workspace-types` | `workspaces.read` | list (`status`) |
+| GET | `/workspace-types/{id}` | `workspaces.read` | type (+ETag) |
+| PATCH | `/workspace-types/{id}` | `workspaces.manage` | update (`If-Match`) |
+| POST | `/workspace-types/{id}:archive` | `workspaces.manage` | archive; in use — `422 workspace_type_in_use` |
+| POST | `/workspaces` | `workspaces.manage` | workspace (`typeId` or `typeKey`, `customFields`) |
+| GET | `/workspaces` | `workspaces.read` | list (`parentId`, `rootsOnly`, `status`) |
+| GET | `/workspaces/tree` | `workspaces.read` | tree (`rootId`, `depth`, `includeArchived`, `includeProjects`) → `{roots: [...]}` |
 | GET | `/workspaces/{id}` | `workspaces.read` | workspace (+ETag) |
-| PATCH | `/workspaces/{id}` | `workspaces.manage` | изменить (`If-Match`) |
-| POST | `/workspaces/{id}:archive` | `workspaces.manage` | архивировать (без активных детей) |
-| POST | `/workspaces/{id}:move` | `workspaces.manage` | перенести `{newParentId}` (`null` — в корень); цикл или ослабление governance — `422` |
-| POST | `/workspaces/{id}/members` | `workspaces.manage` | добавить участника |
-| GET | `/workspaces/{id}/members` | `workspaces.read` | участники |
-| POST | `/workspaces/{id}/members/{principalId}:remove` | `workspaces.manage` | удалить участника |
+| PATCH | `/workspaces/{id}` | `workspaces.manage` | update (`If-Match`) |
+| POST | `/workspaces/{id}:archive` | `workspaces.manage` | archive (no active children) |
+| POST | `/workspaces/{id}:move` | `workspaces.manage` | move `{newParentId}` (`null` — to the root); a cycle or weakened governance — `422` |
+| POST | `/workspaces/{id}/members` | `workspaces.manage` | add a member |
+| GET | `/workspaces/{id}/members` | `workspaces.read` | members |
+| POST | `/workspaces/{id}/members/{principalId}:remove` | `workspaces.manage` | remove a member |
 
-### Проекты и шаблоны
+### Projects and templates
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/project-templates` | `project_templates.manage` | следующая неизменяемая версия шаблона |
-| GET | `/project-templates` | `project_templates.read` | список (`key`, `status`) |
-| GET | `/project-templates/{id}` | `project_templates.read` | шаблон |
-| POST | `/project-templates/{id}:deprecate` | `project_templates.manage` | вывести из оборота |
-| POST | `/projects` | `projects.manage` | проект: `workspaceId` или `workspaceSlug` (workspace и профиль создаются атомарно); второй профиль — `409 project_exists` |
-| GET | `/projects` | `projects.read` | список (`workspaceId`, `status`, `statusKey`, `systemStatusCategory`, `templateKey`, `externalSystem`, `externalType`, `externalId`) |
-| GET | `/projects/{id}` | `projects.read` | проект (+ETag) |
-| PATCH | `/projects/{id}` | `projects.manage` | изменить (`If-Match`) |
-| POST | `/projects/{id}:archive` | `projects.manage` | архивировать (идемпотентно) |
-| POST | `/projects/{id}:transition` | `projects.manage` | переход статуса (`If-Match`; только объявленные) |
-| GET | `/projects/{id}/effective-config` | `projects.read` | конфигурация и provenance по слоям |
-| GET | `/projects/{id}/config-revisions` | `projects.read` | ревизии конфигурации |
-| POST | `/projects/{id}/config-revisions` | `projects.manage` | новая ревизия (не активирует) |
-| POST | `/projects/{id}/config-revisions/{revision}:activate` | `projects.manage` | активировать ревизию (`If-Match`) |
-| GET | `/projects/{id}/external-references` | `projects.read` | внешние ссылки проекта |
-| POST | `/projects/{id}/external-references` | `projects.manage` | добавить (`201`) или обновить metadata (`200`); чужая сущность — `409` |
+| POST | `/project-templates` | `project_templates.manage` | the next immutable template version |
+| GET | `/project-templates` | `project_templates.read` | list (`key`, `status`) |
+| GET | `/project-templates/{id}` | `project_templates.read` | template |
+| POST | `/project-templates/{id}:deprecate` | `project_templates.manage` | retire |
+| POST | `/projects` | `projects.manage` | project: `workspaceId` or `workspaceSlug` (the workspace and the profile are created atomically); a second profile — `409 project_exists` |
+| GET | `/projects` | `projects.read` | list (`workspaceId`, `status`, `statusKey`, `systemStatusCategory`, `templateKey`, `externalSystem`, `externalType`, `externalId`) |
+| GET | `/projects/{id}` | `projects.read` | project (+ETag) |
+| PATCH | `/projects/{id}` | `projects.manage` | update (`If-Match`) |
+| POST | `/projects/{id}:archive` | `projects.manage` | archive (idempotent) |
+| POST | `/projects/{id}:transition` | `projects.manage` | status transition (`If-Match`; declared ones only) |
+| GET | `/projects/{id}/effective-config` | `projects.read` | configuration and provenance by layer |
+| GET | `/projects/{id}/config-revisions` | `projects.read` | configuration revisions |
+| POST | `/projects/{id}/config-revisions` | `projects.manage` | new revision (not activated) |
+| POST | `/projects/{id}/config-revisions/{revision}:activate` | `projects.manage` | activate a revision (`If-Match`) |
+| GET | `/projects/{id}/external-references` | `projects.read` | external references of the project |
+| POST | `/projects/{id}/external-references` | `projects.manage` | add (`201`) or update metadata (`200`); another entity's reference — `409` |
 
-### Внешние ссылки
+### External references
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/external-references` | по `entityType`: `project` → `projects.manage`, `task` → `tasks.write` | зарегистрировать ссылку; `201` новая, `200` тот же ключ, `409 external_reference_conflict` |
-| GET | `/external-references` | право чтения типа | прямой поиск `?entityType=&entityId=` или обратный `?externalSystem=&externalType=&externalId=` |
+| POST | `/external-references` | by `entityType`: `project` → `projects.manage`, `task` → `tasks.write` | register a reference; `201` new, `200` same key, `409 external_reference_conflict` |
+| GET | `/external-references` | read permission of the type | forward lookup `?entityType=&entityId=` or reverse `?externalSystem=&externalType=&externalId=` |
 
-### Организационная модель
+### Organizational model
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/roles` | `org.manage` | роль (`slug` уникален в scope; `workspaceId?`) |
-| GET | `/roles` | `org.read` | список (`workspaceId`) |
-| GET | `/roles/{id}` | `org.read` | роль (+ETag) |
-| PATCH | `/roles/{id}` | `org.manage` | изменить (`If-Match`) |
+| POST | `/roles` | `org.manage` | role (`slug` is unique within the scope; `workspaceId?`) |
+| GET | `/roles` | `org.read` | list (`workspaceId`) |
+| GET | `/roles/{id}` | `org.read` | role (+ETag) |
+| PATCH | `/roles/{id}` | `org.manage` | update (`If-Match`) |
 | POST | `/capabilities` | `org.manage` | capability |
-| GET | `/capabilities` | `org.read` | список |
+| GET | `/capabilities` | `org.read` | list |
 | GET | `/capabilities/{id}` | `org.read` | capability |
-| POST | `/principals/{id}/roles` | `org.manage` | назначить `{roleId, workspaceId?}` |
-| GET | `/principals/{id}/roles` | `org.read` или `principals.read` | роли principal |
-| POST | `/principals/{id}/roles/{roleId}:revoke` | `org.manage` | снять |
-| POST | `/principals/{id}/capabilities` | `org.manage` | назначить |
-| GET | `/principals/{id}/capabilities` | `org.read` или `principals.read` | capabilities principal |
-| POST | `/principals/{id}/capabilities/{capabilityId}:revoke` | `org.manage` | снять |
-| POST | `/principals/{id}/skills` | `org.manage` | назначить скилл |
-| GET | `/principals/{id}/skills` | `org.read` или `principals.read` | скиллы principal |
-| POST | `/principals/{id}/skills/{skillId}:revoke` | `org.manage` | снять |
+| POST | `/principals/{id}/roles` | `org.manage` | assign `{roleId, workspaceId?}` |
+| GET | `/principals/{id}/roles` | `org.read` or `principals.read` | roles of the principal |
+| POST | `/principals/{id}/roles/{roleId}:revoke` | `org.manage` | remove |
+| POST | `/principals/{id}/capabilities` | `org.manage` | assign |
+| GET | `/principals/{id}/capabilities` | `org.read` or `principals.read` | capabilities of the principal |
+| POST | `/principals/{id}/capabilities/{capabilityId}:revoke` | `org.manage` | remove |
+| POST | `/principals/{id}/skills` | `org.manage` | assign a skill |
+| GET | `/principals/{id}/skills` | `org.read` or `principals.read` | skills of the principal |
+| POST | `/principals/{id}/skills/{skillId}:revoke` | `org.manage` | remove |
 
-### Скиллы и вызовы {#skills}
+### Skills and invocations {#skills}
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| POST | `/skills` | `org.manage` | опубликовать версию (`name` + `version` уникальны; `contract`, `sideEffects`, `riskLevel`) |
-| GET | `/skills` | `org.read` | список (`name`, `status`) |
-| GET | `/skills/{ref}` | `org.read`, `skills.invoke` или `skills.execute` | версия по `id`, `name@version` или `name` (+ETag `skill-<rowVersion>`) |
-| PATCH | `/skills/{id}` | `org.manage` | `If-Match`; меняются только `description` и `status` вперёд (`active` → `deprecated` → `disabled`). `config`, `inputSchema`, `outputSchema` допустимы, только если совпадают с сохранёнными, иначе `409 skill_version_immutable`; обратный переход статуса — `invalid_status_transition` |
-| POST | `/skills/{ref}:invoke` | `skills.invoke` | вызов `{inputs, idempotencyKey?, taskId?, runId?, approvalId?}` → `201` новый, `200` повтор ключа |
-| GET | `/skill-invocations/{id}` | `skills.invoke` или `skills.execute` | вызов (видит authority и исполнитель) |
-| POST | `/skill-invocations:claim` | `skills.execute` | взять вызов `{protocols, localEntrypoints, httpOrigins, mcpEndpoints, audiences, sessionId?, leaseSeconds?, invocationId?}` → `200 {invocation, skill}` или `204` |
-| POST | `/skill-invocations/{id}:heartbeat` | `skills.execute` | продлить lease `{fencingToken, leaseSeconds?}` |
-| POST | `/skill-invocations/{id}:complete` | `skills.execute` | результат `{fencingToken, output, cost?}`; `output` перепроверяется по схеме |
-| POST | `/skill-invocations/{id}:fail` | `skills.execute` | неудача `{fencingToken, error: {code, message?, retryable?, details?}}` |
-| POST | `/skill-invocations/{id}:cancel` | authority вызова или `org.manage` | отменить `{reason?}` |
+| POST | `/skills` | `org.manage` | publish a version (`name` + `version` are unique; `contract`, `sideEffects`, `riskLevel`) |
+| GET | `/skills` | `org.read` | list (`name`, `status`) |
+| GET | `/skills/{ref}` | `org.read`, `skills.invoke`, or `skills.execute` | version by `id`, `name@version`, or `name` (+ETag `skill-<rowVersion>`) |
+| PATCH | `/skills/{id}` | `org.manage` | `If-Match`; only `description` and a forward `status` change (`active` → `deprecated` → `disabled`). `config`, `inputSchema`, `outputSchema` are allowed only if they match the stored ones, otherwise `409 skill_version_immutable`; a backward status transition — `invalid_status_transition` |
+| POST | `/skills/{ref}:invoke` | `skills.invoke` | invocation `{inputs, idempotencyKey?, taskId?, runId?, approvalId?}` → `201` new, `200` repeated key |
+| GET | `/skill-invocations/{id}` | `skills.invoke` or `skills.execute` | invocation (visible to the authority and the executor) |
+| POST | `/skill-invocations:claim` | `skills.execute` | take an invocation `{protocols, localEntrypoints, httpOrigins, mcpEndpoints, audiences, sessionId?, leaseSeconds?, invocationId?}` → `200 {invocation, skill}` or `204` |
+| POST | `/skill-invocations/{id}:heartbeat` | `skills.execute` | extend the lease `{fencingToken, leaseSeconds?}` |
+| POST | `/skill-invocations/{id}:complete` | `skills.execute` | result `{fencingToken, output, cost?}`; `output` is re-validated against the schema |
+| POST | `/skill-invocations/{id}:fail` | `skills.execute` | failure `{fencingToken, error: {code, message?, retryable?, details?}}` |
+| POST | `/skill-invocations/{id}:cancel` | authority of the invocation or `org.manage` | cancel `{reason?}` |
 
-Порядок проверок `:invoke`:
+Order of `:invoke` checks:
 
-1. право `skills.invoke`, версия существует;
-2. повтор `idempotencyKey` с теми же `inputs` от того же principal возвращает
-   существующий вызов, иначе `409 idempotency_key_reuse`;
-3. версия вызываема (`409 skill_not_invocable`, `details.reason`: `disabled`,
-   `no_contract`, `protocol_not_invocable`);
-4. при `idempotency: required` ключ обязателен
+1. the `skills.invoke` permission, the version exists;
+2. a repeated `idempotencyKey` with the same `inputs` from the same principal
+   returns the existing invocation, otherwise `409 idempotency_key_reuse`;
+3. the version is invocable (`409 skill_not_invocable`, `details.reason`:
+   `disabled`, `no_contract`, `protocol_not_invocable`);
+4. with `idempotency: required` the key is mandatory
    (`400 idempotency_key_required`);
-5. `inputs` проверяются по схеме (`400 invalid_skill_inputs`,
+5. `inputs` are validated against the schema (`400 invalid_skill_inputs`,
    `details.errors[].path`);
-6. `runId` должен принадлежать вызывающему и быть в статусе `running`;
-7. `requiredPermissions` контракта проверяются на workspace задачи
-   (`403 skill_permission_denied`), эффективная политика инструментов прогона —
-   `403 tool_not_authorized` или `403 child_grant_exceeded`;
-8. `external_write` требует одобренного gate-approval на той же
-   нетерминальной задаче, который ещё не использовался для этой версии
-   (`409 approval_already_used`), или основания `execution` (тип задачи
-   закрепил эту версию, прогон в статусе `running`).
+6. `runId` must belong to the caller and be in the `running` status;
+7. the contract's `requiredPermissions` are checked on the task's workspace
+   (`403 skill_permission_denied`), the run's effective tool policy —
+   `403 tool_not_authorized` or `403 child_grant_exceeded`;
+8. `external_write` requires an approved gate approval on the same
+   non-terminal task that has not yet been used for this version
+   (`409 approval_already_used`), or an `execution` basis (the task type
+   pinned this version, the run is in the `running` status).
 
-Успешный `:complete` при `taskId` создаёт артефакт `skill_result`. Подробнее
-о контракте скилла — в [skill-sdk](../sdk/skill-sdk.md).
+A successful `:complete` with `taskId` creates a `skill_result` artifact. More
+about the skill contract is in [skill-sdk](../sdk/skill-sdk.md).
 
-### Операции {#operations}
+### Operations {#operations}
 
-| Метод | Путь | Право | Назначение |
+| Method | Path | Permission | Purpose |
 |---|---|---|---|
-| GET | `/operations/context-adapter` | `operations.read` | состояние доставки в память своего tenant'а |
-| POST | `/operations/context-adapter/{tenantId}:redrive` | `operations.manage` | снять парковку и повторить ту же позицию `{reason}`; чужой tenant — `404` |
-| POST | `/operations/context-adapter/{tenantId}:rebuild` | `operations.manage` | отмотать курсор `{cursor?, reason}`; только назад, иначе `422 cursor_must_not_advance` |
-| POST | `/operations/journal:archive` | `operations.manage` | перенести подтверждённую историю в архив `{beforeSeconds?, maxEvents?}` |
-| POST | `/operations/journal:prune` | `operations.manage` | физически удалить архив `{beforeSeconds?, maxEvents?}` — **данные теряются** |
+| GET | `/operations/context-adapter` | `operations.read` | state of memory delivery for your own tenant |
+| POST | `/operations/context-adapter/{tenantId}:redrive` | `operations.manage` | unpark and retry the same position `{reason}`; another tenant — `404` |
+| POST | `/operations/context-adapter/{tenantId}:rebuild` | `operations.manage` | rewind the cursor `{cursor?, reason}`; backward only, otherwise `422 cursor_must_not_advance` |
+| POST | `/operations/journal:archive` | `operations.manage` | move confirmed history to the archive `{beforeSeconds?, maxEvents?}` |
+| POST | `/operations/journal:prune` | `operations.manage` | physically delete the archive `{beforeSeconds?, maxEvents?}` — **data is lost** |
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/operations/journal:archive \
@@ -536,34 +538,34 @@ curl -s -X POST https://platform.example.com/api/v1/operations/journal:archive \
   -d '{"beforeSeconds": 2592000, "maxEvents": 50000}'
 ```
 
-Горизонт архивации ограничен минимумом consumer-курсоров и самым старым
-недоставленным outbox-событием. Если consumer-курсоров нет совсем, ответ —
-`409 retention_blocked_by_consumer`. Минимальный возраст события задаёт
-`CP_JOURNAL_RETENTION_MIN_AGE_SECONDS` (30 суток). Процедуры описаны в
-[Резервное копирование](../operations/backup.md) и
-[Мониторинг и здоровье](../operations/monitoring.md).
+The archiving horizon is limited by the minimum of the consumer cursors and the
+oldest undelivered outbox event. If there are no consumer cursors at all, the
+response is `409 retention_blocked_by_consumer`. The minimum event age is set by
+`CP_JOURNAL_RETENTION_MIN_AGE_SECONDS` (30 days). The procedures are described
+in [Backup](../operations/backup.md) and
+[Monitoring and health](../operations/monitoring.md).
 
-## Пагинация событий {#events-pagination}
+## Event pagination {#events-pagination}
 
-Курсор журнала непрозрачен (`ec1_…`) и выдаётся в порядке `(tx_id, sequence)`
-под стабильным горизонтом. Подписка с выданного курсора получит всё, что
-закоммитится позже: незавершённые транзакции сортируются строго после любой
-выданной позиции. Каждое событие несёт `sequence`, `type`, `entityType`,
+The event log cursor is opaque (`ec1_…`) and is issued in `(tx_id, sequence)`
+order under a stable horizon. A subscription from an issued cursor receives
+everything committed later: unfinished transactions are sorted strictly after
+any issued position. Each event carries `sequence`, `type`, `entityType`,
 `entityId`, `actorId`, `sessionId`, `correlationId`, `requestId`,
-`traceRunId`, `payload`, `occurredAt` и `cursor`. Каталог типов событий — в
-статье [События](events.md).
+`traceRunId`, `payload`, `occurredAt`, and `cursor`. The event type catalog is
+in [Events](events.md).
 
 ## SDK
 
-Официальный клиент — пакет `control-plane-client` (модуль
-`control_plane_client`, класс `ControlPlaneClient`). Он сам выставляет
-`Idempotency-Key` на логический вызов, обновляет IAM-токен и разбирает
-конверт ошибок в исключения. См. [Клиенты сервисов](../sdk/clients.md).
+The official client is the `control-plane-client` package (module
+`control_plane_client`, class `ControlPlaneClient`). It sets
+`Idempotency-Key` per logical call, refreshes the IAM token, and parses the
+error envelope into exceptions. See [Service clients](../sdk/clients.md).
 
-## См. также
+## See also
 
-- [Авторизация и права](authorization.md)
-- [Харнесс-протокол](harness-protocol.md)
-- [Конфигурация](configuration.md)
-- [Коды ошибок](../reference/errors.md)
-- [Права и scopes](../reference/permissions.md)
+- [Authorization and permissions](authorization.md)
+- [Harness protocol](harness-protocol.md)
+- [Configuration](configuration.md)
+- [Error codes](../reference/errors.md)
+- [Permissions and scopes](../reference/permissions.md)

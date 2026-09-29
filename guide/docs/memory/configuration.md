@@ -1,194 +1,197 @@
-# Конфигурация и эксплуатация
 
-Справочник переменных окружения memory-service (`CB_*`), их связь с переменными
-корневого `.env` платформы, настройка провайдеров эмбеддингов и LLM, а также
-эксплуатация: резервное копирование с Apache AGE, переиндексация, производительность
-и типичные проблемы. Для администраторов.
+# Configuration and operations
 
-## Как задаются настройки
+A reference for memory-service environment variables (`CB_*`), how they relate
+to the variables in the platform's root `.env`, how to configure embedding and
+LLM providers, and operations: backup with Apache AGE, reindexing,
+performance, and common problems. It is for administrators.
 
-Сервис читает переменные окружения с префиксом `CB_` (и файл `.env` в рабочем
-каталоге процесса, если он есть). Полный список — `src/platform_memory/core/config.py`
-в репозитории memory-service. В составе платформы значения задаёт блок
-`memory-service` корневого `compose.yml`, часть из них — через переменные корневого
-`.env`:
+## How settings are specified
 
-| Переменная `.env` | По умолчанию | Во что превращается |
+The service reads environment variables with the `CB_` prefix (and the `.env`
+file in the process's working directory, if there is one). The full list is in
+`src/platform_memory/core/config.py` in the memory-service repository. As part
+of the platform, the values are set by the `memory-service` block of the root
+`compose.yml`, some of them through variables of the root `.env`:
+
+| `.env` variable | Default | What it becomes |
 |---|---|---|
-| `MEMORY_POSTGRES_PASSWORD` | — (обязательно) | Пароль `memory-db`, часть `CB_DATABASE_URL` |
-| `MEMORY_API_KEY` | — (обязательно) | `CB_SERVER_API_KEY`; им же ядро ходит в память до bootstrap |
+| `MEMORY_POSTGRES_PASSWORD` | — (required) | Password of `memory-db`, part of `CB_DATABASE_URL` |
+| `MEMORY_API_KEY` | — (required) | `CB_SERVER_API_KEY`; the core also uses it to call memory before bootstrap |
 | `MEMORY_EMBEDDING_PROVIDER` | `fake` | `CB_EMBEDDING_PROVIDER` |
 | `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | `CB_EMBEDDING_MODEL` |
 | `MEMORY_LLM_PROVIDER` | `echo` | `CB_LLM_PROVIDER` |
-| `LLM_BASE_URL` | см. `.env.example` | `CB_EMBEDDING_BASE_URL` и `CB_LLM_BASE_URL` |
-| `LLM_API_KEY` | — | `CB_EMBEDDING_API_KEY` и `CB_LLM_API_KEY` |
-| `LLM_MODEL` | см. `.env.example` | `CB_LLM_MODEL` |
+| `LLM_BASE_URL` | see `.env.example` | `CB_EMBEDDING_BASE_URL` and `CB_LLM_BASE_URL` |
+| `LLM_API_KEY` | — | `CB_EMBEDDING_API_KEY` and `CB_LLM_API_KEY` |
+| `LLM_MODEL` | see `.env.example` | `CB_LLM_MODEL` |
 | `MEMORY_RERANK_ENABLED` | `false` | `CB_RERANK_ENABLED` |
 | `MEMORY_CONSOLE_ENABLED` | `false` | `CB_CONSOLE_ENABLED` |
 | `MEMORY_IAM_ENABLED` | `true` | `CB_IAM_ENABLED` |
 | `MEMORY_POLICY_ENABLED` | `false` | `CB_POLICY_ENABLED` |
 | `TAIMEN_PUBLIC_URL` | — | `CB_IAM_ISSUER` = `${TAIMEN_PUBLIC_URL}/iam` |
-| `MEMORY_HOST_PORT` | `18001` | Порт на `127.0.0.1` хоста |
-| `MEMORY_MEM_LIMIT` / `MEMORY_DB_MEM_LIMIT` | `512m` / `512m` | Лимиты памяти контейнеров |
-| `VOLUME_MEMORY_DB` | `<проект>_memory_db` | Имя тома БД |
+| `MEMORY_HOST_PORT` | `18001` | Port on the host's `127.0.0.1` |
+| `MEMORY_MEM_LIMIT` / `MEMORY_DB_MEM_LIMIT` | `512m` / `512m` | Container memory limits |
+| `VOLUME_MEMORY_DB` | `<project>_memory_db` | Name of the database volume |
 
 
-Жёстко заданы в `compose.yml`: `CB_PII_PROTECTION=true`, пустой
+Hard-coded in `compose.yml`: `CB_PII_PROTECTION=true`, an empty
 `CB_SERVER_API_KEYS_PII`, `CB_DEFAULT_NAMESPACE=main`, `CB_EMBEDDING_DIM=1536`,
 `CB_EMBEDDING_TIMEOUT=60`, `CB_RERANK_POOL=20`,
 `CB_IAM_JWKS_URL=http://iam-service:8010/.well-known/jwks.json`,
 `CB_IAM_AUDIENCE=memory-service`,
-`CB_IAM_BASE_URL=http://iam-service:8010`. Файл `secrets/memory-service-iam.env`
-(необязательный, создаёт `deploy/bootstrap.py`) добавляет `CB_IAM_CLIENT_ID` и
-`CB_IAM_CLIENT_SECRET`.
+`CB_IAM_BASE_URL=http://iam-service:8010`. The file
+`secrets/memory-service-iam.env` (optional, created by `deploy/bootstrap.py`)
+adds `CB_IAM_CLIENT_ID` and `CB_IAM_CLIENT_SECRET`.
 
-!!! warning "Офлайн-провайдеры по умолчанию"
-    Без ключа провайдера платформа запускает память на `fake`/`echo`: всё работает,
-    но поиск лексический, синтеза и реранка нет. Для реальных данных включите
-    настоящий провайдер **до** загрузки знаний — иначе потребуется переиндекс.
+!!! warning "Offline providers by default"
+    Without a provider key, the platform runs memory on `fake`/`echo`:
+    everything works, but search is lexical, and there is no synthesis or
+    reranking. For real data, enable a real provider **before** loading
+    knowledge; otherwise you will need a reindex.
 
-## Справочник переменных `CB_*`
+## `CB_*` variable reference
 
-### База данных и хранилище
+### Database and storage
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_DATABASE_URL` | собирается из `POSTGRES_USER/PASSWORD/HOST/PORT/DB` (`brain`/`brain`/`localhost`/`5432`/`company_brain`) | Строка подключения к PostgreSQL с AGE и pgvector |
-| `CB_GRAPH_NAME` | `company_brain` | Имя графа AGE |
-| `CB_CHUNKS_TABLE` | `chunks` | Таблица фрагментов |
-| `CB_DB_JIT` | `false` | JIT PostgreSQL для соединений сервиса (см. [Производительность](#performance)) |
-| `CB_DEFAULT_NAMESPACE` | `nexus` | Namespace запросов без `scope`; задавайте явно |
-| `CB_OBSERVATIONS_TABLE` | `observations` | Таблица наблюдений |
-| `CB_CONTEXT_TRACES_TABLE` | `context_traces` | Таблица трейсов компиляции |
-| `CB_DOMAIN_PACKS_TABLE` | `domain_packs` | Реестр доменных пакетов |
-| `CB_NAMESPACE_SETTINGS_TABLE` | `namespace_settings` | Настройки видов namespace |
-| `CB_SNAPSHOTS_TABLE` | `source_snapshots` | Журнал снимков (+ `<имя>_items`) |
+| `CB_DATABASE_URL` | assembled from `POSTGRES_USER/PASSWORD/HOST/PORT/DB` (`brain`/`brain`/`localhost`/`5432`/`company_brain`) | Connection string for PostgreSQL with AGE and pgvector |
+| `CB_GRAPH_NAME` | `company_brain` | AGE graph name |
+| `CB_CHUNKS_TABLE` | `chunks` | Fragments table |
+| `CB_DB_JIT` | `false` | PostgreSQL JIT for the service's connections (see [Performance](#performance)) |
+| `CB_DEFAULT_NAMESPACE` | `nexus` | Namespace for requests without `scope`; set it explicitly |
+| `CB_OBSERVATIONS_TABLE` | `observations` | Observations table |
+| `CB_CONTEXT_TRACES_TABLE` | `context_traces` | Compilation traces table |
+| `CB_DOMAIN_PACKS_TABLE` | `domain_packs` | Domain pack registry |
+| `CB_NAMESPACE_SETTINGS_TABLE` | `namespace_settings` | Namespace kind settings |
+| `CB_SNAPSHOTS_TABLE` | `source_snapshots` | Snapshot journal (+ `<name>_items`) |
 
-### HTTP-сервис и аутентификация
+### HTTP service and authentication
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_SERVER_HOST` | `127.0.0.1` (в образе `0.0.0.0`) | Адрес прослушивания |
-| `CB_SERVER_PORT` | `8077` | Порт |
-| `CB_SERVER_API_KEY` | — | Статический ключ: все namespaces; при защите ПДн — маска |
-| `CB_SERVER_API_KEYS_PII` | — | Ключи с полным допуском к ПДн, через запятую |
-| `CB_API_KEYS` | — | JSON-реестр ключей с грантами (см. [Namespaces и доступ](namespaces.md)) |
-| `CB_IAM_ENABLED` | `false` | Принимать access token IAM |
-| `CB_IAM_ISSUER` | — | Точный `iss` токена |
-| `CB_IAM_JWKS_URL` | — | JWKS IAM (внутренний адрес) |
-| `CB_IAM_AUDIENCE` | `memory-service` | Точный `aud` |
-| `CB_IAM_LEEWAY_SECONDS` | `5` | Допуск рассинхрона часов |
-| `CB_CORE_ONLY` | `false` | Закрыть маршруты ядра для всех, кроме identity ядра |
-| `CB_CORE_IDENTITIES` | — | Метки identity ядра через запятую; непустой список тоже включает ограничение |
+| `CB_SERVER_HOST` | `127.0.0.1` (`0.0.0.0` in the image) | Listen address |
+| `CB_SERVER_PORT` | `8077` | Port |
+| `CB_SERVER_API_KEY` | — | Static key: all namespaces; masked output when personal data protection is on |
+| `CB_SERVER_API_KEYS_PII` | — | Keys with full personal data clearance, comma-separated |
+| `CB_API_KEYS` | — | JSON registry of keys with grants (see [Namespaces and access](namespaces.md)) |
+| `CB_IAM_ENABLED` | `false` | Accept IAM access tokens |
+| `CB_IAM_ISSUER` | — | Exact `iss` of the token |
+| `CB_IAM_JWKS_URL` | — | IAM JWKS (internal address) |
+| `CB_IAM_AUDIENCE` | `memory-service` | Exact `aud` |
+| `CB_IAM_LEEWAY_SECONDS` | `5` | Clock skew tolerance |
+| `CB_CORE_ONLY` | `false` | Close core routes to everyone except the core identity |
+| `CB_CORE_IDENTITIES` | — | Core identity labels, comma-separated; a non-empty list also enables the restriction |
 
-### Видимость по principal (экспериментально)
+### Principal-based visibility (experimental)
 
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_POLICY_ENABLED` | `false` | Брать видимость людей и агентов из внешнего PDP |
-| `CB_POLICY_URL` | `http://localhost:8030` | Адрес PDP |
-| `CB_POLICY_TIMEOUT_SECONDS` | `3.0` | Таймаут вызова |
-| `CB_POLICY_CACHE_TTL_SECONDS` | `5.0` | Кэш ответа по principal |
-| `CB_IAM_BASE_URL`, `CB_IAM_CLIENT_ID`, `CB_IAM_CLIENT_SECRET` | — | Service identity памяти в IAM (client credentials) |
+| `CB_POLICY_ENABLED` | `false` | Take the visibility of people and agents from the external PDP |
+| `CB_POLICY_URL` | `http://localhost:8030` | PDP address |
+| `CB_POLICY_TIMEOUT_SECONDS` | `3.0` | Call timeout |
+| `CB_POLICY_CACHE_TTL_SECONDS` | `5.0` | Per-principal response cache |
+| `CB_IAM_BASE_URL`, `CB_IAM_CLIENT_ID`, `CB_IAM_CLIENT_SECRET` | — | Memory's service identity in IAM (client credentials) |
 
-### Эмбеддинги
+### Embeddings
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_EMBEDDING_PROVIDER` | `openai` | `openai` (любой OpenAI-совместимый endpoint) или `fake` |
-| `CB_EMBEDDING_BASE_URL` | публичный OpenAI-совместимый шлюз (см. `config.py`) | Базовый URL endpoint'а; в инсталляции задавайте явно |
-| `CB_EMBEDDING_API_KEY` | — | Обязателен для `openai` |
-| `CB_EMBEDDING_MODEL` | `text-embedding-3-small` | Модель |
-| `CB_EMBEDDING_DIM` | `1536` | Размерность; должна совпадать с моделью |
-| `CB_EMBEDDING_TIMEOUT` | `25.0` | Таймаут вызова, секунды |
+| `CB_EMBEDDING_PROVIDER` | `openai` | `openai` (any OpenAI-compatible endpoint) or `fake` |
+| `CB_EMBEDDING_BASE_URL` | a public OpenAI-compatible gateway (see `config.py`) | Base URL of the endpoint; set it explicitly in an installation |
+| `CB_EMBEDDING_API_KEY` | — | Required for `openai` |
+| `CB_EMBEDDING_MODEL` | `text-embedding-3-small` | Model |
+| `CB_EMBEDDING_DIM` | `1536` | Dimension; must match the model |
+| `CB_EMBEDDING_TIMEOUT` | `25.0` | Call timeout, seconds |
 
-### LLM, синтез и реранкинг
+### LLM, synthesis, and reranking
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_LLM_PROVIDER` | `openai` | `openai` или `echo` (без генерации) |
-| `CB_LLM_BASE_URL` | как у эмбеддингов | Базовый URL chat completions |
-| `CB_LLM_API_KEY` | — | Обязателен для `openai` |
-| `CB_LLM_MODEL` | `gpt-4o-mini` | Модель синтеза (и реранка по умолчанию) |
-| `CB_QUERY_SYNTHESIZE_DEFAULT` | `false` | Значение `synthesize`, если клиент его не передал |
-| `CB_RERANK_ENABLED` | `false` | Реранкинг в `query`/`recall`/`search` |
-| `CB_RERANK_PROVIDER` | `llm` | Провайдер реранка |
-| `CB_RERANK_POOL` | `20` | Размер пула кандидатов реранка |
-| `CB_RERANK_MODEL` | — (= `CB_LLM_MODEL`) | Отдельная модель реранка |
-| `CB_EXTRACT_ENTITIES` | `false` | Извлекать сущности из текста vault через LLM при `cb ingest` |
+| `CB_LLM_PROVIDER` | `openai` | `openai` or `echo` (no generation) |
+| `CB_LLM_BASE_URL` | same as for embeddings | Base URL for chat completions |
+| `CB_LLM_API_KEY` | — | Required for `openai` |
+| `CB_LLM_MODEL` | `gpt-4o-mini` | Synthesis model (and the rerank model by default) |
+| `CB_QUERY_SYNTHESIZE_DEFAULT` | `false` | The `synthesize` value if the client did not pass it |
+| `CB_RERANK_ENABLED` | `false` | Reranking in `query`/`recall`/`search` |
+| `CB_RERANK_PROVIDER` | `llm` | Rerank provider |
+| `CB_RERANK_POOL` | `20` | Size of the rerank candidate pool |
+| `CB_RERANK_MODEL` | — (= `CB_LLM_MODEL`) | A separate rerank model |
+| `CB_EXTRACT_ENTITIES` | `false` | Extract entities from vault text through an LLM during `cb ingest` |
 
-### Context Compiler и наблюдения
+### Context Compiler and observations
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_CONTEXT_DEFAULT_MAX_TOKENS` | `8000` | Бюджет ContextPack по умолчанию |
-| `CB_CONTEXT_CHARS_PER_TOKEN` | `3.0` | Оценка размера (консервативно для кириллицы; для английского можно 4.0) |
-| `CB_CONTEXT_MAX_DEPTH` | `2` | Глубина обхода графа |
-| `CB_CONTEXT_MAX_NODES` | `60` | Максимум узлов обхода |
-| `CB_CONTEXT_MAX_EDGES` | `120` | Максимум рёбер обхода |
-| `CB_OBSERVATIONS_EMBED` | `false` | Эмбеддить `content` наблюдений |
-| `CB_OBSERVATIONS_MAX_BATCH` | `500` | Максимум наблюдений в пакете |
-| `CB_RECONCILE_MAX_ITEMS` | `20000` | Максимум элементов в снимке |
-| `CB_RUN_AUDIT_ENABLED` | `true` | События жизненного цикла прогонов в трейс |
+| `CB_CONTEXT_DEFAULT_MAX_TOKENS` | `8000` | Default ContextPack budget |
+| `CB_CONTEXT_CHARS_PER_TOKEN` | `3.0` | Size estimate (conservative for Cyrillic; 4.0 is fine for English) |
+| `CB_CONTEXT_MAX_DEPTH` | `2` | Graph traversal depth |
+| `CB_CONTEXT_MAX_NODES` | `60` | Maximum traversal nodes |
+| `CB_CONTEXT_MAX_EDGES` | `120` | Maximum traversal edges |
+| `CB_OBSERVATIONS_EMBED` | `false` | Embed the `content` of observations |
+| `CB_OBSERVATIONS_MAX_BATCH` | `500` | Maximum observations per batch |
+| `CB_RECONCILE_MAX_ITEMS` | `20000` | Maximum items per snapshot |
+| `CB_RUN_AUDIT_ENABLED` | `true` | Run lifecycle events in the trace |
 
-### Защита ПДн
+### Personal data protection
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_PII_PROTECTION` | `false` (в платформе `true`) | Маскирование, маркировка и журнал доступа к ПДн |
+| `CB_PII_PROTECTION` | `false` (`true` in the platform) | Masking, labeling, and the personal data access log |
 
-### Загрузка vault (CLI)
+### Vault loading (CLI)
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_VAULT_PATH` | — | Каталог документов для `cb ingest` |
-| `CB_CACHE_DIR` | — | Кэш неизменённых заметок и эмбеддингов; пусто — выключен |
-| `CB_PROJECT_VALUES` | — | Разрешённые слаги проектов (синтетические узлы `project:*`) через запятую |
+| `CB_VAULT_PATH` | — | Document directory for `cb ingest` |
+| `CB_CACHE_DIR` | — | Cache of unchanged notes and embeddings; empty means off |
+| `CB_PROJECT_VALUES` | — | Allowed project slugs (synthetic `project:*` nodes), comma-separated |
 
-### Консоль и демо-витрина {#console-demo}
+### Console and demo showcase {#console-demo}
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CB_CONSOLE_ENABLED` | `false` | Административная консоль `/console`; выключена — все её маршруты `404` |
-| `CB_CONSOLE_NAMESPACES` | — | Список баз знаний консоли через запятую (пусто — только namespace по умолчанию) |
-| `CB_DEMO_PUBLIC_ENABLED` | `false` | Публичная read-only витрина `/demo` |
-| `CB_DEMO_NAMESPACE` | `demo` | Единственная база знаний витрины |
-| `CB_DEMO_RATE_LIMIT` | `30` | Запросов в минуту с одного IP к `/demo/api/*` (`0` — без лимита) |
-| `CB_DEMO_SEARCH_K`, `CB_DEMO_RERANK`, `CB_DEMO_MIN_CONFIDENCE` | `5`, `true`, `0.3` | Поиск витрины: top-k, собственный реранк, порог `rerank_score` |
-| `CB_DEMO_BRAND_NAME`, `CB_DEMO_BRAND_TAGLINE`, `CB_DEMO_CTA_URL`, `CB_DEMO_DOMAIN` | нейтральные | Оформление витрины |
+| `CB_CONSOLE_ENABLED` | `false` | Administrative console `/console`; when off, all its routes return `404` |
+| `CB_CONSOLE_NAMESPACES` | — | Comma-separated list of the console's knowledge bases (empty means only the default namespace) |
+| `CB_DEMO_PUBLIC_ENABLED` | `false` | Public read-only showcase `/demo` |
+| `CB_DEMO_NAMESPACE` | `demo` | The showcase's only knowledge base |
+| `CB_DEMO_RATE_LIMIT` | `30` | Requests per minute from one IP to `/demo/api/*` (`0` means no limit) |
+| `CB_DEMO_SEARCH_K`, `CB_DEMO_RERANK`, `CB_DEMO_MIN_CONFIDENCE` | `5`, `true`, `0.3` | Showcase search: top-k, its own rerank, `rerank_score` threshold |
+| `CB_DEMO_BRAND_NAME`, `CB_DEMO_BRAND_TAGLINE`, `CB_DEMO_CTA_URL`, `CB_DEMO_DOMAIN` | neutral | Showcase branding |
 
-!!! danger "У консоли нет собственной аутентификации"
-    `/console` вызывает движок внутри процесса и не проверяет пользователя. Включайте
-    её только за reverse-прокси, который аутентифицирует администратора, либо не
-    публикуйте вовсе и заходите через SSH-туннель. Витрину `/demo` не включайте на
-    инсталляции с реальными данными: она предназначена для чистой синтетической базы.
+!!! danger "The console has no authentication of its own"
+    `/console` calls the engine in-process and does not check the user. Enable
+    it only behind a reverse proxy that authenticates the administrator, or do
+    not publish it at all and access it through an SSH tunnel. Do not enable
+    the `/demo` showcase on an installation with real data: it is intended for
+    a clean synthetic database.
 
-## Провайдеры эмбеддингов и LLM
+## Embedding and LLM providers
 
-Сервис использует OpenAI-совместимый API через официальный клиент `openai`:
-`embeddings.create` для эмбеддингов и `chat.completions.create` для синтеза и
-реранка. Подходит любой endpoint с таким протоколом (облачный шлюз, локальный
-сервер моделей).
+The service uses an OpenAI-compatible API through the official `openai`
+client: `embeddings.create` for embeddings and `chat.completions.create` for
+synthesis and reranking. Any endpoint with this protocol works (a cloud
+gateway, a local model server).
 
-=== "Боевой режим"
+=== "Production mode"
 
     ```bash
     CB_EMBEDDING_PROVIDER=openai
     CB_EMBEDDING_BASE_URL=https://llm-gateway.example.com/v1
-    CB_EMBEDDING_API_KEY=<ключ>
+    CB_EMBEDDING_API_KEY=<key>
     CB_EMBEDDING_MODEL=text-embedding-3-small
     CB_EMBEDDING_DIM=1536
     CB_EMBEDDING_TIMEOUT=60
 
     CB_LLM_PROVIDER=openai
     CB_LLM_BASE_URL=https://llm-gateway.example.com/v1
-    CB_LLM_API_KEY=<ключ>
-    CB_LLM_MODEL=<быстрая модель>
+    CB_LLM_API_KEY=<key>
+    CB_LLM_MODEL=<fast model>
     CB_RERANK_ENABLED=true
     ```
 
-=== "Офлайн (тесты, разработка)"
+=== "Offline (tests, development)"
 
     ```bash
     CB_EMBEDDING_PROVIDER=fake
@@ -196,70 +199,74 @@
     CB_RERANK_ENABLED=false
     ```
 
-=== "В корневом .env платформы"
+=== "In the platform's root .env"
 
     ```bash
-    LLM_API_KEY=<ключ>
+    LLM_API_KEY=<key>
     LLM_BASE_URL=https://llm-gateway.example.com/v1
-    LLM_MODEL=<быстрая модель>
+    LLM_MODEL=<fast model>
     MEMORY_EMBEDDING_PROVIDER=openai
     MEMORY_LLM_PROVIDER=openai
     MEMORY_RERANK_ENABLED=true
     ```
 
-Рекомендации по выбору:
+Selection guidelines:
 
-- **Эмбеддинги** должны поддерживать русский язык. Размерность `CB_EMBEDDING_DIM`
-  обязана совпадать с размерностью модели; для моделей семейства
-  `text-embedding-3-*` сервис передаёт `dimensions` и может получить укороченный
-  вектор.
-- **Таймаут эмбеддингов** увеличивайте, если провайдер даёт редкие пики задержки
-  (в платформе — 60 с). Эмбеддинг — первый шаг каждого поиска: без таймаута
-  зависший провайдер держит обработчик.
-- **Модель синтеза и реранка** выбирайте по задержке: реранк — один вызов на поиск
-  с таймаутом 12 с, синтез — с таймаутом 25 с. Реранк требует, чтобы модель
-  надёжно возвращала JSON; при неполном ответе поиск тихо откатывается к порядку RRF.
-- Отдельную модель для реранка задавайте `CB_RERANK_MODEL`.
+- **Embeddings** must support Russian. The `CB_EMBEDDING_DIM` dimension must
+  match the model's dimension; for models of the `text-embedding-3-*` family,
+  the service passes `dimensions` and may get a shortened vector.
+- **Increase the embedding timeout** if the provider has occasional latency
+  spikes (60 s in the platform). Embedding is the first step of every search:
+  without a timeout, a hung provider holds the handler.
+- **Choose the synthesis and rerank model** by latency: rerank is one call per
+  search with a 12 s timeout, synthesis has a 25 s timeout. Reranking requires
+  the model to return JSON reliably; with an incomplete response, search
+  silently falls back to the RRF order.
+- Set a separate rerank model with `CB_RERANK_MODEL`.
 
-## Эксплуатация
+## Operations
 
-### Ресурсы и размещение
+### Resources and placement
 
-- Сервис stateless, всё состояние — в `memory-db`. Порт наружу не публикуется:
-  в `compose.yml` он привязан к `127.0.0.1`, а платформа вызывает память по
-  внутреннему адресу.
-- Схема (граф, таблицы, индексы) создаётся и доводится идемпотентно при старте
-  сервиса; миграции аддитивны, отдельных шагов при обновлении не требуют.
-- Образ `memory-db` собран на официальном образе Apache AGE для PostgreSQL 16 с
-  pgvector; init-скрипт при первом создании тома ставит расширения `age`, `vector`,
-  `pg_trgm` и создаёт граф `company_brain`. Без прав на `CREATE EXTENSION pg_trgm`
-  поиск идентификаторов работает последовательным `ILIKE` — корректно, но медленнее.
+- The service is stateless; all state is in `memory-db`. The port is not
+  published externally: in `compose.yml` it is bound to `127.0.0.1`, and the
+  platform calls memory at the internal address.
+- The schema (graph, tables, indexes) is created and completed idempotently
+  when the service starts; migrations are additive and need no separate steps
+  during an upgrade.
+- The `memory-db` image is built on the official Apache AGE image for
+  PostgreSQL 16 with pgvector; when the volume is first created, the init
+  script installs the extensions `age`, `vector`, `pg_trgm` and creates the
+  `company_brain` graph. Without the right to `CREATE EXTENSION pg_trgm`,
+  identifier search uses a sequential `ILIKE`, which is correct but slower.
 
-### Производительность {#performance}
+### Performance {#performance}
 
-| Настройка / особенность | Почему важно |
+| Setting / specific | Why it matters |
 |---|---|
-| `CB_DB_JIT=false` (по умолчанию) | AGE отдаёт планировщику завышенные оценки кардинальности, и JIT PostgreSQL компилирует каждый графовый запрос заново — это основная доля времени обхода графа. Сервис открывает сессии с `-c jit=off`; явно заданный `options` в `CB_DATABASE_URL` не перетирается |
-| Соединение на запрос | Пула соединений нет: каждый HTTP-запрос открывает своё соединение. Для внешнего пулера, не поддерживающего `options`, задайте параметры сессии в самой строке подключения |
-| Индексы | HNSW по эмбеддингам, GIN по полнотекстовому документу, GIN по `meta`, триграммы по тексту, GIN/hash-индексы меток графа |
-| Таймауты провайдеров | Эмбеддинг `CB_EMBEDDING_TIMEOUT`, реранк 12 с, синтез 25 с — зависший провайдер не держит запрос бесконечно |
-| Реранк и синтез | Каждый добавляет вызов LLM к задержке запроса |
-| Rate limiting | На уровне API нет (кроме витрины `/demo`) — массовую загрузку ведите последовательно |
+| `CB_DB_JIT=false` (default) | AGE gives the planner inflated cardinality estimates, and PostgreSQL JIT recompiles every graph query, which is the main share of graph traversal time. The service opens sessions with `-c jit=off`; an explicitly set `options` in `CB_DATABASE_URL` is not overwritten |
+| One connection per request | There is no connection pool: each HTTP request opens its own connection. For an external pooler that does not support `options`, set the session parameters in the connection string itself |
+| Indexes | HNSW on embeddings, GIN on the full-text document, GIN on `meta`, trigrams on text, GIN/hash indexes on graph labels |
+| Provider timeouts | Embedding `CB_EMBEDDING_TIMEOUT`, rerank 12 s, synthesis 25 s: a hung provider does not hold a request forever |
+| Rerank and synthesis | Each adds an LLM call to the request latency |
+| Rate limiting | None at the API level (except the `/demo` showcase); run bulk loading sequentially |
 
-Для замеров в репозитории memory-service есть `benchmarks/bench.py` (скорость загрузки
-и задержки каналов поиска на синтетических наборах) — он запускается против
-отдельной одноразовой БД.
+For measurements, the memory-service repository has `benchmarks/bench.py`
+(loading speed and search channel latencies on synthetic datasets); it runs
+against a separate throwaway database.
 
-### Резервное копирование и восстановление
+### Backup and restore
 
-Вся память — в одной БД `memory-db`, поэтому бэкап — это `pg_dump`:
+All of memory is in the single `memory-db` database, so a backup is a
+`pg_dump`:
 
 ```bash
 docker compose exec -T memory-db \
   pg_dump -U memory -d company_brain -Fc > memory-$(date +%Y%m%d-%H%M).dump
 ```
 
-Восстановление — на свежий том, где init-скрипт уже создал расширения:
+Restore onto a fresh volume where the init script has already created the
+extensions:
 
 ```bash
 docker compose stop memory-service
@@ -267,23 +274,23 @@ docker compose exec -T memory-db \
   pg_restore -U memory -d company_brain --clean --if-exists < memory-XXXX.dump
 ```
 
-!!! danger "После восстановления графа AGE нужно исправить OID"
-    Apache AGE хранит в каталоге `ag_catalog` настоящие OID PostgreSQL. Колонка
-    `ag_graph.namespace` имеет тип `regnamespace` и при восстановлении получает
-    правильное значение, а `ag_graph.graphid` и `ag_label.graph` — обычные `oid` и
-    приезжают со **старого** кластера. Сервис после этого падает с ошибкой вида
-    `graph with oid NNNNN does not exist`.
+!!! danger "After restoring an AGE graph, you must fix the OIDs"
+    Apache AGE stores real PostgreSQL OIDs in the `ag_catalog` catalog. The
+    `ag_graph.namespace` column has type `regnamespace` and gets the correct
+    value on restore, while `ag_graph.graphid` and `ag_label.graph` are plain
+    `oid` columns and arrive from the **old** cluster. After that, the service
+    fails with an error like `graph with oid NNNNN does not exist`.
 
-Проверка — у согласованного графа `graphid` совпадает с OID его схемы:
+Check: in a consistent graph, `graphid` matches the OID of its schema:
 
 ```sql
 SELECT name, graphid, namespace::oid AS schema_oid
 FROM ag_catalog.ag_graph;
 ```
 
-Исправление — одной транзакцией. Порядок важен: сначала снять внешний ключ, затем
-обновить `ag_label` (пока в `ag_graph` ещё старые `graphid`), затем `ag_graph`, и
-вернуть ключ — он же и проверит результат:
+The fix is a single transaction. The order matters: first drop the foreign
+key, then update `ag_label` (while `ag_graph` still has the old `graphid`
+values), then `ag_graph`, and restore the key, which also verifies the result:
 
 ```sql
 BEGIN;
@@ -303,49 +310,54 @@ ALTER TABLE ag_catalog.ag_label
 COMMIT;
 ```
 
-Затем запустите сервис и проверьте:
+Then start the service and check:
 
 ```bash
 docker compose start memory-service
-curl -fsS http://127.0.0.1:18001/healthz        # nodes и chunks > 0
+curl -fsS http://127.0.0.1:18001/healthz        # nodes and chunks > 0
 curl -fsS -X POST http://127.0.0.1:18001/api/brain/recall \
   -H "Authorization: Bearer $MEMORY_API_KEY" -H "Content-Type: application/json" \
-  -d '{"query": "контрольный вопрос", "budget": "low", "scope": {"namespace": "<ns>"}}'
+  -d '{"query": "control question", "budget": "low", "scope": {"namespace": "<ns>"}}'
 ```
 
-!!! warning "Дампы содержат данные клиентов, включая ПДн"
-    Храните их в контуре инсталляции по её политике и не выносите наружу. Общие
-    правила бэкапа платформы — в [Резервном копировании](../operations/backup.md).
+!!! warning "Dumps contain customer data, including personal data"
+    Keep them inside the installation's perimeter according to its policy and
+    do not take them outside. General platform backup rules are in
+    [Backup](../operations/backup.md).
 
-### Смена модели эмбеддингов и переиндекс {#reindex}
+### Changing the embedding model and reindexing {#reindex}
 
-Векторы разных моделей несовместимы, а размерность колонки `embedding` фиксируется
-при создании таблицы. Сервис защищается от смешения:
+Vectors from different models are incompatible, and the dimension of the
+`embedding` column is fixed when the table is created. The service protects
+against mixing:
 
-- если таблица создана с другой размерностью, запись и поиск падают с ошибкой,
-  называющей обе размерности;
-- если провайдер вернул вектор не той размерности, запись отвергается.
+- if the table was created with a different dimension, writes and searches
+  fail with an error that names both dimensions;
+- if the provider returns a vector of the wrong dimension, the write is
+  rejected.
 
-Встроенной команды «пересчитать эмбеддинги» для данных, загруженных через API, нет.
-Порядок смены модели:
+There is no built-in "recompute embeddings" command for data loaded through
+the API. The model change procedure:
 
-1. Сделайте бэкап БД.
-2. Остановите запись в память (интеграции, `context-adapter`).
-3. Поменяйте `CB_EMBEDDING_MODEL` и, если нужно, `CB_EMBEDDING_DIM`.
-4. Если размерность изменилась — удалите таблицу фрагментов (её пересоздаст сервис
-   при старте). Это **удаляет все фрагменты всех namespaces**:
+1. Back up the database.
+2. Stop writes to memory (integrations, `context-adapter`).
+3. Change `CB_EMBEDDING_MODEL` and, if needed, `CB_EMBEDDING_DIM`.
+4. If the dimension changed, drop the fragments table (the service recreates
+   it on startup). This **deletes all fragments of all namespaces**:
    ```sql
    DROP TABLE public.chunks;
    ```
-5. Перезапустите сервис и заново загрузите знания из источников: `retain` и
-   `documents` идемпотентны по ключам и заменят фрагменты; vault —
-   `cb ingest --vault …` (флаг `--reset` пересоздаёт и граф, и индекс целиком).
-6. Если размерность не менялась, но модель другая, старые фрагменты формально
-   валидны, но их векторы несравнимы с новыми — перезагрузите все документы так же.
+5. Restart the service and load the knowledge again from the sources:
+   `retain` and `documents` are idempotent by key and replace the fragments;
+   for the vault, `cb ingest --vault …` (the `--reset` flag recreates both the
+   graph and the index entirely).
+6. If the dimension did not change but the model did, the old fragments are
+   formally valid, but their vectors are not comparable with the new ones;
+   reload all documents the same way.
 
-То же относится к данным, загруженным при `CB_EMBEDDING_PROVIDER=fake`.
+The same applies to data loaded with `CB_EMBEDDING_PROVIDER=fake`.
 
-### Обновление
+### Upgrade
 
 ```bash
 docker compose build memory-service
@@ -353,43 +365,43 @@ docker compose up -d memory-service
 curl -fsS http://127.0.0.1:18001/healthz
 ```
 
-Новые таблицы и индексы создаются при старте. Общий порядок обновления платформы —
-в [Обновлениях](../operations/upgrades.md).
+New tables and indexes are created on startup. The general platform upgrade
+procedure is in [Upgrades](../operations/upgrades.md).
 
-### Мониторинг и диагностика
+### Monitoring and diagnostics
 
-| Что смотреть | Как |
+| What to look at | How |
 |---|---|
-| Живость и доступность БД | `GET /healthz` (без токена), `503` — БД недоступна; healthcheck контейнера бьёт в `127.0.0.1:8077/healthz` |
-| Валидность токена клиента | `GET /api/brain/health` |
-| Проекция наблюдений | `GET /api/memory/observations?namespace=…&status=failed`; повтор — `POST /api/memory/consolidate` |
-| Почему собран такой контекст | `GET /api/memory/context/trace/{trace_id}` |
-| След операции (запись, удаление, доступ к ПДн) | `GET /api/brain/trace/{trace_id}?namespace=…` |
-| Логи | `docker compose logs -f memory-service` |
+| Liveness and database availability | `GET /healthz` (no token); `503` means the database is unavailable; the container healthcheck calls `127.0.0.1:8077/healthz` |
+| Validity of a client's token | `GET /api/brain/health` |
+| Observation projection | `GET /api/memory/observations?namespace=…&status=failed`; retry with `POST /api/memory/consolidate` |
+| Why this context was assembled | `GET /api/memory/context/trace/{trace_id}` |
+| Trace of an operation (write, deletion, personal data access) | `GET /api/brain/trace/{trace_id}?namespace=…` |
+| Logs | `docker compose logs -f memory-service` |
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| Поиск находит только точные слова | `CB_EMBEDDING_PROVIDER=fake` | Включить настоящий провайдер и переиндексировать |
-| `500` с «размерность … CB_EMBEDDING_DIM» | Модель и `CB_EMBEDDING_DIM` расходятся с таблицей | См. [переиндекс](#reindex) |
-| `graph with oid … does not exist` после восстановления | OID каталога AGE со старого кластера | Процедура исправления OID выше |
-| `401` на валидный IAM-токен | Не совпадает `iss` (`CB_IAM_ISSUER`) или `aud`; токен выпущен не на `memory-service` | Сверить issuer с публичным адресом IAM, обменять PAT на audience `memory-service` |
-| `503` на запросы с IAM-токеном | JWKS недоступен или `CB_IAM_JWKS_URL` пуст | Проверить внутренний адрес IAM |
-| `403` «Нет прав на namespace» | Запрос без `scope` попал в namespace по умолчанию, или грант не покрывает базу | Передавать `scope` явно, проверить гранты |
-| `403` на `packages`/`reconcile` | Включено ограничение маршрутов ядра | Вызывать через Control Plane или identity ядра |
-| `500` на каждый запрос с токеном | Невалидный JSON в `CB_API_KEYS` | Исправить конфигурацию |
-| В ответах `[ПДн:…]` | Токен без допуска при `CB_PII_PROTECTION=true` | Выдать ключ с `"pii": true` или scope `memory:pii`, если это оправдано |
-| Реранк «не работает», `rerank_score: null` | `CB_LLM_PROVIDER=echo`, пустой ключ или модель не вернула корректный JSON | Проверить провайдер LLM и модель |
-| Медленный обход графа | Включён JIT (`CB_DB_JIT=true` или `options` в URL) | Вернуть `jit=off` |
+| Search finds only exact words | `CB_EMBEDDING_PROVIDER=fake` | Enable a real provider and reindex |
+| `500` with an error about the dimension and `CB_EMBEDDING_DIM` | The model and `CB_EMBEDDING_DIM` differ from the table | See [reindex](#reindex) |
+| `graph with oid … does not exist` after a restore | AGE catalog OIDs from the old cluster | The OID fix procedure above |
+| `401` for a valid IAM token | `iss` (`CB_IAM_ISSUER`) or `aud` does not match; the token was not issued for `memory-service` | Compare the issuer with IAM's public address; exchange the PAT for audience `memory-service` |
+| `503` on requests with an IAM token | JWKS unavailable or `CB_IAM_JWKS_URL` empty | Check the internal IAM address |
+| `403` "no permission on the namespace" | A request without `scope` went to the default namespace, or the grant does not cover the base | Pass `scope` explicitly, check the grants |
+| `403` on `packages`/`reconcile` | The core routes restriction is enabled | Call through Control Plane or as the core identity |
+| `500` on every request with a token | Invalid JSON in `CB_API_KEYS` | Fix the configuration |
+| `[ПДн:…]` in responses | A token without clearance with `CB_PII_PROTECTION=true` | Issue a key with `"pii": true` or the `memory:pii` scope, if justified |
+| Rerank "does not work", `rerank_score: null` | `CB_LLM_PROVIDER=echo`, an empty key, or the model did not return valid JSON | Check the LLM provider and model |
+| Slow graph traversal | JIT is enabled (`CB_DB_JIT=true` or `options` in the URL) | Restore `jit=off` |
 
-Больше сценариев — в [Типичных проблемах с памятью](../troubleshooting/memory.md).
+More scenarios are in [Common memory problems](../troubleshooting/memory.md).
 
-## См. также
+## See also
 
-- [Namespaces и доступ](namespaces.md)
-- [Поиск и сборка контекста](retrieval.md)
-- [Переменные окружения](../reference/environment.md)
-- [Сервисы и порты](../reference/services-and-ports.md)
-- [Резервное копирование](../operations/backup.md)
-- [Развёртывание](../operations/deployment.md)
+- [Namespaces and access](namespaces.md)
+- [Search and context assembly](retrieval.md)
+- [Environment variables](../reference/environment.md)
+- [Services and ports](../reference/services-and-ports.md)
+- [Backup](../operations/backup.md)
+- [Deployment](../operations/deployment.md)

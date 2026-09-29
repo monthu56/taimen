@@ -1,41 +1,42 @@
-# События
 
-Журнал событий Control Plane — append-only история всего, что произошло в
-tenant'е: создание и смена статусов задач, claims, runs, approvals,
-артефакты, комментарии, цели. Он служит аудитом, источником синхронизации
-для харнессов и рабочих мест и входом для памяти. Статья описывает модель
-события, надёжный курсор, чтение страницами и через WebSocket, каталог типов
-событий и хранение журнала. Фильтры подписки, версии данных событий и SDK
-потребителя — в статье [Подписки на события](event-subscriptions.md).
+# Events
 
-## Как событие появляется
+The Control Plane event log is the append-only history of everything that happened in
+a tenant: task creation and status changes, claims, runs, approvals,
+artifacts, comments, goals. It serves as the audit trail, the synchronization source
+for harnesses and workplaces, and the input for memory. This article describes the event
+model, the durable cursor, reading by pages and over WebSocket, the event type
+catalog, and log retention. Subscription filters, event data versions, and the consumer
+SDK are covered in [Event subscriptions](event-subscriptions.md).
 
-Событие пишется **той же транзакцией**, что и изменение состояния:
+## How an event appears
+
+An event is written **in the same transaction** as the state change:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Cmd as Команда (API / воркер)
+    participant Cmd as Command (API / worker)
     participant DB as PostgreSQL
-    participant Hub as Realtime-хаб API
-    participant WS as WebSocket-клиент
-    Cmd->>DB: изменение таблиц состояния
+    participant Hub as API realtime hub
+    participant WS as WebSocket client
+    Cmd->>DB: change state tables
     Cmd->>DB: INSERT events (+ outbox)
     Cmd->>DB: pg_notify('cp_events', …)
     Cmd->>DB: COMMIT
-    DB-->>Hub: NOTIFY (только после commit)
-    Hub->>DB: чтение событий после позиции клиента
-    Hub-->>WS: события по порядку
+    DB-->>Hub: NOTIFY (only after commit)
+    Hub->>DB: read events after the client position
+    Hub-->>WS: events in order
 ```
 
-- Commit публикует всё атомарно: состояние, событие и запись outbox; откат
-  не оставляет ничего.
-- `NOTIFY` доставляется только при commit, поэтому подписчики никогда не
-  просыпаются по откаченным данным.
-- Журнал append-only: триггеры базы запрещают `UPDATE`, `DELETE` и
-  `TRUNCATE`. Единственное исключение — операторская архивация (см. ниже).
+- Commit publishes everything atomically: the state, the event, and the outbox record; a rollback
+  leaves nothing behind.
+- `NOTIFY` is delivered only on commit, so subscribers never
+  wake up on rolled-back data.
+- The log is append-only: database triggers forbid `UPDATE`, `DELETE`, and
+  `TRUNCATE`. The only exception is operator archiving (see below).
 
-## Модель события
+## Event model
 
 ```json
 {
@@ -67,249 +68,249 @@ sequenceDiagram
 }
 ```
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `sequence` | Идентификатор события и порядок внутри транзакции. **Не** курсор воспроизведения |
-| `id` | Идентификатор события (UUID) — ключ дедупликации у потребителя |
-| `type` | Тип события, см. каталог ниже |
-| `schemaVersion` | Версия схемы `payload` этого типа; версии только добавляют поля, см. [Подписки на события](event-subscriptions.md) |
-| `entityType`, `entityId` | Сущность, в чей поток относится событие |
-| `workspaceId` | Workspace сущности (или её задачи); `null` у событий уровня tenant |
-| `actorId` | Principal, выполнивший действие (`null` у фоновых действий воркера) |
-| `iamActorId` | IAM-identity актора; `null` у legacy-ключей |
-| `sessionId` | Сессия, если действие выполнено в её рамках |
-| `correlationId` | Из заголовка `X-Correlation-ID` или сгенерирован |
-| `causationId` | Событие-причина (например, решение approval для событий его исхода) |
-| `requestId` | Из `X-Request-ID` |
-| `traceRunId` | Trace-корреляция из `X-Run-Id` (не доменный Run) |
-| `payload` | Данные события — только ссылки и безопасные поля |
-| `cursor` | Непрозрачный курсор позиции этого события |
+| `sequence` | Event identifier and order within a transaction. **Not** a replay cursor |
+| `id` | Event identifier (UUID) — the consumer's deduplication key |
+| `type` | Event type, see the catalog below |
+| `schemaVersion` | Version of the `payload` schema of this type; versions only add fields, see [Event subscriptions](event-subscriptions.md) |
+| `entityType`, `entityId` | The entity whose stream the event belongs to |
+| `workspaceId` | Workspace of the entity (or of its task); `null` for tenant-level events |
+| `actorId` | The principal that performed the action (`null` for background worker actions) |
+| `iamActorId` | IAM identity of the actor; `null` for legacy keys |
+| `sessionId` | The session, if the action was performed within it |
+| `correlationId` | From the `X-Correlation-ID` header or generated |
+| `causationId` | The causing event (for example, the approval decision for the events of its outcome) |
+| `requestId` | From `X-Request-ID` |
+| `traceRunId` | Trace correlation from `X-Run-Id` (not the domain Run) |
+| `payload` | Event data — only references and safe fields |
+| `cursor` | Opaque cursor of this event's position |
 
-## Что в журнал не попадает
+## What does not go into the log
 
-Журнал читают шире, чем сами сущности, и из него строится память. Поэтому
-в него сознательно не пишутся:
+The log is read more widely than the entities themselves, and memory is built from it. That is why
+the following are deliberately not written to it:
 
-| Не пишется | Что пишется вместо |
+| Not written | What is written instead |
 |---|---|
-| Содержимое custom fields | `"customFields": true` |
-| Тексты комментариев | `bodyLength` |
-| `content` артефактов | Ссылки: `type`, `name`, `uri`, ids |
-| Данные checkpoints | `checkpointId`, `seq`, `kind` |
-| Тексты `directive` / `reason` управляющих сообщений | ids, `seq`, операция, статус, `causalPosition`, `safeBoundary` |
-| Acceptance и evidence задачи | Числа элементов |
-| Желаемое состояние цели, `spec` проверок | `desired_state: true`, число критериев |
-| `note` и `url` в origin | Сводка: kind, ref, ruleId, ids фактов |
-| Run actions | Отдельная таблица аудита исполнения, не журнал |
-| Title, summary и данные дочерней работы | ids, `correlationId`, исход, хэш результата |
+| Contents of custom fields | `"customFields": true` |
+| Comment texts | `bodyLength` |
+| Artifact `content` | References: `type`, `name`, `uri`, ids |
+| Checkpoint data | `checkpointId`, `seq`, `kind` |
+| Texts of `directive` / `reason` of control messages | ids, `seq`, operation, status, `causalPosition`, `safeBoundary` |
+| Task acceptance and evidence | Element counts |
+| Goal desired state, `spec` of checks | `desired_state: true`, number of criteria |
+| `note` and `url` in origin | Summary: kind, ref, ruleId, fact ids |
+| Run actions | A separate execution audit table, not the log |
+| Title, summary, and data of child work | ids, `correlationId`, outcome, result hash |
 
-## Надёжный курсор
+## Durable cursor
 
-Порядок выдачи — пара `(tx_id, sequence)`, где `tx_id` — 64-битный
-идентификатор пишущей транзакции PostgreSQL. Выдаются только события ниже
-**стабильного горизонта** — транзакции, которые уже гарантированно
-завершились. Отсюда свойство: курсор, продвигающийся только по выданным
-позициям, **не может перешагнуть событие, которое закоммитится позже**.
+The delivery order is the pair `(tx_id, sequence)`, where `tx_id` is the 64-bit
+identifier of the writing PostgreSQL transaction. Only events below the
+**stable horizon** are delivered — transactions that are guaranteed to have already
+finished. Hence the property: a cursor that advances only through delivered
+positions **cannot skip over an event that commits later**.
 
-!!! note "Почему не `sequence`"
-    `sequence` назначается при `INSERT`, а `tx_id` — при первой записи
-    транзакции; у конкурентных команд эти порядки могут расходиться. Курсор по
-    `sequence` мог бы навсегда перескочить ещё невидимое событие с меньшим
-    номером. Цена надёжного курсора — задержка выдачи на время самой долгой
-    открытой пишущей транзакции: доставка откладывается, но не теряется.
+!!! note "Why not `sequence`"
+    `sequence` is assigned on `INSERT`, and `tx_id` on the transaction's first
+    write; for concurrent commands these orders can diverge. A cursor on
+    `sequence` could permanently skip a not-yet-visible event with a lower
+    number. The price of the durable cursor is a delivery delay equal to the longest
+    open writing transaction: delivery is postponed, not lost.
 
-Курсор — непрозрачная строка вида `ec1_<base64url>`. Клиенты **не должны**
-разбирать, сравнивать или конструировать курсоры: храните последний
-полученный и передавайте его обратно.
+A cursor is an opaque string of the form `ec1_<base64url>`. Clients **must not**
+parse, compare, or construct cursors: store the last one
+received and pass it back.
 
-| Ситуация | Ответ |
+| Situation | Response |
 |---|---|
-| Малформированный курсор | `422 invalid_cursor` |
-| Курсор будущей версии формата | `422 unsupported_cursor_version` |
-| Курсор ниже границы удалённой истории | `422 cursor_below_journal_floor` |
+| Malformed cursor | `422 invalid_cursor` |
+| Cursor of a future format version | `422 unsupported_cursor_version` |
+| Cursor below the boundary of deleted history | `422 cursor_below_journal_floor` |
 
-Для совместимости принимаются устаревшие формы: целое `?after=<sequence>` и
-старое кодирование `nextCursor`. При переходе с них возможна повторная выдача
-уже виденных событий (at-least-once).
+For compatibility, legacy forms are accepted: the integer `?after=<sequence>` and
+the old `nextCursor` encoding. When migrating from them, already seen events may be
+delivered again (at-least-once).
 
-## Чтение страницами
+## Reading by pages
 
 ```bash
-# С начала доступной истории
+# From the start of the available history
 curl -s "$CP/events?limit=200" -H "Authorization: Bearer $TOKEN"
 
-# Продолжение с сохранённого курсора
+# Continue from a saved cursor
 curl -s "$CP/events?cursor=ec1_…&limit=200" -H "Authorization: Bearer $TOKEN"
 
-# Поток одной задачи
+# The stream of one task
 curl -s "$CP/events?entityType=task&entityId=<task-id>" -H "Authorization: Bearer $TOKEN"
 
-# Последние 20 стабильных событий (диагностика)
+# The last 20 stable events (diagnostics)
 curl -s "$CP/events?tail=20" -H "Authorization: Bearer $TOKEN"
 ```
 
-| Параметр | Описание |
+| Parameter | Description |
 |---|---|
-| `cursor` | Непрозрачный курсор; без него — чтение с начала доступной истории |
-| `after` | Устаревший целочисленный курсор (`sequence`) |
-| `limit` | 1–200, по умолчанию 50 |
-| `tail` | Последние N стабильных событий в порядке доставки (не больше `limit`) |
-| `entityType`, `entityId` | Фильтр по потоку сущности |
-| `types` | Префиксы типа (`approval.`), до 20 — см. [Подписки на события](event-subscriptions.md) |
-| `workspaceId` | События поддерева workspace; право `events.read` проверяется на этом workspace |
+| `cursor` | Opaque cursor; without it, reading starts from the beginning of the available history |
+| `after` | Legacy integer cursor (`sequence`) |
+| `limit` | 1–200, 50 by default |
+| `tail` | The last N stable events in delivery order (no more than `limit`) |
+| `entityType`, `entityId` | Filter by entity stream |
+| `types` | Type prefixes (`approval.`), up to 20 — see [Event subscriptions](event-subscriptions.md) |
+| `workspaceId` | Events of the workspace subtree; the `events.read` permission is checked on that workspace |
 
-Ответ **всегда** содержит `nextCursor` (на пустой странице — эхо входного
-курсора) и `hasMore`:
+The response **always** contains `nextCursor` (on an empty page, an echo of the input
+cursor) and `hasMore`:
 
 ```json
 {"items": [{"…": "…", "cursor": "ec1_…"}], "nextCursor": "ec1_…", "hasMore": false}
 ```
 
-Право: `events.read` на tenant, а с `workspaceId` — на этом workspace.
+Permission: `events.read` on the tenant, and with `workspaceId`, on that workspace.
 
-### Цикл подписчика
+### Subscriber loop
 
 ```python
-cursor = load_cursor()                     # None при первом запуске
+cursor = load_cursor()                     # None on first start
 while True:
     page = get("/api/v1/events", cursor=cursor, limit=200)
     for event in page["items"]:
-        handle(event)                      # обработчик должен быть идемпотентным
+        handle(event)                      # the handler must be idempotent
         cursor = event["cursor"]
         save_cursor(cursor)
     if not page["hasMore"]:
-        sleep(1)                           # или ждать WebSocket
+        sleep(1)                           # or wait for WebSocket
     cursor = page["nextCursor"]
 ```
 
-Доставка — at-least-once: после сбоя между обработкой и сохранением курсора
-событие придёт снова. Делайте обработку идемпотентной, например по
-`event["id"]`. Готовый цикл с хранением курсора, дедупликацией и повторами —
-`EventConsumer` из SDK, см. [Подписки на события](event-subscriptions.md#sdk).
+Delivery is at-least-once: after a failure between processing and saving the cursor,
+the event arrives again. Make processing idempotent, for example by
+`event["id"]`. A ready-made loop with cursor storage, deduplication, and retries is
+`EventConsumer` from the SDK, see [Event subscriptions](event-subscriptions.md#sdk).
 
 ## WebSocket
 
 ```text
-WS /api/v1/events/ws?after=<cursor>[&types=<префикс>][&workspaceId=<id>]
+WS /api/v1/events/ws?after=<cursor>[&types=<prefix>][&workspaceId=<id>]
 ```
 
-WebSocket — не источник истины, а сигнал «проснись и дочитай». Сервер
-всегда читает события из таблицы в порядке `(tx_id, sequence)`, отдаёт их
-пачками по 200 и засыпает до `NOTIFY` своего tenant'а или до таймаута
-`CP_WS_POLL_INTERVAL_SECONDS` (5 с по умолчанию) — потерянное уведомление не
-теряет событий. Каждое сообщение — событие в той же форме, что и в `GET
-/events`, с полем `cursor`.
+WebSocket is not a source of truth but a "wake up and read the rest" signal. The server
+always reads events from the table in `(tx_id, sequence)` order, sends them
+in batches of 200, and sleeps until a `NOTIFY` for its tenant or until the
+`CP_WS_POLL_INTERVAL_SECONDS` timeout (5 s by default) — a lost notification does not
+lose events. Each message is an event in the same form as in `GET
+/events`, with a `cursor` field.
 
-Аутентификация — как у HTTP; право `events.read`. Ошибки передаются кодом
-закрытия после установления соединения:
+Authentication is the same as for HTTP; permission `events.read`. Errors are delivered as a close
+code after the connection is established:
 
-| Код закрытия | Причина |
+| Close code | Reason |
 |---|---|
-| `4401` | Нет или неверные credentials |
-| `4403` | Нет права `events.read` |
-| `4404` | Workspace фильтра не существует |
-| `4400` | Малформированный или неподдерживаемый курсор, неверный фильтр типов |
-| `4503` | Решение об авторизации не получено (PDP недоступен) — повтор имеет смысл |
-| `1011` | Внутренняя ошибка сервера |
+| `4401` | Missing or invalid credentials |
+| `4403` | No `events.read` permission |
+| `4404` | The filter's workspace does not exist |
+| `4400` | Malformed or unsupported cursor, invalid type filter |
+| `4503` | No authorization decision received (PDP unavailable) — retrying makes sense |
+| `1011` | Internal server error |
 
-При переподключении передайте `?after=<cursor последнего обработанного
-события>` — пропущенное будет дочитано.
+When reconnecting, pass `?after=<cursor of the last processed
+event>` — whatever was missed will be read.
 
-## Каталог событий
+## Event catalog
 
-### Задачи и работа
+### Tasks and work
 
-| Тип | Поток | Ключевые поля payload |
+| Type | Stream | Key payload fields |
 |---|---|---|
-| `task.created` | task | `publicId`, `title`, `status`, `systemStatusCategory`, `typeKey`, `typeVersion`, `priority`, `workspaceId`, `startDate`, `dueDate`, `customFields` (флаг), `goalId`, `origin` (сводка), `acceptanceChecks` |
-| `task.updated` | task | `changes`, `version`; при смене статуса — `fromStatus`, `status`, `systemStatusCategory` |
+| `task.created` | task | `publicId`, `title`, `status`, `systemStatusCategory`, `typeKey`, `typeVersion`, `priority`, `workspaceId`, `startDate`, `dueDate`, `customFields` (flag), `goalId`, `origin` (summary), `acceptanceChecks` |
+| `task.updated` | task | `changes`, `version`; on a status change — `fromStatus`, `status`, `systemStatusCategory` |
 | `task.claimed` | task | `claimId`, `sessionId`, `holderId`, `fencingToken`, `expiresAt`, `status`, `systemStatusCategory`, `version` |
 | `task.completed` | task | `publicId`, `status`, `systemStatusCategory`, `version` |
-| `task.relation_added`, `task.relation_removed` | task | Связь |
+| `task.relation_added`, `task.relation_removed` | task | The relation |
 | `task.comment_added`, `task.comment_edited` | task | `commentId`, `authorPrincipalId`, `version`, `bodyLength`, `runId`, `artifactId` |
-| `task.external_reference_added`, `task.external_reference_updated` | task | Внешняя ссылка без `metadata` |
-| `task_type.created`, `task_type.deprecated` | task_type | `key`, `version` и сводка lifecycle |
-| `goal.created`, `goal.updated` | goal | См. [Цели](goals-and-evidence.md) |
+| `task.external_reference_added`, `task.external_reference_updated` | task | External reference without `metadata` |
+| `task_type.created`, `task_type.deprecated` | task_type | `key`, `version`, and a lifecycle summary |
+| `goal.created`, `goal.updated` | goal | See [Goals](goals-and-evidence.md) |
 | `task.verification_started` | task | `publicId`, `taskId`, `verificationId`, `attempt`, `trigger`, `checks` |
-| `task.verification_failed` | task | То же плюс `results`, `failedCheck`, `reason`, `consecutiveFailures`, `blocked`, `fromStatus`, `status`, `systemStatusCategory` |
+| `task.verification_failed` | task | The same plus `results`, `failedCheck`, `reason`, `consecutiveFailures`, `blocked`, `fromStatus`, `status`, `systemStatusCategory` |
 | `task.verified` | task | `publicId`, `taskId`, `verificationId`, `attempt`, `results`, `artifactId` |
-| `task.completion_work_executed`, `task.completion_work_failed` | task | Работа после завершения, объявленная типом задачи |
-| `task.context_pack_recorded` | task | Пакет контекста, собранный при claim: ids и счётчики |
-| `rule.created`, `.updated`, `.enabled`, `.disabled`, `.archived`, `.evaluated` | rule | Правила вывода работы |
-| `work.derived`, `work.reconciled` | task | Работа, выведенная правилом: `ruleId`, `ruleKey`, `evaluationId`, `taskId`, `dedupKey` |
+| `task.completion_work_executed`, `task.completion_work_failed` | task | Post-completion work declared by the task type |
+| `task.context_pack_recorded` | task | Context pack assembled on claim: ids and counters |
+| `rule.created`, `.updated`, `.enabled`, `.disabled`, `.archived`, `.evaluated` | rule | Work rules |
+| `work.derived`, `work.reconciled` | task | Work derived by a rule: `ruleId`, `ruleKey`, `evaluationId`, `taskId`, `dedupKey` |
 
-### Исполнение
+### Execution
 
-| Тип | Поток | Ключевые поля payload |
+| Type | Stream | Key payload fields |
 |---|---|---|
 | `session.opened`, `session.closed`, `session.expired` | session | — |
-| `claim.released` | claim | `taskId`, `reason`, `taskStatus` (и `taskSystemStatusCategory` при закрытии сессии) |
+| `claim.released` | claim | `taskId`, `reason`, `taskStatus` (and `taskSystemStatusCategory` when a session closes) |
 | `claim.expired` | claim | `taskId`, `reason` (`expired`, `session_inactive`) |
 | `run.started` | run | `taskId`, `claimId`, `attempt`, `fencingToken` |
 | `run.succeeded` | run | `taskId`, `attempt`, `taskCompleted` |
-| `run.failed` | run | `taskId`, `reason` (в том числе `superseded`), `attempt` |
+| `run.failed` | run | `taskId`, `reason` (including `superseded`), `attempt` |
 | `run.cancelled` | run | `taskId`, `reason`, `attempt` |
 | `run.suspended` | run | `taskId`, `reason`, `attempt`, `waitingForApprovalId` |
 | `run.checkpointed` | run | `taskId`, `checkpointId`, `seq`, `kind` |
 | `run.handoff_prepared` | run | `taskId`, `claimId`, `checkpointId`, `fencingToken`, `reason` |
 | `run.cancel_requested` | run | `taskId`, `attempt` |
 | `run.control_message.accepted`, `.applied`, `.rejected`, `.superseded` | run | `controlMessageId`, `seq`, `operation`, `status`, `causalPosition`, `safeBoundary` |
-| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | Версия манифеста исполнения |
-| `run.child.launched`, `.started`, `.resolved`, `.revoked`, `.cancel_requested` | run | ids, `correlationId`, исход, хэш результата |
+| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | Execution manifest version |
+| `run.child.launched`, `.started`, `.resolved`, `.revoked`, `.cancel_requested` | run | ids, `correlationId`, outcome, result hash |
 
-### Approvals, артефакты, наблюдения
+### Approvals, artifacts, observations
 
-| Тип | Поток | Ключевые поля payload |
+| Type | Stream | Key payload fields |
 |---|---|---|
 | `approval.requested` (v2) | approval | `taskId`, `artifactId`, `requiredRoleId`, `assignedPrincipalId`, `gate`; v2 — `workspaceId`, `taskPublicId`, `taskTitle`, `requestedBy`, `comment` |
-| `approval.approved`, `approval.rejected` (v2) | approval | `taskId`, `artifactId`, `outcomeStatus`; v2 — `decisionBy`, `comment`, `channel` (канал решения, `null` для прямого вызова API) |
+| `approval.approved`, `approval.rejected` (v2) | approval | `taskId`, `artifactId`, `outcomeStatus`; v2 — `decisionBy`, `comment`, `channel` (decision channel, `null` for a direct API call) |
 | `approval.cancelled` (v2) | approval | `taskId`; v2 — `cancelledBy` |
-| `approval.outcome_executed`, `.outcome_failed`, `.outcome_deferred` | approval | См. [Approvals](approvals.md) |
+| `approval.outcome_executed`, `.outcome_failed`, `.outcome_deferred` | approval | See [Approvals](approvals.md) |
 | `artifact.created` | artifact | `type`, `name`, `taskId`, `runId`, `uri`, `supersedesArtifactId` |
-| `observation.recorded` | observation | Явное «запомнить» (см. [Контекст задачи и память](context.md)) |
-| `knowledge.snapshot_reconciled`, `knowledge.pack_registered`, `knowledge.packs_configured` | — | Счётчики без содержимого |
-| `skill.invocation_requested`, `_claimed`, `_retry_scheduled`, `_succeeded`, `_failed`, `_cancelled` | skill_invocation | ids, skill и версия, попытка, код ошибки — без входов и выходов |
+| `observation.recorded` | observation | An explicit "remember" (see [Task context and memory](context.md)) |
+| `knowledge.snapshot_reconciled`, `knowledge.pack_registered`, `knowledge.packs_configured` | — | Counters without content |
+| `skill.invocation_requested`, `_claimed`, `_retry_scheduled`, `_succeeded`, `_failed`, `_cancelled` | skill_invocation | ids, skill and version, attempt, error code — without inputs and outputs |
 
-### Организация и конфигурация
+### Organization and configuration
 
-| Группа | Типы |
+| Group | Types |
 |---|---|
-| Tenant и principals | `tenant.bootstrapped`, `principal.created`, `api_key.created`, `api_key.revoked`, `iam_binding.created`, `iam_binding.revoked`, `delegation.created`, `delegation.revoked` |
+| Tenant and principals | `tenant.bootstrapped`, `principal.created`, `api_key.created`, `api_key.revoked`, `iam_binding.created`, `iam_binding.revoked`, `delegation.created`, `delegation.revoked` |
 | Workspaces | `workspace.created`, `.updated`, `.archived`, `.moved`, `.member_added`, `.member_removed`; `workspace_type.created`, `.updated`, `.archived` |
-| Роли и каталог | `role.created`, `.updated`, `.assigned`, `.revoked`; `capability.created`, `.assigned`, `.revoked`; `skill.registered`, `.updated`, `.assigned`, `.revoked` |
-| Проекты | `project_template.created`, `.deprecated`; `project.created`, `.updated`, `.archived`, `.status_changed`, `.config_revision_created`, `.config_revision_activated`, `.external_reference_added`, `.external_reference_updated` |
-| Операции | `context_adapter.redriven`, `context_adapter.rebuilt`, `event_journal.archived`, `event_journal.pruned` |
+| Roles and catalog | `role.created`, `.updated`, `.assigned`, `.revoked`; `capability.created`, `.assigned`, `.revoked`; `skill.registered`, `.updated`, `.assigned`, `.revoked` |
+| Projects | `project_template.created`, `.deprecated`; `project.created`, `.updated`, `.archived`, `.status_changed`, `.config_revision_created`, `.config_revision_activated`, `.external_reference_added`, `.external_reference_updated` |
+| Operations | `context_adapter.redriven`, `context_adapter.rebuilt`, `event_journal.archived`, `event_journal.pruned` |
 
-!!! tip "Статус: ключ или категория"
-    События задач несут и пользовательский ключ `status`, и
-    `systemStatusCategory`. Подписчику, которому важен смысл («задача
-    завершена»), стоит реагировать на категорию: ключи у разных типов
-    задач разные.
+!!! tip "Status: key or category"
+    Task events carry both the user-defined `status` key and
+    `systemStatusCategory`. A subscriber that cares about the meaning ("the task
+    is finished") should react to the category: keys differ between task
+    types.
 
-## Потребители журнала
+## Log consumers
 
-| Потребитель | Как читает | Гарантия |
+| Consumer | How it reads | Guarantee |
 |---|---|---|
-| Харнессы, рабочие места, runner'ы | `GET /events`, WebSocket | At-least-once по курсору клиента |
-| Сервисы на SDK `EventConsumer` (например, [сервис уведомлений](../notifications/index.md)) | `GET /events` с фильтрами, WebSocket как будильник | Курсор и отметки обработанных событий в базе потребителя: без потерь и без повторов для эффектов в этой базе |
-| Context Adapter | Внутренний per-tenant курсор в `event_consumer_cursors` | At-least-once; курсор двигается только после подтверждения памятью; сбойный tenant паркуется отдельно |
-| Outbox воркера | Таблица `outbox`, `FOR UPDATE SKIP LOCKED` | At-least-once; ограниченные повторы с backoff, после исчерпания запись остаётся с `last_error`. В базовой поставке точка доставки — структурированный лог |
+| Harnesses, workplaces, runners | `GET /events`, WebSocket | At-least-once by the client's cursor |
+| Services on the `EventConsumer` SDK (for example, the [notification service](../notifications/index.md)) | `GET /events` with filters, WebSocket as an alarm clock | Cursor and processed-event marks in the consumer's database: no losses and no duplicates for effects in that database |
+| Context Adapter | Internal per-tenant cursor in `event_consumer_cursors` | At-least-once; the cursor advances only after memory confirms; a failing tenant is parked separately |
+| Worker outbox | The `outbox` table, `FOR UPDATE SKIP LOCKED` | At-least-once; bounded retries with backoff, after they are exhausted the record stays with `last_error`. In the base delivery the delivery target is a structured log |
 
-Управление Context Adapter (`GET /operations/context-adapter`,
-`:redrive`, `:rebuild`) описано в [Контексте задачи и памяти](context.md).
+Managing the Context Adapter (`GET /operations/context-adapter`,
+`:redrive`, `:rebuild`) is described in [Task context and memory](context.md).
 
-## Хранение журнала
+## Log retention
 
-Журнал растёт без ограничений, пока оператор не выполнит архивацию.
-Операции требуют права `operations.manage`.
+The log grows without limit until an operator performs archiving.
+The operations require the `operations.manage` permission.
 
 ```bash
-# Перенести подтверждённые и достаточно старые события в архив
+# Move acknowledged and sufficiently old events to the archive
 curl -s -X POST "$CP/operations/journal:archive" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"beforeSeconds": 2592000, "maxEvents": 50000}'
 
-# Физически удалить заархивированное (необратимо)
+# Physically delete archived events (irreversible)
 curl -s -X POST "$CP/operations/journal:prune" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"beforeSeconds": 7776000}'
@@ -317,36 +318,36 @@ curl -s -X POST "$CP/operations/journal:prune" \
 
 ```mermaid
 flowchart LR
-    E["events<br/>(горячий журнал)"] -->|":archive"| A["event_archive"]
-    A -->|":prune"| X["удалено"]
+    E["events<br/>(hot log)"] -->|":archive"| A["event_archive"]
+    A -->|":prune"| X["deleted"]
     E -. "journal floor" .- A
     A -. "archive floor" .- X
 ```
 
-- `:archive` переносит события старше `beforeSeconds` (по умолчанию
-  `CP_JOURNAL_RETENTION_MIN_AGE_SECONDS`, 30 суток), но не дальше минимальной
-  позиции курсоров потребителей и не дальше самого старого недоставленного
-  outbox-события. То, что кому-то ещё нужно, не уезжает. Чтение через
-  `GET /events` прозрачно охватывает архив — аудит не меняется.
-- Если ни один потребитель ещё не зарегистрировал курсор, архивация
-  отклоняется `409 retention_blocked_by_consumer`.
-- `:prune` — **единственная** операция, после которой данные теряются.
-  Курсор ниже удалённой границы получает `422 cursor_below_journal_floor`,
-  а не молчаливый пропуск; чтение без курсора начинается с первого
-  сохранившегося события.
-- Обе операции пишут собственные события `event_journal.archived` /
+- `:archive` moves events older than `beforeSeconds` (by default
+  `CP_JOURNAL_RETENTION_MIN_AGE_SECONDS`, 30 days), but not past the minimum
+  position of consumer cursors and not past the oldest undelivered
+  outbox event. Nothing someone still needs is moved. Reading through
+  `GET /events` transparently covers the archive — the audit trail does not change.
+- If no consumer has registered a cursor yet, archiving
+  is rejected with `409 retention_blocked_by_consumer`.
+- `:prune` is the **only** operation after which data is lost.
+  A cursor below the deleted boundary gets `422 cursor_below_journal_floor`,
+  not a silent skip; reading without a cursor starts from the first
+  remaining event.
+- Both operations write their own events `event_journal.archived` /
   `event_journal.pruned`.
 
-!!! danger "Перед prune"
-    Убедитесь, что резервные копии базы содержат нужную историю
-    (см. [Резервное копирование](../operations/backup.md)) и что память
-    не придётся перестраивать из удаляемой части журнала.
+!!! danger "Before prune"
+    Make sure database backups contain the history you need
+    (see [Backup](../operations/backup.md)) and that memory
+    will not have to be rebuilt from the part of the log being deleted.
 
-## См. также
+## See also
 
-- [Подписки на события](event-subscriptions.md) — фильтры, версии данных,
-  каталог и SDK потребителя.
-- [Контекст задачи и память](context.md) — Context Adapter и наблюдения.
-- [Харнесс-протокол](harness-protocol.md) — курсор в self-контексте харнесса.
-- [Мониторинг и здоровье](../operations/monitoring.md)
-- [Артефакты и комментарии](artifacts.md)
+- [Event subscriptions](event-subscriptions.md) — filters, data versions,
+  catalog, and consumer SDK.
+- [Task context and memory](context.md) — Context Adapter and observations.
+- [Harness protocol](harness-protocol.md) — the cursor in the harness self-context.
+- [Monitoring and health](../operations/monitoring.md)
+- [Artifacts and comments](artifacts.md)

@@ -1,50 +1,52 @@
-# Обзор
 
-Раздел объясняет, что такое платформа Taimen, из чего она собрана и по каким
-правилам компоненты делят ответственность. Читать его стоит до установки: без
-модели «работа — identity — знание» остальные разделы руководства воспринимаются
-как набор разрозненных API.
+# Overview
 
-## Статьи раздела
+This section explains what the Taimen platform is, what it is built from, and
+how its components divide responsibility. Read it before you install anything:
+without the "work — identity — knowledge" model, the rest of the guide reads
+like a collection of unrelated APIs.
 
-| Статья | О чём |
+## Pages in this section
+
+| Page | What it covers |
 |---|---|
-| [Что такое Taimen](what-is-taimen.md) | Organizational Runtime: люди, агенты, workflows и сервисы над общей моделью Work; организационный цикл; чем платформа не является |
-| [Архитектура](architecture.md) | Компоненты, их связи, потоки запросов и событий, источники истины, инварианты интеграции |
-| [Ключевые понятия](concepts.md) | Tenant, Workspace, Project, Principal, Task, Task Type, Claim, fencing token, Run, Approval, Artifact, Goal, Evidence, Session, Harness, Capability, Skill, Namespace и другие — по коду |
-| [Состав поставки](components.md) | Репозитории компонентов, профили `compose.yml` (`core`, `edge`, `notify`) и статус каждого |
-| [Модель безопасности](security-model.md) | IAM-токены, audience, scopes, PAT, service accounts, bindings в Control Plane, `platform-auth-sdk`, отзыв |
+| [What is Taimen](what-is-taimen.md) | Organizational Runtime: people, agents, workflows, and services over a shared Work model; the organizational loop; what the platform is not |
+| [Architecture](architecture.md) | Components, how they connect, request and event flows, sources of truth, integration invariants |
+| [Key concepts](concepts.md) | Tenant, Workspace, Project, Principal, Task, Task Type, Claim, fencing token, Run, Approval, Artifact, Goal, Evidence, Session, Harness, Capability, Skill, Namespace, and more, as defined in the code |
+| [Delivery contents](components.md) | Component repositories, `compose.yml` profiles (`core`, `edge`, `notify`), and the status of each |
+| [Security model](security-model.md) | IAM tokens, audience, scopes, PAT, service accounts, bindings in Control Plane, `platform-auth-sdk`, revocation |
 
-## Коротко
+## In brief
 
 ```mermaid
 flowchart LR
-    subgraph Executors["Исполнители"]
-        H[Человек<br/>MCP, CLI]
-        A[AI-агент<br/>runner, адаптеры]
-        S[Сервис / workflow]
+    subgraph Executors["Executors"]
+        H[Human<br/>MCP, CLI]
+        A[AI agent<br/>runner, adapters]
+        S[Service / workflow]
     end
-    IAM[IAM Service<br/>identity и токены]
-    CP[Control Plane<br/>работа и authority]
-    M[Memory Service<br/>знание и контекст]
+    IAM[IAM Service<br/>identity and tokens]
+    CP[Control Plane<br/>work and authority]
+    M[Memory Service<br/>knowledge and context]
 
     Executors -->|PAT / client credentials| IAM
-    IAM -->|токен audience| Executors
-    Executors -->|команды: задачи, claims, runs| CP
-    CP -->|события| M
-    CP -->|сборка контекста| M
+    IAM -->|audience token| Executors
+    Executors -->|"commands: tasks, claims, runs"| CP
+    CP -->|events| M
+    CP -->|context assembly| M
 ```
 
-- **Control Plane** — авторитетное операционное состояние: задачи, их типы и
-  статусы, claims с fencing token, runs, approvals, артефакты, журнал событий.
-- **IAM Service** — tenants, principals, credentials; выдаёт короткоживущие
-  токены одного audience.
-- **Memory Service** — долговременное знание с provenance и сборка ограниченного
-  контекста; работой не управляет.
-- Всё остальное — периферия: уведомления (`notify`), периметр (`edge`), клиенты
-  и исполнители.
+- **Control Plane** holds the authoritative operational state: tasks, their
+  types and statuses, claims with fencing tokens, runs, approvals, artifacts,
+  and the event log.
+- **IAM Service** manages tenants, principals, and credentials, and issues
+  short-lived tokens for a single audience.
+- **Memory Service** holds long-term knowledge with provenance and assembles
+  bounded context. It does not manage work.
+- Everything else is peripheral: notifications (`notify`), the edge (`edge`),
+  clients, and executors.
 
-## См. также
+## See also
 
-- [Быстрый старт](../getting-started/index.md)
-- [Глоссарий](../reference/glossary.md)
+- [Getting started](../getting-started/index.md)
+- [Glossary](../reference/glossary.md)

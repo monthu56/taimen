@@ -1,252 +1,257 @@
-# Права и scopes
 
-Справочник по авторизации: права (permissions) Control Plane, роли,
-IAM audiences и scopes всех сервисов, правило пересечения прав со scope
-токена и то, какие права и потолки выдаёт `make bootstrap`. Статья для
-администратора tenant и инженера, который заводит агентов и сервисы.
+# Permissions and scopes
 
-## Два слоя: identity и доменные права
+Authorization reference: Control Plane permissions, roles, IAM audiences and
+scopes of all services, the rule that intersects permissions with the token
+scope, and which permissions and ceilings `make bootstrap` grants. This page
+is for a tenant administrator and for an engineer who sets up agents and
+services.
+
+## Two layers: identity and domain permissions
 
 ```mermaid
 flowchart LR
-    PAT[PAT / client credentials] -->|обмен в IAM| AT["access token<br/>aud = один сервис<br/>scope = потолок"]
+    PAT[PAT / client credentials] -->|exchange in IAM| AT["access token<br/>aud = one service<br/>scope = ceiling"]
     AT --> RS[Resource service]
-    RS -->|binding issuer + principal| PERM[Локальные права сервиса]
-    PERM -->|∩ scope токена| EFF[Эффективные права запроса]
+    RS -->|binding issuer + principal| PERM[Local service permissions]
+    PERM -->|∩ token scope| EFF[Effective request permissions]
 ```
 
-- **IAM** удостоверяет identity и выдаёт короткоживущий access token на
-  **один audience** (один сервис) со **scopes** — потолком полномочий
-  токена. Доменных прав в токене нет.
-- **Resource service** (Control Plane, память, внешний PDP …) сам решает,
-  что principal может делать. В Control Plane права хранятся в
-  **binding** — строке `iam_principal_bindings`, связывающей IAM principal
-  с локальным principal.
-- Эффективные права запроса — пересечение прав binding и scope токена.
-  Scope только сужает, никогда не расширяет.
+- **IAM** authenticates the identity and issues a short-lived access token for
+  **one audience** (one service) with **scopes**, the ceiling of the token's
+  authority. The token carries no domain permissions.
+- The **resource service** (Control Plane, memory, an external PDP …) decides
+  on its own what the principal may do. In Control Plane, permissions are
+  stored in a **binding**: an `iam_principal_bindings` row that links an IAM
+  principal to a local principal.
+- The effective permissions of a request are the intersection of the binding
+  permissions and the token scope. A scope only narrows, never widens.
 
-Подробнее — [Модель безопасности](../overview/security-model.md) и
-[Токены, audiences, scopes](../iam/tokens.md).
+Details: [Security model](../overview/security-model.md) and
+[Tokens, audiences, scopes](../iam/tokens.md).
 
-## Права Control Plane
+## Control Plane permissions
 
-Права — плоские строки, перечисление `Permission` в
-`control_plane/domain/enums.py`. Проверка «хотя бы одно из» (`require`).
-Право `admin` покрывает любое другое.
+Permissions are flat strings, the `Permission` enumeration in
+`control_plane/domain/enums.py`. The check is "at least one of" (`require`).
+The `admin` permission covers any other.
 
-| Право | Что разрешает (область API) |
+| Permission | What it allows (API area) |
 |---|---|
-| `principals.read` | Чтение principals, их ролей, capabilities, skills. |
-| `principals.write` | Создание и изменение principals; IAM-bindings (`/principals/{id}/iam-bindings`, `:revoke`). Выдать права, которых нет у вызывающего, нельзя (`permission_escalation`). |
-| `delegations.manage` | Делегирования «агент действует от имени человека»; список делегирований. |
-| `sessions.open` | Открыть сессию харнесса (`POST /sessions`), продлевать свою сессию. |
-| `sessions.manage` | Управлять чужими сессиями; список сессий. |
-| `tasks.read` | Чтение задач, связей, комментариев, внешних ссылок; контекст задачи. |
-| `tasks.write` | Создание и изменение задач, связей, комментариев; переходы статусов. |
-| `tasks.claim` | Взять задачу (claim), запускать runs, писать checkpoints, actions, handoff, завершать run. |
-| `claims.manage` | Управлять чужими claims и runs: освобождение, reclaim, отмена, run controls, отзыв child handle. |
-| `events.read` | Журнал событий (`GET /events`, WebSocket-поток). |
-| `workspaces.read` | Чтение workspaces и дерева. |
-| `workspaces.manage` | Создание, перемещение, архивирование workspaces; типы workspace. |
-| `org.read` | Чтение ролей, capabilities, skills каталога. |
-| `org.manage` | Создание и изменение ролей, capabilities, skills; назначение их principals. |
-| `artifacts.read` | Чтение артефактов. |
-| `artifacts.write` | Регистрация артефактов. |
-| `approvals.read` | Чтение approvals. |
-| `approvals.manage` | Создание и отмена approvals. |
-| `approvals.decide` | Решение по approval (approve/reject). Только для людей. |
-| `observations.write` | Запись наблюдений и снимков знаний в память через ядро. |
-| `projects.read` | Чтение project profiles и их конфигурации. |
-| `projects.manage` | Создание и изменение project profiles, ревизий конфигурации. |
-| `project_templates.read` | Чтение шаблонов проектов. |
-| `project_templates.manage` | Создание и изменение шаблонов проектов. |
-| `operations.read` | Операционные сведения (состояние доставки, курсоры потребителей). |
-| `operations.manage` | Операционные действия: redrive адаптера, архивирование и очистка журнала, rebuild курсора. |
-| `task_types.read` | Чтение типов задач и их жизненного цикла. Нужен демону исполнителя, чтобы брать типизированную работу. |
-| `task_types.manage` | Создание версий типов задач. |
-| `skills.invoke` | Попросить ядро вызвать skill. |
-| `skills.execute` | Исполнять вызовы skills (право исполнителя-транспорта). |
-| `processes.read` | Чтение определений процессов, экземпляров и их журналов (на workspace процесса, без него — на tenant). См. [Процессы](../processes/index.md). |
-| `processes.write` | Публикация версии процесса (на workspace процесса). |
-| `processes.operate` | Явный старт экземпляра, `:suspend`, `:resume`, `:cancel` (на workspace экземпляра). |
-| `packages.test` | Проверка и тесты пакета в песочнице ядра, replay процесса (`/packages:test`, `:replay`). |
-| `packages.plan` | План и применение пакета (`/packages:plan`, `/packages:apply`); применение требует ещё права видов. |
-| `calendars.write` | Публикация производственного календаря. |
-| `goals.read` | Чтение целей (Goals). |
-| `goals.write` | Создание и изменение целей. |
-| `admin` | Все права. Только для людей и только под scope `control-plane:admin`. |
+| `principals.read` | Reading principals, their roles, capabilities, skills. |
+| `principals.write` | Creating and changing principals; IAM bindings (`/principals/{id}/iam-bindings`, `:revoke`). You cannot grant permissions the caller does not have (`permission_escalation`). |
+| `delegations.manage` | Delegations "an agent acts on behalf of a human"; the list of delegations. |
+| `sessions.open` | Open a harness session (`POST /sessions`), extend your own session. |
+| `sessions.manage` | Manage other principals' sessions; the list of sessions. |
+| `tasks.read` | Reading tasks, relations, comments, external references; task context. |
+| `tasks.write` | Creating and changing tasks, relations, comments; status transitions. |
+| `tasks.claim` | Claim a task, start runs, write checkpoints, actions, handoff, complete a run. |
+| `claims.manage` | Manage other principals' claims and runs: release, reclaim, cancel, run controls, revoke a child handle. |
+| `events.read` | The event log (`GET /events`, WebSocket stream). |
+| `workspaces.read` | Reading workspaces and the tree. |
+| `workspaces.manage` | Creating, moving, archiving workspaces; workspace types. |
+| `org.read` | Reading roles, capabilities, catalog skills. |
+| `org.manage` | Creating and changing roles, capabilities, skills; assigning them to principals. |
+| `artifacts.read` | Reading artifacts. |
+| `artifacts.write` | Registering artifacts. |
+| `approvals.read` | Reading approvals. |
+| `approvals.manage` | Creating and cancelling approvals. |
+| `approvals.decide` | Deciding an approval (approve/reject). Humans only. |
+| `observations.write` | Writing observations and knowledge snapshots to memory through the core. |
+| `projects.read` | Reading project profiles and their configuration. |
+| `projects.manage` | Creating and changing project profiles and configuration revisions. |
+| `project_templates.read` | Reading project templates. |
+| `project_templates.manage` | Creating and changing project templates. |
+| `operations.read` | Operational information (delivery state, consumer cursors). |
+| `operations.manage` | Operational actions: adapter redrive, archiving and pruning the log, cursor rebuild. |
+| `task_types.read` | Reading task types and their lifecycle. The executor daemon needs it to take typed work. |
+| `task_types.manage` | Creating task type versions. |
+| `skills.invoke` | Ask the core to invoke a skill. |
+| `skills.execute` | Execute skill invocations (the permission of an executor transport). |
+| `processes.read` | Reading process definitions, instances, and their logs (on the process workspace; without one, on the tenant). See [Processes](../processes/index.md). |
+| `processes.write` | Publishing a process version (on the process workspace). |
+| `processes.operate` | Explicit instance start, `:suspend`, `:resume`, `:cancel` (on the instance workspace). |
+| `packages.test` | Checking and testing a package in the core sandbox, process replay (`/packages:test`, `:replay`). |
+| `packages.plan` | Planning and applying a package (`/packages:plan`, `/packages:apply`); applying also requires the kind permissions. |
+| `calendars.write` | Publishing a business calendar. |
+| `goals.read` | Reading goals (Goals). |
+| `goals.write` | Creating and changing goals. |
+| `admin` | All permissions. Humans only, and only under the `control-plane:admin` scope. |
 
-!!! note "Только для людей"
-    `admin` и `approvals.decide` нельзя выдать principal вида `agent` или
-    `service`: создание такого binding отвечает
-    `422 permissions_not_allowed_for_kind`. Решение по approval и полный
-    доступ остаются за человеком.
+!!! note "Humans only"
+    `admin` and `approvals.decide` cannot be granted to a principal of kind
+    `agent` or `service`: creating such a binding returns
+    `422 permissions_not_allowed_for_kind`. Approval decisions and full access
+    stay with a human.
 
-### Пересечение со scope токена
+### Intersection with the token scope
 
-Правило `narrow_permissions` в `control_plane/infrastructure/auth/iam.py`:
+The `narrow_permissions` rule in `control_plane/infrastructure/auth/iam.py`:
 
-| Scope в токене | Какие права binding остаются |
+| Scope in the token | Which binding permissions remain |
 |---|---|
-| `control-plane:admin` | Все права binding без сужения (включая `admin`). |
-| `control-plane:write` | Все права, кроме `admin` и кроме `*.read` (если нет `control-plane:read`). |
-| `control-plane:read` | Только права, оканчивающиеся на `.read`. |
-| `control-plane:read` + `control-plane:write` | Все права binding, кроме `admin`. |
-| ни одного | Ни одного права. |
+| `control-plane:admin` | All binding permissions without narrowing (including `admin`). |
+| `control-plane:write` | All permissions except `admin` and except `*.read` (if there is no `control-plane:read`). |
+| `control-plane:read` | Only permissions ending in `.read`. |
+| `control-plane:read` + `control-plane:write` | All binding permissions except `admin`. |
+| none | No permissions. |
 
-Пример: у оператора binding со всеми правами, но токен выпущен со scope
-`control-plane:read` — запрос на создание задачи получит
+Example: an operator has a binding with all permissions, but the token was
+issued with the `control-plane:read` scope; a request to create a task gets
 `403 permission_denied`.
 
 ### IAM principal bindings {#iam-principal-bindings}
 
-Binding ищется по паре **(issuer, IAM principal id)**. Следствия:
+A binding is looked up by the pair **(issuer, IAM principal id)**.
+Consequences:
 
-- Смена публичного адреса (`TAIMEN_PUBLIC_URL`) меняет issuer IAM, и все
-  bindings перестают находиться — вход закрывается. Bindings нужно
-  переносить одновременно со сменой адреса.
-- Заводите binding **до** первого запроса principal. Отказ
-  `binding_not_found` кэшируется как отзыв credential на
-  `CP_IAM_BINDING_STALE_AFTER_SECONDS` (по умолчанию 120 с). Изменение
-  binding через API Control Plane сбрасывает кэш этой identity в процессе,
-  который обработал запрос; если binding появился в обход API (например,
-  SQL-ом) или API работает в нескольких экземплярах, отказ держится до
-  истечения этого окна либо до перезапуска `control-plane-api`.
-- Статусы binding: `active`, `disabled`, `revoked`. Отключённый binding
-  даёт тот же `401 invalid_credentials`, что и отсутствующий.
-- Управление — API Control Plane: `POST /api/v1/bootstrap` с полем
-  `iamBinding`, `GET/POST /api/v1/principals/{id}/iam-bindings`,
+- Changing the public address (`TAIMEN_PUBLIC_URL`) changes the IAM issuer,
+  and no bindings can be found anymore: sign-in is closed. Move the bindings
+  together with the address change.
+- Create the binding **before** the principal's first request. A
+  `binding_not_found` denial is cached as a credential revocation for
+  `CP_IAM_BINDING_STALE_AFTER_SECONDS` (120 s by default). Changing a binding
+  through the Control Plane API resets the cache for that identity in the
+  process that handled the request; if the binding appeared bypassing the API
+  (for example, via SQL) or the API runs in several instances, the denial
+  holds until that window expires or until `control-plane-api` restarts.
+- Binding statuses: `active`, `disabled`, `revoked`. A disabled binding
+  returns the same `401 invalid_credentials` as a missing one.
+- Management is through the Control Plane API: `POST /api/v1/bootstrap` with
+  the `iamBinding` field, `GET/POST /api/v1/principals/{id}/iam-bindings`,
   `…/iam-bindings/{id}:revoke`.
 
-Одна IAM identity может быть связана только с одним tenant Control Plane
+One IAM identity can be linked to only one Control Plane tenant
 (`409 iam_identity_bound_elsewhere`).
 
 
-### Доменная авторизация через внешний PDP
+### Domain authorization through an external PDP
 
-При `CP_AUTHZ_MODE=policy` решение по запросу с IAM-субъектом принимает
-внешний PDP по каталогу действий `control-plane/authz/catalog.yaml`
-(имена действий совпадают с правами). В режиме `shadow` решает локальная
-проверка, а PDP опрашивается параллельно и расхождения пишутся в журнал.
-Legacy-ключи всегда проверяются локально. Недоступность PDP даёт
-`503 decision_unavailable` — запрос не выполняется (fail closed). См.
-[Авторизация и права](../control-plane/authorization.md).
+With `CP_AUTHZ_MODE=policy`, the decision on a request with an IAM subject is
+made by an external PDP using the action catalog
+`control-plane/authz/catalog.yaml` (action names match permissions). In
+`shadow` mode, the local check decides, the PDP is queried in parallel, and
+discrepancies are logged. Legacy keys are always checked locally. An
+unavailable PDP returns `503 decision_unavailable`, and the request is not
+executed (fail closed). See
+[Authorization and permissions](../control-plane/authorization.md).
 
-## Роли {#roles}
+## Roles {#roles}
 
 
-Роль в платформе — организационная роль Control Plane. Внешний IdP ролей не
-назначает: он только подтверждает, кто человек.
+A role in the platform is a Control Plane organizational role. The external
+IdP does not assign roles: it only confirms who the person is.
 
-| Где | Что это | Как управляется |
+| Where | What it is | How it is managed |
 |---|---|---|
-| Control Plane | Организационная роль (`slug`, `name`, опционально `workspaceId`). Используется в требованиях задач (`requirements`: role / capability / skill), в approvals (`requiredRoleId`) и в контекстных кортежах policy. **Права не даёт.** | `POST /api/v1/roles`, `POST /api/v1/principals/{id}/roles` (право `org.manage`); роли из пакетов каталога ставит `make bootstrap`. |
+| Control Plane | Organizational role (`slug`, `name`, optionally `workspaceId`). Used in task requirements (`requirements`: role / capability / skill), in approvals (`requiredRoleId`), and in policy context tuples. **It grants no permissions.** | `POST /api/v1/roles`, `POST /api/v1/principals/{id}/roles` (permission `org.manage`); `make bootstrap` installs roles from catalog packages. |
 
-## IAM audiences и scopes
+## IAM audiences and scopes
 
-Audience — идентификатор одного resource service. Токен выпускается ровно
-на один audience; список audiences в `aud` сервисы отвергают. Допустимые
-scopes audience задаёт реестр IAM (`allowedScopes`), `make bootstrap`
-приводит их к списку ниже идемпотентно.
+An audience is the identifier of one resource service. A token is issued for
+exactly one audience; services reject a list of audiences in `aud`. The
+allowed scopes of an audience are set by the IAM registry (`allowedScopes`);
+`make bootstrap` brings them to the list below idempotently.
 
-| Audience | Scopes | Смысл |
+| Audience | Scopes | Meaning |
 |---|---|---|
-| `control-plane` | `control-plane:read`, `control-plane:write`, `control-plane:admin` | Потолок доменных прав Control Plane (см. таблицу пересечения). |
-| `memory-service` | `memory:read` | Чтение namespaces токена. |
-| | `memory:write` | Запись в namespaces токена. |
-| | `memory:pii` | Полный доступ к персональным данным; без него при `CB_PII_PROTECTION=true` выдача маскируется. |
-| | `memory:tenants` | Всё поддерево `tenant:*` независимо от tenant токена. Только service account ядра. |
-| | `memory:on-behalf` | Сервис читает память от имени principal с переданной видимостью (при `CB_POLICY_ENABLED`). |
-| | `memory:service` | Service scope ядра: реестр доменных пакетов видов, reconcile, виды namespace. Только service account ядра. |
-| | `policy:check-on-behalf` | Проверки за конечного principal (resource services). |
-| | `policy:admin` | Роли и bindings tenant. |
-| `iam-scim` | `scim:write` (настраивается `IAM_SCIM_AUDIENCE`, `IAM_SCIM_SCOPE`) | SCIM-provisioning; только confidential service identity. |
+| `control-plane` | `control-plane:read`, `control-plane:write`, `control-plane:admin` | Ceiling of Control Plane domain permissions (see the intersection table). |
+| `memory-service` | `memory:read` | Reading the token's namespaces. |
+| | `memory:write` | Writing to the token's namespaces. |
+| | `memory:pii` | Full access to personal data; without it, output is masked when `CB_PII_PROTECTION=true`. |
+| | `memory:tenants` | The whole `tenant:*` subtree regardless of the token's tenant. Core service account only. |
+| | `memory:on-behalf` | The service reads memory on behalf of a principal with the passed visibility (with `CB_POLICY_ENABLED`). |
+| | `memory:service` | Core service scope: registry of kind domain packages, reconcile, namespace kinds. Core service account only. |
+| | `policy:check-on-behalf` | Checks on behalf of the end principal (resource services). |
+| | `policy:admin` | Tenant roles and bindings. |
+| `iam-scim` | `scim:write` (configured by `IAM_SCIM_AUDIENCE`, `IAM_SCIM_SCOPE`) | SCIM provisioning; confidential service identity only. |
 
-Namespaces памяти, доступные IAM-токену без `memory:tenants`:
-`tenant:<tenant_id>` и поддерево `tenant:<tenant_id>:*`, плюс namespaces из
-claim `memory_namespaces` (каждый — ровно и с поддеревом). Токен без
-scopes памяти валиден, но не покрывает ни одного namespace.
+Memory namespaces available to an IAM token without `memory:tenants`:
+`tenant:<tenant_id>` and the subtree `tenant:<tenant_id>:*`, plus the
+namespaces from the `memory_namespaces` claim (each one exactly and with its
+subtree). A token without memory scopes is valid but covers no namespace.
 
-### Как выбираются scopes при обмене
+### How scopes are chosen during exchange
 
-| Обмен | Правило |
+| Exchange | Rule |
 |---|---|
-| PAT → access token (`POST /api/v1/platform-access-tokens:exchange`) | Audience должен быть в списке audiences PAT и активен в tenant. Запрошенные scopes ⊆ (потолок PAT ∩ `allowedScopes`); пустой запрос — весь этот пересечённый потолок. Нарушение — `403 audience_not_allowed` / `403 scope_not_allowed`. |
-| Client credentials (`POST /api/v1/tokens/exchange`) | Audience — в списке audiences service account. Запрошенные scopes ⊆ потолок service account **и** ⊆ `allowedScopes`. Выдаются ровно запрошенные. |
-| Федерация (`POST /api/v1/tenants/{t}/federation:exchange`) | Только human principal. Scopes ⊆ `allowedScopes`; пустой запрос — все `allowedScopes`. |
+| PAT → access token (`POST /api/v1/platform-access-tokens:exchange`) | The audience must be in the PAT's audience list and active in the tenant. Requested scopes ⊆ (PAT ceiling ∩ `allowedScopes`); an empty request gets that whole intersected ceiling. A violation returns `403 audience_not_allowed` / `403 scope_not_allowed`. |
+| Client credentials (`POST /api/v1/tokens/exchange`) | The audience is in the service account's audience list. Requested scopes ⊆ the service account ceiling **and** ⊆ `allowedScopes`. Exactly the requested scopes are issued. |
+| Federation (`POST /api/v1/tenants/{t}/federation:exchange`) | Human principal only. Scopes ⊆ `allowedScopes`; an empty request gets all `allowedScopes`. |
 
-!!! tip "Scope — всегда с префиксом audience"
-    Короткие `read`/`write` не существуют: запрос `scopes: ["read"]`
-    получит `403 scope_not_allowed`. Пишите `control-plane:read`.
+!!! tip "A scope always has the audience prefix"
+    Short `read`/`write` do not exist: a request with `scopes: ["read"]` gets
+    `403 scope_not_allowed`. Write `control-plane:read`.
 
-### Кому IAM выпускает PAT
+### Who IAM issues a PAT to
 
-PAT выпускается только principal вида `human` или `agent`; для
-`service_account` — `422 principal_kind_not_allowed` (сервисы используют
-client credentials). Человеку нужен свежий authentication context (не
-старше `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`, по умолчанию 300 с).
-Потолок PAT (`scopeCeiling`) должен входить в `allowedScopes` его
-audiences (`422 invalid_scope_ceiling`). Подробнее —
-[Credentials и PAT](../iam/credentials.md).
+A PAT is issued only to a principal of kind `human` or `agent`; for
+`service_account` the result is `422 principal_kind_not_allowed` (services
+use client credentials). A human needs a fresh authentication context (not
+older than `IAM_PAT_MAX_AUTHENTICATION_AGE_SECONDS`, 300 s by default). The
+PAT ceiling (`scopeCeiling`) must be within the `allowedScopes` of its
+audiences (`422 invalid_scope_ceiling`). Details:
+[Credentials and PAT](../iam/credentials.md).
 
-## Что выдаёт `make bootstrap` {#bootstrap-grants}
+## What `make bootstrap` grants {#bootstrap-grants}
 
-`deploy/bootstrap.py` заводит identity и права идемпотентно (состояние —
-`deploy/state/<env>.json`).
+`deploy/bootstrap.py` sets up identities and permissions idempotently (state
+is in `deploy/state/<env>.json`).
 
-### Human-оператор
+### Human operator
 
-| Что | Значение |
+| What | Value |
 |---|---|
 | IAM principal | `kind: human` |
-| Binding в Control Plane | Все права (`ALL_PERMISSIONS`), создаётся вместе с tenant в `POST /api/v1/bootstrap` |
-| PAT | `secrets/harness-pat`, audience `control-plane`, потолок `control-plane:read`, `control-plane:write`, `control-plane:admin`, срок `--pat-ttl` (по умолчанию 180 дней) |
+| Control Plane binding | All permissions (`ALL_PERMISSIONS`), created together with the tenant in `POST /api/v1/bootstrap` |
+| PAT | `secrets/harness-pat`, audience `control-plane`, ceiling `control-plane:read`, `control-plane:write`, `control-plane:admin`, lifetime `--pat-ttl` (180 days by default) |
 
-### Агенты
+### Agents
 
 
-Исполнителей bootstrap не заводит: агента описывает пакет каталога (вид
-`Agent`), права связки берутся из `identity.permissions` описания, а principal
-и PAT выпускает платформа.
-Агенту нельзя `admin` и `approvals.decide`.
+Bootstrap does not set up executors: an agent is described by a catalog
+package (kind `Agent`), the binding permissions come from the description's
+`identity.permissions`, and the platform issues the principal and the PAT.
+An agent cannot have `admin` or `approvals.decide`.
 
-!!! warning "`task_types.read` обязателен исполнителю"
-    Без `task_types.read` демон исполнителя не берёт типизированную работу
-    (fail closed): иначе задачу, предназначенную скиллу, мог бы забрать
-    кодовый адаптер.
+!!! warning "An executor requires `task_types.read`"
+    Without `task_types.read`, the executor daemon does not take typed work
+    (fail closed): otherwise the code adapter could take a task intended for
+    a skill.
 
 ### Service accounts
 
 
-| Service account | Audiences | Потолок scopes | Права в Control Plane | Где секрет |
+| Service account | Audiences | Scope ceiling | Control Plane permissions | Where the secret is |
 |---|---|---|---|---|
-| Control Plane (ядро) | `memory-service` | `memory:read`, `memory:write`, `memory:tenants`, `memory:on-behalf`, `memory:service` | — | `secrets/control-plane-iam.env` |
+| Control Plane (core) | `memory-service` | `memory:read`, `memory:write`, `memory:tenants`, `memory:on-behalf`, `memory:service` | — | `secrets/control-plane-iam.env` |
 
-При изменении потолка service account ядра bootstrap выпускает новый
-service account и отзывает прежний; после этого перезапустите
+When the ceiling of the core service account changes, bootstrap issues a new
+service account and revokes the previous one; after that, restart
 `control-plane-api`, `control-plane-worker`, `context-adapter`.
 
-## Типичные вопросы
+## Common questions
 
-**Агент получает `403 permission_denied` на `POST /api/v1/tasks/{id}:claim`.**
-Проверьте три вещи: в binding есть `tasks.claim`; токен обменян со scope
-`control-plane:write`; при `CP_AUTHZ_MODE=policy` у principal есть роль с
-действием `tasks.claim` в scope workspace задачи.
+**An agent gets `403 permission_denied` on `POST /api/v1/tasks/{id}:claim`.**
+Check three things: the binding has `tasks.claim`; the token was exchanged
+with the `control-plane:write` scope; with `CP_AUTHZ_MODE=policy`, the
+principal has a role with the `tasks.claim` action in the scope of the task's
+workspace.
 
-**Человек видит задачи, но не может решить approval.** Нужно право
-`approvals.decide` и scope `control-plane:write`; при политике — ещё и то,
-что решающий не является автором запроса.
+**A human sees tasks but cannot decide an approval.** You need the
+`approvals.decide` permission and the `control-plane:write` scope; under a
+policy, also the decider must not be the author of the request.
 
-**Сервис памяти отвечает 403 токену ядра на регистрацию пакета.** В токене
-нет `memory:service`: проверьте `CP_CONTEXT_IAM_SCOPES` и потолок service
-account ядра.
+**The memory service returns 403 to the core token on package registration.**
+The token lacks `memory:service`: check `CP_CONTEXT_IAM_SCOPES` and the ceiling
+of the core service account.
 
-## См. также
+## See also
 
-- [Авторизация и права](../control-plane/authorization.md)
-- [Tenants и principals](../iam/principals.md)
-- [Токены, audiences, scopes](../iam/tokens.md)
+- [Authorization and permissions](../control-plane/authorization.md)
+- [Tenants and principals](../iam/principals.md)
+- [Tokens, audiences, scopes](../iam/tokens.md)
 - [Service accounts](../iam/service-accounts.md)
-- [Identity агента](../runner/agent-identity.md)
+- [Agent identity](../runner/agent-identity.md)
 - [Bootstrap](../getting-started/bootstrap.md)
-- [Коды ошибок](errors.md)
+- [Error codes](errors.md)

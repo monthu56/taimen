@@ -1,18 +1,19 @@
+
 # Service accounts
 
-Service account — собственная machine identity сервиса платформы. Статья
-описывает, когда она нужна, как её завести, как сервис получает токен по
-client credentials и как сменить или отозвать секрет. Для инженеров,
-подключающих сервис, и для администраторов инсталляции.
+A service account is a platform service's own machine identity. This article
+describes when you need one, how to create it, how a service gets a token
+with client credentials, and how to change or revoke the secret. It is for
+engineers who connect a service and for installation administrators.
 
-## Зачем сервису своя identity
+## Why a service needs its own identity
 
 
-Токен IAM выпускается ровно для одного audience. Когда Control Plane должен
-обратиться в память или в другой сервис, он не может «переслать»
-токен пользователя — тот выпущен для audience `control-plane` и в другом
-сервисе отклоняется. Поэтому сервис предъявляет **свой** credential и
-получает токен нужного audience.
+An IAM token is issued for exactly one audience. When Control Plane needs to
+call memory or another service, it cannot "forward" the user's token: that
+token is issued for the `control-plane` audience and is rejected by any other
+service. So the service presents **its own** credential and gets a token for
+the audience it needs.
 
 ```mermaid
 sequenceDiagram
@@ -23,21 +24,21 @@ sequenceDiagram
     IAM-->>CP: {accessToken, tokenType: "Bearer", expiresIn: 300}
     CP->>MEM: Authorization: Bearer <accessToken>
     MEM-->>CP: 200
-    Note over CP: токен кешируется до expiresIn − 30 с
+    Note over CP: the token is cached until expiresIn − 30 s
 ```
 
 | | Service account | PAT |
 |---|---|---|
-| Вид principal | `service_account` | `human` или `agent` |
+| Kind of principal | `service_account` | `human` or `agent` |
 | Credential | `clientId` + `clientSecret` | `iam_pat_…` |
-| Хранение секрета на сервере | Argon2-хэш | SHA-256 полного токена |
-| Срок жизни credential | бессрочно, до отзыва | ограничен (`expiresAt`) |
-| Несколько audiences | да | да |
-| Пустой `scopes` при обмене | токен **без** scopes | весь потолок |
-| `principal_type` в токене | `service_account` | `human`/`agent` |
-| `scope_ceiling`, `session_id` в токене | нет | есть |
+| How the server stores the secret | Argon2 hash | SHA-256 of the full token |
+| Credential lifetime | unlimited, until revoked | limited (`expiresAt`) |
+| Multiple audiences | yes | yes |
+| Empty `scopes` on exchange | token **without** scopes | the whole ceiling |
+| `principal_type` in the token | `service_account` | `human`/`agent` |
+| `scope_ceiling`, `session_id` in the token | no | yes |
 
-## Создание service account
+## Creating a service account
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/service-accounts" \
@@ -53,26 +54,27 @@ curl -s -X POST "$IAM_URL/api/v1/tenants/$TENANT/service-accounts" \
 ```json
 {
   "principalId": "<principal-id>",
-  "clientId": "iam_sa_<случайная строка>",
-  "clientSecret": "<секрет>"
+  "clientId": "iam_sa_<random string>",
+  "clientSecret": "<secret>"
 }
 ```
 
-Одним вызовом создаются principal вида `service_account`, его membership в
-tenant и запись service account.
+A single call creates a principal of kind `service_account`, its membership in
+the tenant, and the service account record.
 
-| Поле запроса | Обязательно | Правила |
+| Request field | Required | Rules |
 |---|---|---|
-| `displayName` | да | 1–200 символов |
-| `audiences` | да | минимум один; все должны быть активными audiences tenant, иначе `422 unknown_audience` |
-| `scopeCeiling` | нет | потолок scopes; при создании **не** сверяется с `allowedScopes` — лишнее просто не выдастся при обмене |
+| `displayName` | yes | 1–200 characters |
+| `audiences` | yes | at least one; all must be active audiences of the tenant, otherwise `422 unknown_audience` |
+| `scopeCeiling` | no | scope ceiling; on creation it is **not** checked against `allowedScopes`; anything extra is simply not issued on exchange |
 
-!!! danger "Секрет показывается один раз"
-    `clientSecret` возвращается только в ответе на создание. Сервер хранит
-    Argon2-хэш. Сразу запишите пару в файл с правами `0600` (в типовой
-    инсталляции — `secrets/<service>-iam.env`) и не выводите её в логи.
+!!! danger "The secret is shown once"
+    `clientSecret` is returned only in the creation response. The server
+    stores an Argon2 hash. Write the pair to a file with `0600` permissions
+    right away (in a typical installation, `secrets/<service>-iam.env`) and
+    do not print it to logs.
 
-## Обмен client credentials на токен
+## Exchanging client credentials for a token
 
 ```bash
 curl -s -X POST "$IAM_URL/api/v1/tokens/exchange" \
@@ -84,28 +86,28 @@ curl -s -X POST "$IAM_URL/api/v1/tokens/exchange" \
 {"accessToken": "eyJ…", "tokenType": "Bearer", "expiresIn": 300}
 ```
 
-Проверки:
+Checks:
 
-1. `clientId` существует и не отозван, секрет совпадает — иначе `401 invalid_client`.
-2. Principal и его membership в tenant активны — иначе `401 invalid_client`.
-3. `audience` входит в `audiences` service account и активен в tenant —
-   иначе `403 audience_not_allowed`.
-4. Каждый запрошенный scope входит **и** в `scopeCeiling`, **и** в
-   `allowedScopes` audience — иначе `403 scope_not_allowed`.
+1. `clientId` exists and is not revoked, and the secret matches; otherwise `401 invalid_client`.
+2. The principal and its membership in the tenant are active; otherwise `401 invalid_client`.
+3. `audience` is in the service account's `audiences` and is active in the
+   tenant; otherwise `403 audience_not_allowed`.
+4. Each requested scope is in **both** `scopeCeiling` **and** the audience's
+   `allowedScopes`; otherwise `403 scope_not_allowed`.
 
-После успеха обновляется `last_used_at`, в audit пишется `tokens.exchange`.
+On success, `last_used_at` is updated and `tokens.exchange` is written to audit.
 
-!!! warning "Scopes надо запрашивать явно"
-    Пустой `scopes` даёт токен с `"scope": []`. Получатель, требующий scope,
-    ответит `403`. Передавайте полный список нужных scopes.
+!!! warning "Request scopes explicitly"
+    An empty `scopes` yields a token with `"scope": []`. A recipient that
+    requires a scope responds with `403`. Pass the full list of scopes you need.
 
-### Готовый клиент в SDK
+### Ready-made client in the SDK
 
-Сервисам не нужно писать обмен вручную: в
-[platform-auth-sdk](../sdk/platform-auth-sdk.md) есть `ServiceTokenProvider`,
-который обменивает client credentials, кеширует токен до момента за 30 с до
-истечения и сбрасывает кэш по `forget()` (например, после `401` от
-получателя):
+Services do not need to write the exchange by hand:
+[platform-auth-sdk](../sdk/platform-auth-sdk.md) has `ServiceTokenProvider`,
+which exchanges client credentials, caches the token until 30 s before it
+expires, and drops the cache on `forget()` (for example, after a `401` from
+the recipient):
 
 ```python
 from platform_auth.service_identity import ServiceCredentials, ServiceTokenProvider
@@ -119,44 +121,44 @@ tokens = ServiceTokenProvider(
         scopes=("memory:read",),
     ),
 )
-access_token = await tokens()   # обмен или значение из кэша
+access_token = await tokens()   # exchange or a cached value
 ```
 
-Ошибки обмена SDK наружу не пересказывает (в теле ответа может оказаться эхо
-секрета): провайдер поднимает `VerificationUnavailable("service_token_exchange_failed")`.
+The SDK does not pass exchange errors through (the response body might echo
+the secret): the provider raises `VerificationUnavailable("service_token_exchange_failed")`.
 
-## Service accounts типовой инсталляции
+## Service accounts of a typical installation
 
-`make bootstrap` (`deploy/bootstrap.py`) заводит следующие service accounts и
-пишет их credentials в `secrets/` (0600). Сервисы подхватывают файлы через
-`env_file` в `compose.yml`.
+`make bootstrap` (`deploy/bootstrap.py`) creates the following service
+accounts and writes their credentials to `secrets/` (0600). Services pick up
+the files through `env_file` in `compose.yml`.
 
 
-| Service account | Audiences | Потолок | Файл | Кто использует |
+| Service account | Audiences | Ceiling | File | Used by |
 |---|---|---|---|---|
 | Control Plane | `memory-service` | `memory:read`, `memory:write`, `memory:tenants`, `memory:on-behalf`, `memory:service` | `control-plane-iam.env` (`CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET`) | control-plane-api, worker, context-adapter |
 
-!!! note "Service account — это ещё и principal в Control Plane"
-    Если service account ходит в Control Plane (как коннектор или сервис уведомлений), ему,
-    как и любому principal, нужен локальный principal ядра и binding с
-    правами. Bootstrap создаёт их автоматически. См.
-    [Авторизация и права](../control-plane/authorization.md).
+!!! note "A service account is also a principal in Control Plane"
+    If a service account calls Control Plane (as a connector or the
+    notification service does), it needs, like any principal, a local core
+    principal and a binding with permissions. Bootstrap creates them
+    automatically. See [Authorization and permissions](../control-plane/authorization.md).
 
-После появления или смены env-файла сервисы нужно пересоздать, чтобы они
-прочитали его: например,
+After an env file appears or changes, recreate the services so they read it,
+for example:
 `docker compose up -d control-plane-api control-plane-worker context-adapter`.
 
-## Смена секрета и изменение потолка
+## Changing the secret or the ceiling
 
-У service account **нет** эндпоинтов ротации секрета и изменения
-`audiences`/`scopeCeiling`. Процедура замены — «выпустить новый, переключить,
-отозвать старый»:
+A service account has **no** endpoints for secret rotation or for changing
+`audiences`/`scopeCeiling`. The replacement procedure is "issue a new one,
+switch over, revoke the old one":
 
-1. Создайте новый service account с нужными audiences и потолком
+1. Create a new service account with the audiences and ceiling you need
    (`POST …/service-accounts`).
-2. Запишите новую пару в env-файл сервиса (0600).
-3. Пересоздайте контейнеры сервиса и убедитесь, что обмен работает.
-4. Отзовите прежний `clientId`:
+2. Write the new pair to the service's env file (0600).
+3. Recreate the service containers and make sure the exchange works.
+4. Revoke the old `clientId`:
 
     ```bash
     curl -s -X POST \
@@ -165,44 +167,43 @@ access_token = await tokens()   # обмен или значение из кэш
     # 204
     ```
 
-!!! warning "Новый service account — новый principal"
-    Каждое создание заводит **новый** principal с новым `principal_id`
-    (`sub` в токене). Если получатель привязывает права к principal (например,
-    binding в Control Plane), binding нужно создать и для нового principal.
-    `deploy/bootstrap.py` сам перевыпускает service account ядра, когда его
-    потолок в коде изменился, и отзывает прежний.
+!!! warning "A new service account is a new principal"
+    Each creation makes a **new** principal with a new `principal_id` (`sub`
+    in the token). If the recipient ties permissions to the principal (for
+    example, a binding in Control Plane), you must create the binding for the
+    new principal as well. `deploy/bootstrap.py` reissues the core service
+    account itself when its ceiling in the code changes, and revokes the old one.
 
-## Отзыв
+## Revocation
 
 `POST …/service-accounts/{clientId}:revoke`:
 
-- выставляет `revoked_at`; повторный вызов идемпотентен (`204`);
-- публикует событие `credential.revoked` (aggregate `service_account`) и
-  пишет audit `service_accounts.revoke`;
-- все следующие обмены этого `clientId` получают `401 invalid_client`.
+- sets `revoked_at`; a repeated call is idempotent (`204`);
+- publishes a `credential.revoked` event (aggregate `service_account`) and
+  writes the audit record `service_accounts.revoke`;
+- all subsequent exchanges for this `clientId` get `401 invalid_client`.
 
-Уже выданные токены живут до `exp` (по умолчанию до 300 с) — см.
-[окно отзыва](tokens.md#revocation-window).
+Tokens already issued live until `exp` (up to 300 s by default); see
+[revocation window](tokens.md#revocation-window).
 
-Отключение principal service account (`:disable`) тоже закрывает обмен
-(`invalid_client`), но запись service account при этом не помечается
-отозванной.
+Disabling the service account's principal (`:disable`) also closes exchange
+(`invalid_client`), but the service account record is not marked as revoked.
 
-## Ошибки
+## Errors
 
-| HTTP | `detail` | Операция | Причина |
+| HTTP | `detail` | Operation | Cause |
 |---|---|---|---|
-| 401 | `unauthorized` | создание, отзыв | нет или неверный `X-IAM-Bootstrap-Token` |
-| 401 | `invalid_client` | обмен | неизвестный/отозванный `clientId`, неверный секрет, неактивный principal или membership |
-| 403 | `audience_not_allowed` | обмен | audience не в списке service account или не активен |
-| 403 | `scope_not_allowed` | обмен | scope вне потолка или вне `allowedScopes` (частая причина — без префикса) |
-| 404 | `service_account_not_found` | отзыв | `clientId` не найден в tenant |
-| 422 | `unknown_audience` | создание | audience не зарегистрирован или выключен |
+| 401 | `unauthorized` | creation, revocation | missing or wrong `X-IAM-Bootstrap-Token` |
+| 401 | `invalid_client` | exchange | unknown/revoked `clientId`, wrong secret, inactive principal or membership |
+| 403 | `audience_not_allowed` | exchange | the audience is not in the service account's list or is not active |
+| 403 | `scope_not_allowed` | exchange | scope outside the ceiling or outside `allowedScopes` (a common cause is a missing prefix) |
+| 404 | `service_account_not_found` | revocation | `clientId` not found in the tenant |
+| 422 | `unknown_audience` | creation | the audience is not registered or is disabled |
 
-## См. также
+## See also
 
-- [Токены, audiences, scopes](tokens.md)
+- [Tokens, audiences, scopes](tokens.md)
 - [platform-auth-sdk](../sdk/platform-auth-sdk.md)
-- [Клиенты сервисов](../sdk/clients.md)
-- [Секреты и ротация](../operations/secrets.md)
-- [API IAM](api.md#service-accounts)
+- [Service clients](../sdk/clients.md)
+- [Secrets and rotation](../operations/secrets.md)
+- [IAM API](api.md#service-accounts)

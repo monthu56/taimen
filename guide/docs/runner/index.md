@@ -1,49 +1,51 @@
-# Агенты и runner
 
-Раздел описывает автономных исполнителей: демон `control-plane-agent`, который сам
-берёт задачи из Control Plane и выполняет их кодовым агентом (Claude Code, Codex) или
-скиллами в изолированной рабочей копии. Демон запускается вручную на машине с доступом к
-Control Plane и настраивается переменными окружения или ревизией описания агента. Раздел
-для инженеров, которые запускают исполнителей, и для операторов, которые ставят агентам
-задачи и принимают результат.
+# Agents and runner
 
-## Агент описанием
+This section describes autonomous executors: the `control-plane-agent` daemon, which
+claims tasks from Control Plane on its own and executes them with a coding agent (Claude
+Code, Codex) or with skills in an isolated working copy. You start the daemon manually on a
+machine with access to Control Plane and configure it with environment variables or with an
+agent description revision. The section is for engineers who run executors and for
+operators who assign tasks to agents and accept the results.
 
-Агент — один YAML-объект в пакете каталога (вид `Agent`): личность и права, какую
-работу брать, вид исполнителя с моделью и инструкциями, рабочая копия, скиллы. Control
-Plane хранит неизменяемые ревизии описания и выводит из них principal и связку агента.
-Демон, запущенный под principal'ом агента, берёт конфигурацию из своей ревизии
-(`GET /agents/me`); principal без описания настраивается окружением (см.
-[Конфигурация](configuration.md)).
+## Agent by description
+
+An agent is one YAML object in a catalog package (kind `Agent`): identity and permissions,
+which work to take, the executor kind with its model and instructions, the working copy,
+skills. Control Plane stores immutable revisions of the description and derives the agent's
+principal and binding from them. A daemon started under the agent's principal takes its
+configuration from its revision (`GET /agents/me`); a principal without a description is
+configured through the environment (see [Configuration](configuration.md)).
 
 ```mermaid
 flowchart LR
-    Y["agents/*.yaml"] ==>|cp_packages apply| CP["Control Plane<br/>ревизии"]
-    D["control-plane-agent<br/>запущен вручную"] ==>|GET /agents/me, работа| CP
+    Y["agents/*.yaml"] ==>|cp_packages apply| CP["Control Plane<br/>revisions"]
+    D["control-plane-agent<br/>started manually"] ==>|GET /agents/me, work| CP
 ```
 
-Правка описания — новая ревизия: исполнитель доводит текущий прогон, завершается с кодом
-75 и поднимается на новой ревизии, если его перезапускает надзиратель процесса.
+Editing the description creates a new revision: the executor finishes the current run,
+exits with code 75, and comes back up on the new revision if a process supervisor restarts
+it.
 
-## Что такое runner
+## What a runner is
 
-Runner — это **клиент** Control Plane, а не часть ядра. Он проходит тот же цикл
-харнесс-протокола, что и человек в Claude Code: сессия → поиск работы → claim → run →
-артефакты → завершение. Особого серверного пути для агентов нет: те же эндпоинты, тот же
-SDK `control_plane_client`, те же проверки прав, аренд и fencing token.
+A runner is a **client** of Control Plane, not part of the core. It goes through the same
+harness protocol cycle as a human in Claude Code: session → finding work → claim → run →
+artifacts → completion. There is no special server path for agents: the same endpoints, the
+same `control_plane_client` SDK, the same checks of permissions, leases, and fencing tokens.
 
-Отличие одно: человек-оператор принимает решения сам (claim, завершение, approval), а
-демон runner'а действует по конфигурации — claim'ит автоматически и сам решает исход run
-по результату адаптера.
+There is one difference: a human operator makes decisions personally (claim, completion,
+approval), while the runner daemon acts according to its configuration — it claims
+automatically and decides the run outcome from the adapter result.
 
 ```mermaid
 flowchart LR
-    subgraph Host["Хост или контейнер runner'а"]
-        D["control-plane-agent<br/>(демон)"]
-        A["Адаптер<br/>claude-code / codex"]
-        CLI["CLI агента<br/>claude -p / codex exec"]
-        W["Рабочая копия<br/>worktrees/&lt;id&gt;/&lt;repo&gt;"]
-        M["Bare-зеркала<br/>репозиториев"]
+    subgraph Host["Runner host or container"]
+        D["control-plane-agent<br/>(daemon)"]
+        A["Adapter<br/>claude-code / codex"]
+        CLI["Agent CLI<br/>claude -p / codex exec"]
+        W["Working copy<br/>worktrees/&lt;id&gt;/&lt;repo&gt;"]
+        M["Bare mirrors<br/>of repositories"]
         D --> A --> CLI
         CLI --> W
         M --> W
@@ -51,93 +53,94 @@ flowchart LR
     D -- "HTTPS, access token<br/>audience control-plane" --> CP["Control Plane API"]
     D -- "PAT → exchange" --> IAM["IAM"]
     D -- "git push task/&lt;publicId&gt;" --> F["Forge (Git)"]
-    CLI -. "MCP control-plane<br/>(только Claude Code)" .-> CP
+    CLI -. "MCP control-plane<br/>(Claude Code only)" .-> CP
 ```
 
-## Роли процессов
+## Process roles
 
-| Процесс | Что делает | Чего не делает |
+| Process | What it does | What it does not do |
 |---|---|---|
-| Демон `control-plane-agent` | открывает сессию, ищет работу, claim'ит, стартует run, готовит рабочую копию, коммитит и публикует ветку, пишет артефакты, завершает run, заводит ревью | не пишет код |
-| Адаптер (`claude-code`, `codex`) | строит prompt, запускает CLI агента, пишет checkpoint сессии, публикует summary и транскрипт | не решает исход run, не держит claim |
-| Кодовый агент внутри run | меняет файлы в рабочей копии, может читать контекст и оставлять checkpoints через MCP | не claim'ит, не завершает, не пушит, не открывает PR |
+| `control-plane-agent` daemon | opens a session, finds work, claims, starts the run, prepares the working copy, commits and publishes the branch, writes artifacts, completes the run, creates the review | does not write code |
+| Adapter (`claude-code`, `codex`) | builds the prompt, starts the agent CLI, writes the session checkpoint, publishes the summary and the transcript | does not decide the run outcome, does not hold the claim |
+| Coding agent inside the run | changes files in the working copy, can read context and leave checkpoints through MCP | does not claim, does not complete, does not push, does not open a PR |
 
-Граница принципиальна: исход run решает тот, кто держит claim и его fencing token, то есть
-демон. Агенту внутри авторитетные инструменты MCP даже не предлагаются (см.
-[Адаптеры](adapters.md#mcp-inside)).
+The boundary is fundamental: the run outcome is decided by whoever holds the claim and its
+fencing token, that is, the daemon. The agent inside is not even offered the authoritative
+MCP tools (see [Adapters](adapters.md#mcp-inside)).
 
-## Жизненный цикл одной задачи
+## Lifecycle of one task
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant D as Демон
+    participant D as Daemon
     participant CP as Control Plane
-    participant WS as Пул рабочих копий
-    participant AD as Адаптер + CLI
+    participant WS as Working copy pool
+    participant AD as Adapter + CLI
     participant G as Forge
     D->>CP: GET /work/available (assignedToMe, workspaceId…)
-    D->>CP: claim задачи (intent "autonomous-agent auto")
+    D->>CP: claim the task (intent "autonomous-agent auto")
     D->>CP: start run (claimId + fencingToken)
-    D->>WS: acquire(publicId) — worktree на task/<publicId> + соседи
+    D->>WS: acquire(publicId) — worktree on task/<publicId> + neighbours
     D->>CP: checkpoint execution.workspace
     D->>AD: execute(task, run, client, workspace)
-    AD->>CP: checkpoint <adapter>.session, actions tool.*, контекст
-    AD-->>D: артефакты report + transcript
+    AD->>CP: checkpoint <adapter>.session, actions tool.*, context
+    AD-->>D: artifacts report + transcript
     D->>WS: commit
-    D->>G: push task/<publicId> (если задан remote)
-    D->>CP: checkpoint (head, published) + артефакт commit
+    D->>G: push task/<publicId> (if a remote is set)
+    D->>CP: checkpoint (head, published) + commit artifact
     D->>CP: succeed run
-    CP->>CP: попытка проверки: критерии типа (например review → merge)
+    CP->>CP: verification attempt: type criteria (for example review → merge)
 ```
 
-Если на любом шаге что-то пошло не так, run завершается честным `fail` с причиной
-(`lease_lost`, `ownership_lost`, `workspace_busy`, текст исключения с вырезанными путями
-хоста), а рабочая копия сохраняется для следующей попытки.
+If anything goes wrong at any step, the run ends with an honest `fail` and a reason
+(`lease_lost`, `ownership_lost`, `workspace_busy`, exception text with host paths stripped),
+and the working copy is kept for the next attempt.
 
-## Что runner берёт
+## What a runner takes
 
-Какую работу брать, говорит раздел `work` описания агента:
+The `work` section of the agent description defines which work to take:
 
-- `onlyAssigned` (по умолчанию `true`) — только задачи, назначенные principal'у этого
-  агента (`assigneeId`): «могу взять» и «предназначено мне» — разные вопросы;
-- `workspace` — только задачи этого Workspace (вместе с поддеревом);
-- `project` (+ `includeSubprojects`) — только задачи проекта;
-- `taskTypes` — только задачи этих типов.
+- `onlyAssigned` (default `true`) — only tasks assigned to this agent's principal
+  (`assigneeId`): "I can take it" and "it is meant for me" are different questions;
+- `workspace` — only tasks of this Workspace (together with its subtree);
+- `project` (+ `includeSubprojects`) — only tasks of the project;
+- `taskTypes` — only tasks of these types.
 
-Задачи, тип которых объявляет исполнение скиллом (`execution = {skill, version}`), идут не
-в кодовый адаптер, а в исполнитель скиллов того же демона — и только если он умеет этот
-скилл. Без права `task_types.read` демон такие задачи не трогает вообще (fail-closed).
+Tasks whose type declares skill execution (`execution = {skill, version}`) go not to the
+coding adapter but to the skill executor of the same daemon — and only if it can run that
+skill. Without the `task_types.read` permission the daemon does not touch such tasks at all
+(fail-closed).
 
-!!! warning "Без сужения очереди"
-    Агент с `onlyAssigned: false` и без `workspace` возьмёт любую доступную задачу
-    tenant'а, включая эпики и задачи других репозиториев. Выпускать исполнителя в общую
-    очередь стоит только сознательно. То же относится к демону, запущенному вручную без
-    описания: у него фильтр `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` по умолчанию выключен.
+!!! warning "No queue narrowing"
+    An agent with `onlyAssigned: false` and no `workspace` takes any available task of the
+    tenant, including epics and tasks of other repositories. Release an executor into the
+    shared queue only deliberately. The same applies to a daemon started manually without a
+    description: its `CONTROL_PLANE_AGENT_ONLY_ASSIGNED` filter is off by default.
 
-## Развёртывание
+## Deployment
 
-Демон запускается вручную: как unit systemd, сервис compose или контейнер. Периметр
-исполнителя — непривилегированный пользователь или контейнер, внутри которого только
-рабочие копии, зеркала и нужные секреты. Машиной может быть выделенный сервер, VM или
-машина разработчика — любая машина с исходящим HTTPS к Control Plane и IAM. Переменные —
-в [Конфигурации](configuration.md), credential — в [Identity агента](agent-identity.md).
+You start the daemon manually: as a systemd unit, a compose service, or a container. The
+executor's perimeter is an unprivileged user or a container that holds only working copies,
+mirrors, and the required secrets. The machine can be a dedicated server, a VM, or a
+developer machine — any machine with outbound HTTPS to Control Plane and IAM. Variables are
+in [Configuration](configuration.md), the credential is in [Agent identity](agent-identity.md).
 
-## Разделы
+## Sections
 
-| Статья | О чём |
+| Article | About |
 |---|---|
-| [Identity агента](agent-identity.md) | отдельный principal `agent`, binding без admin, PAT и его хранение |
-| [Адаптеры исполнителей](adapters.md) | Claude Code, Codex, OpenCode: запуск CLI, токены, режимы разрешений, prompt |
-| [Рабочие копии](execution-workspace.md) | контейнер `worktrees/<id>/<repo>`, соседи, ветки, evidence, публикация |
-| [Трасса прогонов](trace.md) | артефакт `transcript`, actions `tool.*`, флаги публикации |
-| [Конфигурация](configuration.md) | что берётся из ревизии, переменные хоста и режима env |
+| [Agent identity](agent-identity.md) | a separate `agent` principal, a binding without admin, the PAT and its storage |
+| [Executor adapters](adapters.md) | Claude Code, Codex, OpenCode: CLI launch, tokens, permission modes, prompt |
+| [Working copies](execution-workspace.md) | the `worktrees/<id>/<repo>` container, neighbours, branches, evidence, publishing |
+| [Run trace](trace.md) | the `transcript` artifact, `tool.*` actions, publishing flags |
+| [Configuration](configuration.md) | what comes from the revision, host variables, and env mode |
 
-## См. также
+## See also
 
-- [Пакеты каталога](../control-plane/catalog-packages.md#agent)
+- [Catalog packages](../control-plane/catalog-packages.md#agent)
 
-- [Исполнение — claims и runs](../control-plane/execution.md)
-- [Харнесс-протокол](../control-plane/harness-protocol.md)
-- [Работа оператора](../operator/index.md)
-- [Диагностика: исполнение и runner](../troubleshooting/runner.md)
+- [Execution — claims and runs](../control-plane/execution.md)
+- [Harness protocol](../control-plane/harness-protocol.md)
+- [Operator work](../operator/index.md)
+- [Troubleshooting: execution and runner](../troubleshooting/runner.md)

@@ -1,122 +1,124 @@
-# Конфигурация .env
 
-Статья разбирает единый файл окружения платформы — `.env` в корне
-суперпроекта — по группам: что означает каждая переменная, в какие переменные
-сервисов она раскладывается в `compose.yml`, какое значение нормально для
-локального стенда и что менять для своего. Полный алфавитный перечень всех
-переменных всех компонентов — в [Переменных окружения](../reference/environment.md).
+# .env configuration
 
-## Как устроена конфигурация
+This page walks through the platform's single environment file, `.env` in the
+superproject root, group by group: what each variable means, which service
+variables it maps to in `compose.yml`, which value is normal for a local
+deployment, and what to change for your own. For a complete alphabetical list
+of all variables of all components, see
+[Environment variables](../reference/environment.md).
+
+## How configuration works
 
 ```mermaid
 flowchart LR
-    EX[.env.example<br/>в git] -->|make secrets| ENV[.env<br/>0600, вне git]
-    ENV -->|интерполяция| C[compose.yml]
+    EX[.env.example<br/>in git] -->|make secrets| ENV[.env<br/>0600, outside git]
+    ENV -->|interpolation| C[compose.yml]
     C -->|CP_*| CP[control-plane-*]
     C -->|IAM_*| IAM[iam-service]
     C -->|CB_*| MEM[memory-service]
     C -->|S3_*, CP_S3_*| S3[minio, minio-bootstrap]
     C -->|NS_*, NOTIFY_*| OPT[notification-service]
-    B[deploy/bootstrap.py] -->|читает| ENV
-    B -->|пишет| SEC[secrets/*.env, *-pat]
+    B[deploy/bootstrap.py] -->|reads| ENV
+    B -->|writes| SEC[secrets/*.env, *-pat]
     SEC -->|env_file| CP
 ```
 
-Принципы:
+Principles:
 
-- **Одно понятие — одно имя.** В `.env` задаётся, например, один
-  `MEMORY_API_KEY`, а `compose.yml` сам раскладывает его в `CB_SERVER_API_KEY`
-  памяти и `CP_CONTEXT_API_KEY` ядра. Код сервисов для смены окружения менять
-  не нужно.
-- **Локальный и промышленный стенд различаются только `.env` и Caddyfile.**
-  DNS-имена сервисов внутри сети одинаковые.
-- **Секреты — только в `.env` и `secrets/`.** Оба пути в `.gitignore`.
-- `.env` читают три потребителя: Docker Compose (автоматически из корня),
-  `deploy/bootstrap.py` (`--env .env`) и `tools/smoke.py` (порты).
-- Переменные, которых нет в `.env.example`, имеют значения по умолчанию прямо в
-  `compose.yml` (`${VAR:-default}`) — их можно добавить в `.env`, чтобы
-  переопределить.
+- **One concept, one name.** For example, `.env` sets a single
+  `MEMORY_API_KEY`, and `compose.yml` maps it to memory's `CB_SERVER_API_KEY`
+  and the core's `CP_CONTEXT_API_KEY`. You do not change service code to
+  change the environment.
+- **Local and production deployments differ only in `.env` and the Caddyfile.**
+  Service DNS names inside the network are the same.
+- **Secrets live only in `.env` and `secrets/`.** Both paths are in `.gitignore`.
+- `.env` has three consumers: Docker Compose (automatically, from the root),
+  `deploy/bootstrap.py` (`--env .env`), and `tools/smoke.py` (ports).
+- Variables that are not in `.env.example` have defaults directly in
+  `compose.yml` (`${VAR:-default}`); add them to `.env` to override them.
 
-!!! warning "Интерполяция всего файла"
-    Compose подставляет переменные во все сервисы, включая сервисы невключённых
-    профилей. Поэтому обязательными (`${VAR:?…}`) объявлены только значения,
-    которые генерирует `make secrets`. `IAM_TENANT_ID` по умолчанию пуст —
-    см. [Установка и первый запуск](quickstart.md).
+!!! warning "Whole-file interpolation"
+    Compose substitutes variables into all services, including services of
+    profiles that are not enabled. That is why only the values that
+    `make secrets` generates are declared as required (`${VAR:?…}`).
+    `IAM_TENANT_ID` is empty by default; see
+    [Installation and first launch](quickstart.md).
 
-## Окружение
+## Environment
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `TAIMEN_PUBLIC_URL` | `http://taimen.localhost` | Публичный адрес платформы без завершающего `/`. Из него выводится issuer IAM (`${TAIMEN_PUBLIC_URL}/iam`). Попадает в каждый токен и в bindings Control Plane |
-| `TAIMEN_PUBLIC_HOST` | `taimen.localhost` | Имя хоста из адреса выше. Становится сетевым alias Caddy, чтобы контейнеры ходили на публичный адрес через него |
-| `COMPOSE_PROJECT_NAME` | `taimen` | Имя compose-проекта: префикс контейнеров и volumes, имя tenant (slug) и файла состояния bootstrap по умолчанию |
-| `TAIMEN_NETWORK` | `taimen_default` | Имя docker-сети всех сервисов |
-| `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | Конфигурация периметра. Локальная — http без ACME; для промышленного стенда — файл с TLS |
-| `EDGE_HTTP_PORT`, `EDGE_HTTPS_PORT` | `80`, `443` | Порты Caddy на хосте |
-| `LOG_LEVEL` | `INFO` | Уровень логов сервисов (`CP_LOG_LEVEL`) |
+| `TAIMEN_PUBLIC_URL` | `http://taimen.localhost` | Public address of the platform without a trailing `/`. The IAM issuer is derived from it (`${TAIMEN_PUBLIC_URL}/iam`). It ends up in every token and in Control Plane bindings |
+| `TAIMEN_PUBLIC_HOST` | `taimen.localhost` | Host name from the address above. It becomes a network alias of Caddy so that containers reach the public address through it |
+| `COMPOSE_PROJECT_NAME` | `taimen` | Compose project name: prefix for containers and volumes, default tenant name (slug), and default bootstrap state file name |
+| `TAIMEN_NETWORK` | `taimen_default` | Name of the Docker network for all services |
+| `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | Edge configuration. The local one is HTTP without ACME; for a production deployment, a file with TLS |
+| `EDGE_HTTP_PORT`, `EDGE_HTTPS_PORT` | `80`, `443` | Caddy ports on the host |
+| `LOG_LEVEL` | `INFO` | Service log level (`CP_LOG_LEVEL`) |
 
-!!! danger "Смена `TAIMEN_PUBLIC_URL` на живом стенде"
-    Issuer IAM выводится из публичного адреса, а bindings Control Plane ищутся
-    по паре (issuer, principal). Сменив адрес, вы закроете вход всем principal,
-    пока bindings не будут перенесены на новый issuer. Выбирайте адрес до
-    bootstrap. Процедура переноса — в [Обновлении и
-    миграциях](../operations/upgrades.md).
+!!! danger "Changing `TAIMEN_PUBLIC_URL` on a live deployment"
+    The IAM issuer is derived from the public address, and Control Plane looks
+    up bindings by the (issuer, principal) pair. If you change the address, no
+    principal can sign in until the bindings are moved to the new issuer.
+    Choose the address before bootstrap. The migration procedure is in
+    [Upgrades and migrations](../operations/upgrades.md).
 
 ## Tenant
 
-| Переменная | Смысл |
+| Variable | Meaning |
 |---|---|
-| `IAM_TENANT_ID` | UUID tenant в IAM. Известен только после bootstrap (он напечатает строку `впишите в .env: IAM_TENANT_ID=…`). Сервисам профилей `core`, `edge` и `notify` не нужен |
+| `IAM_TENANT_ID` | UUID of the tenant in IAM. Known only after bootstrap (it prints the line `впишите в .env: IAM_TENANT_ID=…`, "write to .env"). Services of the `core`, `edge`, and `notify` profiles do not need it |
 
-Остальные идентификаторы (tenant Control Plane, оператор, проект, workspace)
-bootstrap хранит в `deploy/state/<имя>.json`.
+Bootstrap stores the other IDs (Control Plane tenant, operator, project,
+workspace) in `deploy/state/<name>.json`.
 
-## Секреты
+## Secrets
 
-Все заполняются `make secrets` случайными значениями, если пусты.
+`make secrets` fills each of them with a random value if it is empty.
 
-| Переменная | Куда попадает | Смысл |
+| Variable | Where it goes | Meaning |
 |---|---|---|
-| `CP_POSTGRES_PASSWORD` | `control-plane-db`, `CP_DATABASE_URL` | пароль БД Control Plane |
-| `IAM_POSTGRES_PASSWORD` | `iam-db`, `IAM_DATABASE_URL` | пароль БД IAM |
-| `MEMORY_POSTGRES_PASSWORD` | `memory-db`, `CB_DATABASE_URL` | пароль БД памяти |
-| `CP_BOOTSTRAP_TOKEN` | `control-plane-api` | однократный `POST /api/v1/bootstrap` (`Authorization: Bearer`). Пустое значение выключает bootstrap-эндпоинт |
-| `IAM_BOOTSTRAP_TOKEN` | `iam-service` | административные операции IAM (`X-IAM-Bootstrap-Token`): tenants, principals, PAT, service accounts |
-| `MEMORY_API_KEY` | `CB_SERVER_API_KEY`, `CP_CONTEXT_API_KEY` | статический ключ памяти с полным доступом; ядро пользуется им только до появления service account |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `minio`, `minio-bootstrap` | root-учётка MinIO; ею пользуется только `minio-bootstrap` |
-| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | `minio-bootstrap`, процессы Control Plane | пользователь MinIO ядра с правами только на бакет артефактов |
-| `CP_S3_BUCKET` | `minio-bootstrap`, процессы Control Plane | бакет содержимого артефактов (по умолчанию `artifacts`) |
-| `IAM_SIGNING_KEY_FILE`, `IAM_SIGNING_KEY_ID` | docker-секрет `iam_signing_key`, `IAM_SIGNING_KEY_ID` | путь к приватному RSA-ключу подписи токенов и его `kid` в JWKS |
+| `CP_POSTGRES_PASSWORD` | `control-plane-db`, `CP_DATABASE_URL` | Control Plane database password |
+| `IAM_POSTGRES_PASSWORD` | `iam-db`, `IAM_DATABASE_URL` | IAM database password |
+| `MEMORY_POSTGRES_PASSWORD` | `memory-db`, `CB_DATABASE_URL` | memory database password |
+| `CP_BOOTSTRAP_TOKEN` | `control-plane-api` | one-time `POST /api/v1/bootstrap` (`Authorization: Bearer`). An empty value disables the bootstrap endpoint |
+| `IAM_BOOTSTRAP_TOKEN` | `iam-service` | IAM administrative operations (`X-IAM-Bootstrap-Token`): tenants, principals, PATs, service accounts |
+| `MEMORY_API_KEY` | `CB_SERVER_API_KEY`, `CP_CONTEXT_API_KEY` | static memory key with full access; the core uses it only until a service account exists |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `minio`, `minio-bootstrap` | MinIO root account; only `minio-bootstrap` uses it |
+| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | `minio-bootstrap`, Control Plane processes | the core's MinIO user with access only to the artifacts bucket |
+| `CP_S3_BUCKET` | `minio-bootstrap`, Control Plane processes | bucket for artifact content (default `artifacts`) |
+| `IAM_SIGNING_KEY_FILE`, `IAM_SIGNING_KEY_ID` | Docker secret `iam_signing_key`, `IAM_SIGNING_KEY_ID` | path to the private RSA token signing key and its `kid` in JWKS |
 
 
-!!! warning "`IAM_SIGNING_KEY_ID` при ротации ключа"
-    `kid` публикуется в JWKS и стоит в заголовке каждого токена. При замене
-    ключа подписи меняйте и `IAM_SIGNING_KEY_ID`, иначе сервисы с
-    закэшированным JWKS будут проверять новые токены старым ключом до
-    обновления кэша. См. [Секреты и ротация](../operations/secrets.md).
+!!! warning "`IAM_SIGNING_KEY_ID` when rotating the key"
+    The `kid` is published in JWKS and appears in the header of every token.
+    When you replace the signing key, change `IAM_SIGNING_KEY_ID` too;
+    otherwise services with a cached JWKS verify new tokens against the old
+    key until the cache refreshes. See [Secrets and rotation](../operations/secrets.md).
 
 ## LLM
 
-Один OpenAI-совместимый провайдер на всех потребителей: память (эмбеддинги,
-реранк, синтез).
+One OpenAI-compatible provider serves all consumers: memory (embeddings,
+reranking, synthesis).
 
-| Переменная | По умолчанию | Куда попадает |
+| Variable | Default | Where it goes |
 |---|---|---|
-| `LLM_API_KEY` | пусто | `CB_EMBEDDING_API_KEY`, `CB_LLM_API_KEY` — ключ провайдера (имя историческое, подходит любой OpenAI-совместимый endpoint) |
-| `LLM_BASE_URL` | OpenAI-совместимый шлюз из `.env.example` | `CB_EMBEDDING_BASE_URL`, `CB_LLM_BASE_URL` — базовый URL `/v1` |
-| `LLM_MODEL` | модель из `.env.example` | `CB_LLM_MODEL` (реранк и синтез памяти) |
-| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | `CB_EMBEDDING_MODEL`; размерность фиксирована — `CB_EMBEDDING_DIM=1536` |
-| `MEMORY_EMBEDDING_PROVIDER` | `fake` | `CB_EMBEDDING_PROVIDER`: `fake` (офлайн) или `openai` |
-| `MEMORY_LLM_PROVIDER` | `echo` | `CB_LLM_PROVIDER`: `echo` (офлайн) или `openai` |
-| `MEMORY_RERANK_ENABLED` | `false` | `CB_RERANK_ENABLED` — LLM-реранк результатов поиска (пул 20) |
-| `MEMORY_CONSOLE_ENABLED` | `false` | `CB_CONSOLE_ENABLED` — встроенная консоль памяти |
+| `LLM_API_KEY` | empty | `CB_EMBEDDING_API_KEY`, `CB_LLM_API_KEY`: the provider key (the name is historical; any OpenAI-compatible endpoint works) |
+| `LLM_BASE_URL` | OpenAI-compatible gateway from `.env.example` | `CB_EMBEDDING_BASE_URL`, `CB_LLM_BASE_URL`: the `/v1` base URL |
+| `LLM_MODEL` | model from `.env.example` | `CB_LLM_MODEL` (memory reranking and synthesis) |
+| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | `CB_EMBEDDING_MODEL`; the dimension is fixed: `CB_EMBEDDING_DIM=1536` |
+| `MEMORY_EMBEDDING_PROVIDER` | `fake` | `CB_EMBEDDING_PROVIDER`: `fake` (offline) or `openai` |
+| `MEMORY_LLM_PROVIDER` | `echo` | `CB_LLM_PROVIDER`: `echo` (offline) or `openai` |
+| `MEMORY_RERANK_ENABLED` | `false` | `CB_RERANK_ENABLED`: LLM reranking of search results (pool of 20) |
+| `MEMORY_CONSOLE_ENABLED` | `false` | `CB_CONSOLE_ENABLED`: built-in memory console |
 
-Включение настоящего провайдера:
+To enable a real provider:
 
 ```dotenv
-LLM_API_KEY=<ключ провайдера>
+LLM_API_KEY=<provider key>
 LLM_BASE_URL=https://llm.example.com/v1
-LLM_MODEL=<модель чата>
+LLM_MODEL=<chat model>
 MEMORY_EMBEDDING_PROVIDER=openai
 MEMORY_LLM_PROVIDER=openai
 MEMORY_RERANK_ENABLED=true
@@ -126,65 +128,65 @@ MEMORY_RERANK_ENABLED=true
 docker compose up -d memory-service
 ```
 
-!!! warning "Переиндексация после `fake`"
-    Провайдер `fake` строит векторы хэшированием слов той же размерности, что
-    и настоящая модель, поэтому схема их принимает, но семантический поиск по
-    ним не работает. Данные, загруженные в память в режиме `fake`, после
-    переключения на `openai` нужно переиндексировать. См.
-    [Загрузку знаний](../memory/ingestion.md).
+!!! warning "Reindexing after `fake`"
+    The `fake` provider builds vectors by hashing words, with the same
+    dimension as the real model, so the schema accepts them, but semantic
+    search over them does not work. Data loaded into memory in `fake` mode
+    must be reindexed after you switch to `openai`. See
+    [Knowledge ingestion](../memory/ingestion.md).
 
-Таймаут эмбеддингов в compose — 60 секунд (`CB_EMBEDDING_TIMEOUT`): у шлюзов
-бывают редкие долгие ответы.
+The embedding timeout in compose is 60 seconds (`CB_EMBEDDING_TIMEOUT`):
+gateways occasionally respond slowly.
 
-## Память и доступ к ней
+## Memory and access to it
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `MEMORY_IAM_ENABLED` | `true` | `CB_IAM_ENABLED` — память принимает токены IAM audience `memory-service` параллельно со статическим ключом |
-| `MEMORY_POLICY_ENABLED` | `false` | `CB_POLICY_ENABLED` — видимость памяти по principal через внешний PDP (experimental); без подключённого PDP не включать |
+| `MEMORY_IAM_ENABLED` | `true` | `CB_IAM_ENABLED`: memory accepts IAM tokens for the `memory-service` audience alongside the static key |
+| `MEMORY_POLICY_ENABLED` | `false` | `CB_POLICY_ENABLED`: per-principal memory visibility through an external PDP (experimental); do not enable without a connected PDP |
 
-Дополнительно compose фиксирует: `CB_PII_PROTECTION=true`,
-`CB_DEFAULT_NAMESPACE=main`, issuer и JWKS IAM, audience `memory-service`.
+Compose also pins: `CB_PII_PROTECTION=true`, `CB_DEFAULT_NAMESPACE=main`, the
+IAM issuer and JWKS, and the `memory-service` audience.
 
 ## Control Plane
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `CP_LEGACY_API_KEYS_ENABLED` | `false` | Принимать ли статические ключи `cp_…`. В поставке — только IAM; `true` — аварийный режим |
-| `CP_CONTEXT_AUTH` | `auto` | Чем ядро авторизуется в памяти: `auto` — service account из `secrets/control-plane-iam.env`, пока файла нет — `MEMORY_API_KEY`; `api_key` или `iam` — принудительно |
-| `CP_ENTITLEMENT_ENABLED` | `false` | Проверять лицензии во внешнем сервисе лицензирования, если он подключён. Выключенная проверка видна в аудите как источник решения `disabled` |
-| `CP_AUTHZ_MODE` | `local` | Источник доменной авторизации: `local`; `shadow` и `policy` — режимы с внешним PDP (experimental) |
-| `CP_CORS_ORIGINS` | `[]` | JSON-список origin'ов для CORS API Control Plane (нужен, только если браузерный клиент ходит в API напрямую, а не через шлюз) |
+| `CP_LEGACY_API_KEYS_ENABLED` | `false` | Whether to accept static `cp_…` keys. The delivery uses IAM only; `true` is an emergency mode |
+| `CP_CONTEXT_AUTH` | `auto` | How the core authenticates to memory: `auto` uses the service account from `secrets/control-plane-iam.env`, and `MEMORY_API_KEY` until that file exists; `api_key` or `iam` forces one method |
+| `CP_ENTITLEMENT_ENABLED` | `false` | Check licenses in an external licensing service, if one is connected. A disabled check shows up in the audit as decision source `disabled` |
+| `CP_AUTHZ_MODE` | `local` | Source of domain authorization: `local`; `shadow` and `policy` are modes with an external PDP (experimental) |
+| `CP_CORS_ORIGINS` | `[]` | JSON list of origins for CORS on the Control Plane API (needed only if a browser client calls the API directly rather than through a gateway) |
 
-Жёстко заданы в `compose.yml` и из `.env` не меняются: `CP_IAM_ENABLED=true`,
-`CP_IAM_AUDIENCE=control-plane`, `CP_IAM_ISSUER=${TAIMEN_PUBLIC_URL}/iam`,
-`CP_IAM_JWKS_URL` (внутренний адрес IAM), `CP_CONTEXT_PROVIDER=http`,
-`CP_CONTEXT_BASE_URL`. Остальные настройки Control Plane (TTL claims и сессий,
-лимиты контекста, кэш bindings) имеют значения по умолчанию в коде и
-описаны в [Конфигурации Control Plane](../control-plane/configuration.md).
+Hard-coded in `compose.yml` and not configurable from `.env`:
+`CP_IAM_ENABLED=true`, `CP_IAM_AUDIENCE=control-plane`,
+`CP_IAM_ISSUER=${TAIMEN_PUBLIC_URL}/iam`, `CP_IAM_JWKS_URL` (internal IAM
+address), `CP_CONTEXT_PROVIDER=http`, `CP_CONTEXT_BASE_URL`. Other Control
+Plane settings (claim and session TTLs, context limits, bindings cache) have
+defaults in code and are described in
+[Control Plane configuration](../control-plane/configuration.md).
 
 
-## Порты на 127.0.0.1
+## Ports on 127.0.0.1
 
-| Переменная | По умолчанию | Сервис |
+| Variable | Default | Service |
 |---|---|---|
 | `CP_HOST_PORT` | `18000` | control-plane-api |
 | `MEMORY_HOST_PORT` | `18001` | memory-service |
 | `IAM_HOST_PORT` | `18010` | iam-service |
 | `NOTIFY_HOST_PORT` | `18045` | notification-service |
 
-Bootstrap и `make smoke` ходят в сервисы именно по этим портам — при смене
-значения меняйте его в `.env`, а не в `compose.yml`.
+Bootstrap and `make smoke` reach the services on exactly these ports. To change
+a value, change it in `.env`, not in `compose.yml`.
 
-## Лимиты памяти контейнеров
+## Container memory limits
 
-Все `mem_limit` параметризованы. В `.env.example` закомментированы значения
-для машины 2 vCPU / 6 ГБ; остальные переменные можно добавить при
-необходимости.
+Every `mem_limit` is parameterized. `.env.example` contains commented-out
+values for a 2 vCPU / 6 GB machine; add the other variables as needed.
 
-| Переменная | По умолчанию | Сервисы |
+| Variable | Default | Services |
 |---|---|---|
-| `PG_MEM_LIMIT` | `256m` | все PostgreSQL, кроме `memory-db` |
+| `PG_MEM_LIMIT` | `256m` | all PostgreSQL instances except `memory-db` |
 | `MEMORY_DB_MEM_LIMIT` | `512m` | memory-db |
 | `MEMORY_MEM_LIMIT` | `512m` | memory-service |
 | `IAM_MEM_LIMIT` | `256m` | iam-service |
@@ -193,61 +195,61 @@ Bootstrap и `make smoke` ходят в сервисы именно по эти�
 | `MINIO_MEM_LIMIT` | `256m` | minio |
 | `NOTIFY_MEM_LIMIT` | `256m` | notification-service |
 
-## Имена volumes
+## Volume names
 
-По умолчанию volume называется `${COMPOSE_PROJECT_NAME}_<имя>`. Переменные
+By default, a volume is named `${COMPOSE_PROJECT_NAME}_<name>`. The variables
 `VOLUME_CONTROL_PLANE_DB`, `VOLUME_IAM_DB`, `VOLUME_MEMORY_DB`,
-`VOLUME_CADDY_DATA`, `VOLUME_CADDY_CONFIG`, `VOLUME_NOTIFY_DB`,
-`VOLUME_PLATFORM_MINIO` (том MinIO с содержимым артефактов) позволяют указать
-уже существующие volumes — например, при переводе стенда, поднятого раньше
-другими compose-файлами, на корневой `compose.yml` без потери данных.
+`VOLUME_CADDY_DATA`, `VOLUME_CADDY_CONFIG`, `VOLUME_NOTIFY_DB`, and
+`VOLUME_PLATFORM_MINIO` (the MinIO volume with artifact content) let you point
+to existing volumes, for example when moving a deployment that was brought up
+earlier with other compose files to the root `compose.yml` without losing data.
 
-## Сборка образов
+## Image builds
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `IMAGE_PREFIX`, `IMAGE_TAG` | `taimen`, `local` | имя и тег собираемых образов (`${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`) |
-| `CP_BUILD_CONTEXT`, `MEMORY_BUILD_CONTEXT`, `IAM_BUILD_CONTEXT`, `NOTIFY_BUILD_CONTEXT` | корень или каталог компонента | контекст сборки; меняют, когда исходники релиза лежат в другом каталоге |
+| `IMAGE_PREFIX`, `IMAGE_TAG` | `taimen`, `local` | name and tag of built images (`${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`) |
+| `CP_BUILD_CONTEXT`, `MEMORY_BUILD_CONTEXT`, `IAM_BUILD_CONTEXT`, `NOTIFY_BUILD_CONTEXT` | root or component directory | build context; change it when release sources live in a different directory |
 
-## Прочие переменные опциональных профилей
+## Other variables of optional profiles
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `NOTIFY_POSTGRES_PASSWORD` | — (обязательна) | пароль БД notification-service, генерирует `make secrets` |
+| `NOTIFY_POSTGRES_PASSWORD` | — (required) | notification-service database password, generated by `make secrets` |
 
-## Файлы, которые пишет bootstrap
+## Files written by bootstrap
 
-Эти файлы подключаются к контейнерам через `env_file` с `required: false`,
-поэтому первый `make up` проходит и без них:
+These files are attached to containers through `env_file` with
+`required: false`, so the first `make up` succeeds without them:
 
-| Файл | Кем читается | Содержимое |
+| File | Read by | Contents |
 |---|---|---|
-| `secrets/control-plane-iam.env` | `control-plane-api`, `control-plane-worker`, `context-adapter` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET` — service account ядра |
-| `secrets/notification-iam.env` | `notification-service` | `NS_SERVICE_CLIENT_ID`, `NS_SERVICE_CLIENT_SECRET` — service account сервиса уведомлений |
+| `secrets/control-plane-iam.env` | `control-plane-api`, `control-plane-worker`, `context-adapter` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET`: the core service account |
+| `secrets/notification-iam.env` | `notification-service` | `NS_SERVICE_CLIENT_ID`, `NS_SERVICE_CLIENT_SECRET`: the notification service's service account |
 
-После появления или замены такого файла перезапустите потребителя
-(`docker compose up -d <сервис>`) — `env_file` читается при создании
-контейнера.
+After such a file appears or is replaced, restart its consumer
+(`docker compose up -d <service>`): `env_file` is read when the container is
+created.
 
-## Промышленный стенд: что поменять
+## Production deployment: what to change
 
-| Переменная | Локально | Промышленный стенд |
+| Variable | Local | Production deployment |
 |---|---|---|
 | `TAIMEN_PUBLIC_URL` | `http://taimen.localhost` | `https://platform.example.com` |
 | `TAIMEN_PUBLIC_HOST` | `taimen.localhost` | `platform.example.com` |
-| `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | Caddyfile с доменом и автоматическим TLS |
+| `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | a Caddyfile with your domain and automatic TLS |
 | `MEMORY_EMBEDDING_PROVIDER` / `MEMORY_LLM_PROVIDER` | `fake` / `echo` | `openai` / `openai` |
-| `*_MEM_LIMIT` | не заданы | по ресурсам машины |
-| `COMPOSE_PROJECT_NAME`, `VOLUME_*` | по умолчанию | по договорённости об именах |
+| `*_MEM_LIMIT` | not set | according to machine resources |
+| `COMPOSE_PROJECT_NAME`, `VOLUME_*` | defaults | per your naming conventions |
 
-Подробно — [Промышленное развёртывание](../operations/deployment.md) и
-[Периметр и TLS](../operations/edge-and-tls.md).
+Details: [Production deployment](../operations/deployment.md) and
+[Edge and TLS](../operations/edge-and-tls.md).
 
-## См. также
+## See also
 
-- [Переменные окружения](../reference/environment.md)
+- [Environment variables](../reference/environment.md)
 - [Bootstrap](bootstrap.md)
-- [Секреты и ротация](../operations/secrets.md)
-- [Конфигурация Control Plane](../control-plane/configuration.md)
-- [Конфигурация IAM](../iam/configuration.md)
-- [Конфигурация памяти](../memory/configuration.md)
+- [Secrets and rotation](../operations/secrets.md)
+- [Control Plane configuration](../control-plane/configuration.md)
+- [IAM configuration](../iam/configuration.md)
+- [Memory configuration](../memory/configuration.md)

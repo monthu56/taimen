@@ -1,120 +1,125 @@
-# Обновление и миграции
 
-Как выкатить новую версию платформы: штатная процедура, кто и когда применяет
-миграции схем, как сократить простой, как откатиться. Статья для инженера,
-который выполняет выкладку на промышленную установку.
+# Upgrades and migrations
 
-## Что такое релиз
+How to roll out a new version of the platform: the standard procedure, who
+applies schema migrations and when, how to reduce downtime, and how to roll
+back. This article is for the engineer who deploys to a production
+installation.
 
-Релиз платформы — **коммит суперпроекта**. Он закрепляет ревизии всех
-компонентов указателями сабмодулей, а заодно `compose.yml`, `.env.example`,
-`deploy/` и пакеты каталога. Обновить установку — значит перевести клон
-суперпроекта на новый коммит, подтянуть сабмодули на закреплённые ревизии,
-пересобрать образы и пересоздать изменившиеся контейнеры.
+## What a release is
+
+A platform release is a **superproject commit**. It pins the revisions of
+all components with submodule pointers, along with `compose.yml`,
+`.env.example`, `deploy/`, and catalog packages. Upgrading an installation
+means moving the superproject clone to the new commit, updating submodules
+to the pinned revisions, rebuilding images, and recreating the containers
+that changed.
 
 ```mermaid
 sequenceDiagram
-    participant Op as Инженер
-    participant Git as Клон суперпроекта
+    participant Op as Engineer
+    participant Git as Superproject clone
     participant D as Docker
-    participant Svc as Сервисы
-    Op->>Op: бэкап БД и secrets/
+    participant Svc as Services
+    Op->>Op: back up databases and secrets/
     Op->>Git: git pull --ff-only
     Op->>Git: git submodule update --init --recursive
-    Op->>D: docker compose build (сервисы продолжают работать)
+    Op->>D: docker compose build (services keep running)
     Op->>D: docker compose up -d
-    D->>Svc: пересоздание изменившихся контейнеров
-    Svc->>Svc: alembic upgrade head при старте
+    D->>Svc: recreate the changed containers
+    Svc->>Svc: alembic upgrade head at startup
     Op->>Svc: make smoke, /health/ready
 ```
 
-## Штатная выкладка
+## Standard rollout
 
 
 ```bash
 cd /opt/taimen/src
-PROFILES="--profile core --profile edge"   # профили вашей установки
+PROFILES="--profile core --profile edge"   # your installation's profiles
 
-# 0. Бэкап (обязательно перед релизом с миграциями)
-#    см. «Резервное копирование»
+# 0. Backup (mandatory before a release with migrations)
+#    see "Backup"
 
-# 1. Код
-git fetch && git log --oneline HEAD..origin/main       # что приезжает
+# 1. Code
+git fetch && git log --oneline HEAD..origin/main       # what is coming in
 git pull --ff-only
 git submodule update --init --recursive
-git submodule status                                    # ни одной строки с «+» или «-»
+git submodule status                                    # no line with "+" or "-"
 
-# 2. Сборка заранее: работающие контейнеры не трогаются
+# 2. Build ahead of time: running containers are not touched
 docker compose $PROFILES build
 
-# 3. Переключение: пересоздаются только контейнеры с новым образом или конфигурацией
+# 3. Switchover: only containers with a new image or configuration are recreated
 docker compose $PROFILES up -d
 
-# 4. Проверка
+# 4. Verification
 make smoke
 curl -fsS http://127.0.0.1:18000/health/ready           # {"status":"ready","revision":"..."}
 docker compose --profile "*" ps
 ```
 
-!!! tip "Сначала build, потом up"
-    `make up` выполняет `up -d --build`, то есть собирает образы прямо в
-    момент переключения. На слабой машине сборка занимает минуты, и всё это
-    время часть сервисов может быть пересоздана, а часть — ещё нет. Раздельные
-    `build` и `up -d` сокращают окно переключения до секунд: пересоздание
-    контейнера API с готовым образом занимает порядка 5–10 секунд, а claim
-    живого исполнителя (по умолчанию `CP_CLAIM_TTL_SECONDS=300`) это
-    переживает.
+!!! tip "Build first, then up"
+    `make up` runs `up -d --build`, that is, it builds images right at the
+    moment of the switchover. On a weak machine the build takes minutes, and
+    all that time some services may already be recreated while others are
+    not yet. Separate `build` and `up -d` steps shrink the switchover window
+    to seconds: recreating the API container with a ready image takes about
+    5–10 seconds, and a live executor's claim (`CP_CLAIM_TTL_SECONDS=300` by
+    default) survives that.
 
-!!! warning "Команды — из корня клона"
-    `docker compose` читает `.env` из каталога проекта. Если запускаете
-    compose из другого каталога или с `-f`, передавайте
-    `--env-file /opt/taimen/src/.env`, иначе интерполяция упадёт на
+!!! warning "Run commands from the clone root"
+    `docker compose` reads `.env` from the project directory. If you run
+    compose from another directory or with `-f`, pass
+    `--env-file /opt/taimen/src/.env`; otherwise interpolation fails with
     `required variable CP_POSTGRES_PASSWORD is missing a value`.
 
-## Один образ Control Plane на три процесса
+## One Control Plane image for three processes
 
-`control-plane-api`, `control-plane-worker` и `context-adapter` запускаются
-из **одного** образа `${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`. Секция
-`build:` есть только у `control-plane-api`; у worker и адаптера её нет.
+`control-plane-api`, `control-plane-worker`, and `context-adapter` run from
+**one** image, `${IMAGE_PREFIX}/control-plane:${IMAGE_TAG}`. Only
+`control-plane-api` has a `build:` section; the worker and the adapter do
+not.
 
-Следствия:
+Consequences:
 
-- `docker compose build control-plane-worker` ничего не собирает. Собирайте
-  `control-plane-api` или весь профиль `core`.
-- После сборки пересоздайте **все три** контейнера. `docker compose up -d`
-  без имён сервисов сделает это сам (у всех трёх сменился образ). Если
-  перечисляете сервисы явно — перечисляйте все три:
+- `docker compose build control-plane-worker` builds nothing. Build
+  `control-plane-api` or the whole `core` profile.
+- After the build, recreate **all three** containers. `docker compose up -d`
+  without service names does this itself (all three have a new image). If
+  you list services explicitly, list all three:
 
   ```bash
   docker compose up -d control-plane-api control-plane-worker context-adapter
   ```
 
-- Имя сервиса адаптера — `context-adapter`, без префикса `control-plane-`.
-  Ошибка в имени роняет всю команду `up` с `no such service`, и не
-  поднимается ни один из перечисленных сервисов.
+- The adapter service name is `context-adapter`, without the
+  `control-plane-` prefix. A wrong name fails the whole `up` command with
+  `no such service`, and none of the listed services starts.
 
-## Миграции схем
+## Schema migrations
 
-Отдельного шага миграции нет: каждый сервис с собственной БД приводит схему
-к head при старте.
+There is no separate migration step: every service with its own database
+brings the schema to head at startup.
 
-| Сервис | Когда применяются миграции | Механизм |
+| Service | When migrations are applied | Mechanism |
 |---|---|---|
-| `iam-service` | При старте контейнера | `alembic upgrade head && uvicorn …` |
-| `control-plane-api` | При старте контейнера | `alembic upgrade head && uvicorn …` |
-| `control-plane-worker`, `context-adapter` | Не применяют | Стартуют после того, как `control-plane-api` стал healthy |
-| `memory-service` | При старте, идемпотентно | Сервис создаёт недостающие таблицы и индексы; миграции аддитивные |
+| `iam-service` | At container startup | `alembic upgrade head && uvicorn …` |
+| `control-plane-api` | At container startup | `alembic upgrade head && uvicorn …` |
+| `control-plane-worker`, `context-adapter` | Do not apply them | Start after `control-plane-api` becomes healthy |
+| `memory-service` | At startup, idempotently | The service creates missing tables and indexes; migrations are additive |
 
-`GET /health/ready` Control Plane сравнивает ревизию БД с head образа и
-отвечает `503` с `reason: migrations_pending`, пока они расходятся — поэтому
-healthcheck не пропустит worker и адаптер к старой схеме:
+Control Plane `GET /health/ready` compares the database revision with the
+image's head and returns `503` with `reason: migrations_pending` while they
+differ, so the healthcheck does not let the worker and the adapter reach
+the old schema:
 
 ```json
 {"status": "unavailable", "reason": "migrations_pending",
- "dbRevision": "<старая ревизия>", "headRevision": "<новая ревизия>"}
+ "dbRevision": "<old revision>", "headRevision": "<new revision>"}
 ```
 
-Проверить ревизии вручную:
+Check revisions manually:
 
 ```bash
 docker compose exec control-plane-db psql -U control_plane -d control_plane \
@@ -123,51 +128,52 @@ docker compose exec iam-db psql -U iam -d iam -c 'SELECT version_num FROM alembi
 docker compose run --rm --no-deps control-plane-api alembic heads
 ```
 
-!!! warning "Индексы строятся не CONCURRENTLY"
-    Миграции Control Plane создают индексы обычным `CREATE INDEX`, который
-    блокирует запись в таблицу на время построения. На большой базе релиз с
-    новыми индексами выкатывайте в окно обслуживания.
+!!! warning "Indexes are not built CONCURRENTLY"
+    Control Plane migrations create indexes with a plain `CREATE INDEX`,
+    which blocks writes to the table while it is built. On a large database,
+    roll out a release with new indexes in a maintenance window.
 
-### Релиз с миграциями Control Plane
+### A release with Control Plane migrations
 
-Для релиза, который меняет схему журнала или курсоров, консервативный порядок
-такой (адаптер доставки в память — singleton, его лучше остановить до смены
-схемы):
+For a release that changes the schema of the log or cursors, the
+conservative order is as follows (the memory delivery adapter is a
+singleton, so it is better to stop it before the schema changes):
 
 ```bash
 docker compose $PROFILES build
 docker compose stop context-adapter
-docker compose up -d control-plane-api          # применит миграции
-curl -fsS http://127.0.0.1:18000/health/ready    # ждать 200
+docker compose up -d control-plane-api          # applies migrations
+curl -fsS http://127.0.0.1:18000/health/ready    # wait for 200
 docker compose up -d control-plane-worker context-adapter
 ```
 
-## После обновления
+## After the upgrade
 
-| Что проверить | Когда нужно |
+| What to check | When it is needed |
 |---|---|
-| Повторный прогон `deploy/bootstrap.py` | Если релиз менял `AUDIENCES`, потолки service accounts, права агентов по умолчанию или пакеты каталога. Скрипт идемпотентен: приводит `allowedScopes` audiences к реестру (`PATCH`), при изменившемся потолке перевыпускает service account ядра и отзывает прежний |
-| Перезапуск ядра после bootstrap | Если bootstrap перевыпустил `secrets/control-plane-iam.env`: `docker compose up -d control-plane-api control-plane-worker context-adapter` |
-| План каталога | `python3 tools/cp_packages.py plan --install deploy/packages.yaml --server https://platform.example.com` показывает расхождения каталога до применения (токен — `CP_TOKEN`) |
-| Runner-хост | Обновить отдельно, см. ниже |
-| Рабочие места операторов | Переустановить пакет `control-plane` (MCP-плагин, CLI) и перезапустить сессию: новые инструменты `cp_*` появляются только в новой сессии |
+| Rerun `deploy/bootstrap.py` | If the release changed `AUDIENCES`, service account ceilings, default agent permissions, or catalog packages. The script is idempotent: it brings the audiences' `allowedScopes` in line with the registry (`PATCH`), and if a ceiling changed it reissues the core service account and revokes the previous one |
+| Restart the core after bootstrap | If bootstrap reissued `secrets/control-plane-iam.env`: `docker compose up -d control-plane-api control-plane-worker context-adapter` |
+| Catalog plan | `python3 tools/cp_packages.py plan --install deploy/packages.yaml --server https://platform.example.com` shows catalog differences before applying them (token in `CP_TOKEN`) |
+| Runner host | Upgrade separately; see below |
+| Operator workstations | Reinstall the `control-plane` package (MCP plugin, CLI) and restart the session: new `cp_*` tools appear only in a new session |
 
-## Обновление runner-хоста
+## Upgrading the runner host
 
-Исполнитель не обновляется вместе с хостом платформы.
+The executor is not upgraded together with the platform host.
 
 
-=== "Контейнер"
+=== "Container"
 
-    Пересоберите образ исполнителя из обновлённого дерева суперпроекта и
-    пересоздайте контейнер (`docker compose -f <compose-файл исполнителя>
-    up -d --build`). Bare-зеркала репозиториев обновите (`git fetch`) до
-    старта или при старте контейнера.
+    Rebuild the executor image from the updated superproject tree and
+    recreate the container (`docker compose -f <executor compose file>
+    up -d --build`). Update the bare repository mirrors (`git fetch`) before
+    the container starts or at startup.
 
 === "systemd"
 
-    Всё — от пользователя `runner`, иначе в каталогах появятся файлы
-    root, и следующая установка упадёт с `Permission denied`:
+    Do everything as the `runner` user; otherwise root-owned files appear in
+    the directories and the next installation fails with
+    `Permission denied`:
 
     ```bash
     sudo -u runner git -C <runner-root>/src/control-plane pull --ff-only
@@ -175,75 +181,78 @@ docker compose up -d control-plane-worker context-adapter
       UV_TOOL_DIR=<runner-root>/tools UV_TOOL_BIN_DIR=<runner-root>/bin \
       /home/runner/.local/bin/uv tool install --reinstall <runner-root>/src/control-plane
     sudo -u runner git -C <runner-root>/<repo>.git fetch origin '+refs/heads/*:refs/heads/*'
-    sudo systemctl restart <юниты исполнителей>
+    sudo systemctl restart <executor units>
     ```
 
-    `uv tool install` от root ставит пакет в `/root/.local/share/uv/tools` —
-    мимо сервисов, и они молча остаются на старом коде. Обновлять нужно оба
-    места: `src/` (из чего собран демон) и bare-зеркало (из чего делаются
-    рабочие копии задач).
+    `uv tool install` as root installs the package into
+    `/root/.local/share/uv/tools`, bypassing the services, and they silently
+    stay on the old code. Update both places: `src/` (what the daemon is
+    built from) and the bare mirror (what task working copies are made
+    from).
 
-Остановка исполнителя безопасна в любой момент: при следующем старте демон
-находит свой осиротевший run и закрывает его с
-`failure_reason=restart_recovery`, задача возвращается в очередь, рабочая
-копия сохраняется.
+Stopping the executor is safe at any moment: at the next start the daemon
+finds its orphaned run and closes it with `failure_reason=restart_recovery`;
+the task returns to the queue, and the working copy is preserved.
 
-## Откат релиза
+## Release rollback
 
-### Быстрый откат без миграций
+### Fast rollback without migrations
 
-Если новый релиз не менял схему (ревизии Alembic до и после совпадают),
-откат — это обратный переход по коммиту:
+If the new release did not change the schema (the Alembic revisions before
+and after are the same), rolling back means moving back to the previous
+commit:
 
 ```bash
-git checkout <предыдущий коммит суперпроекта>
+git checkout <previous superproject commit>
 git submodule update --init --recursive
 docker compose $PROFILES build
 docker compose $PROFILES up -d
 ```
 
-!!! tip "Держите предыдущие образы"
-    По умолчанию все образы помечаются тегом `local` и новая сборка
-    перезаписывает старую. Если перед сборкой выставлять в `.env`
-    `IMAGE_TAG=<короткий хэш коммита>`, образ предыдущего релиза остаётся
-    на хосте, и откат сводится к возврату прежнего `IMAGE_TAG` и
-    `docker compose up -d` — без пересборки.
+!!! tip "Keep previous images"
+    By default all images are tagged `local`, and a new build overwrites the
+    old one. If you set `IMAGE_TAG=<short commit hash>` in `.env` before
+    building, the image of the previous release stays on the host, and
+    rolling back comes down to restoring the previous `IMAGE_TAG` and
+    running `docker compose up -d`, without a rebuild.
 
-### Откат с миграциями
+### Rollback with migrations
 
-Alembic откатывает схему только кодом, который **знает** новую ревизию,
-поэтому порядок строгий:
+Alembic can roll back the schema only with code that **knows** the new
+revision, so the order is strict:
 
-1. Определите ревизию, на которую откатываетесь (head предыдущего релиза):
-   по журналу выкладок (см. ниже) или командой `alembic heads`, выполненной
-   образом предыдущего релиза.
-2. **Новым** образом выполните downgrade:
+1. Determine the revision to roll back to (the head of the previous
+   release): from the deployment log (see below) or with `alembic heads`
+   run in the previous release's image.
+2. Run the downgrade with the **new** image:
 
     ```bash
     docker compose stop control-plane-worker context-adapter control-plane-api
-    docker compose run --rm --no-deps control-plane-api alembic downgrade <ревизия>
+    docker compose run --rm --no-deps control-plane-api alembic downgrade <revision>
     ```
 
-3. Переключите код и образы на предыдущий релиз (как в быстром откате).
-4. Поднимите сервисы и проверьте `/health/ready`.
+3. Switch the code and images to the previous release (as in the fast
+   rollback).
+4. Start the services and check `/health/ready`.
 
-!!! danger "Если downgrade невозможен"
-    Не каждая миграция обратима без потерь. Если downgrade не проходит,
-    восстановите БД из бэкапа, снятого перед релизом (см.
-    [Резервное копирование](backup.md)), и поднимите предыдущий релиз
-    поверх восстановленной базы. После восстановления из дампа Control Plane
-    доставит в память события повторно — это безопасно: память
-    дедуплицирует их по идентификатору события.
+!!! danger "If a downgrade is impossible"
+    Not every migration is reversible without loss. If the downgrade fails,
+    restore the database from the backup taken before the release (see
+    [Backup](backup.md)) and start the previous release on top of the
+    restored database. After a restore from a dump, Control Plane delivers
+    events to memory again; this is safe, because memory deduplicates them
+    by event identifier.
 
-## Журнал выкладок
+## Deployment log
 
-Записывайте для каждой выкладки: коммит суперпроекта, `IMAGE_TAG`, ревизии
-Alembic `control-plane` и `iam-service` до и после, время переключения,
-результат `make smoke`. Эти данные нужны для отката и для разбора инцидентов.
+For each deployment, record: the superproject commit, `IMAGE_TAG`, the
+Alembic revisions of `control-plane` and `iam-service` before and after, the
+switchover time, and the `make smoke` result. You need this data for
+rollbacks and incident analysis.
 
-## См. также
+## See also
 
-- [Резервное копирование](backup.md)
-- [Мониторинг и здоровье](monitoring.md)
-- [Аварийные процедуры](emergency.md)
-- [Установка и запуск — диагностика](../troubleshooting/startup.md)
+- [Backup](backup.md)
+- [Monitoring and health](monitoring.md)
+- [Emergency procedures](emergency.md)
+- [Installation and startup: troubleshooting](../troubleshooting/startup.md)

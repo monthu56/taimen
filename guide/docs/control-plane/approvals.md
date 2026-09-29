@@ -1,29 +1,30 @@
+
 # Approvals
 
-Approval — минимальный примитив управления «человек (или агент) в контуре»:
-одна запись — одно решение. Статья описывает запрос и решение approval,
-gate, который блокирует задачу до решения, и исходы, которые тип задачи
-объявляет на случай одобрения или отклонения. Она нужна тем, кто строит
-процессы с проверкой человеком, и разработчикам харнессов, которые умеют
-ждать решения.
+An approval is the minimal "human (or agent) in the loop" governance primitive:
+one record is one decision. This article describes requesting and deciding an approval,
+the gate that blocks a task until the decision, and the outcomes that a task type
+declares for the case of approval or rejection. It is for those who build
+processes with human review, and for harness developers whose harnesses can
+wait for a decision.
 
-## Модель
+## Model
 
-| Поле | Описание |
+| Field | Description |
 |---|---|
-| `taskId` | Задача, к которой относится решение (обязательна для gate) |
-| `artifactId` | Артефакт, который оценивается (необязательно) |
-| `workspaceId` | Workspace, в пределах которого ищется требуемая роль |
-| `requiredRoleId` / `assignedPrincipalId` | **Ровно одно**: кто может решить — держатель роли или конкретный principal |
-| `gate` | `true` — approval блокирует захват и завершение задачи до решения |
+| `taskId` | The task the decision relates to (required for a gate) |
+| `artifactId` | The artifact being evaluated (optional) |
+| `workspaceId` | The workspace within which the required role is looked up |
+| `requiredRoleId` / `assignedPrincipalId` | **Exactly one**: who can decide — a role holder or a specific principal |
+| `gate` | `true` — the approval blocks claiming and completing the task until the decision |
 | `status` | `pending`, `approved`, `rejected`, `cancelled` |
-| `requestedByPrincipalId` | Кто запросил |
-| `decisionByPrincipalId`, `decisionAt` | Кто и когда решил |
-| `comment` | Комментарий запроса; решение может его заменить |
-| `outcomeStatus` | Состояние исхода решения: `null`, `pending`, `deferred`, `executed`, `failed` |
-| `version` | Растёт при каждом изменении |
+| `requestedByPrincipalId` | Who requested it |
+| `decisionByPrincipalId`, `decisionAt` | Who decided and when |
+| `comment` | The request comment; the decision can replace it |
+| `outcomeStatus` | State of the decision's outcome: `null`, `pending`, `deferred`, `executed`, `failed` |
+| `version` | Increments on every change |
 
-### Состояния approval
+### Approval states
 
 ```mermaid
 stateDiagram-v2
@@ -36,11 +37,11 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
-Решение атомарно: строка блокируется `FOR UPDATE`, и переход возможен
-только из `pending`. Два одновременных решения дают ровно один исход;
-второе получает `409 approval_already_decided`.
+The decision is atomic: the row is locked with `FOR UPDATE`, and a transition is possible
+only from `pending`. Two simultaneous decisions produce exactly one outcome;
+the second gets `409 approval_already_decided`.
 
-## Запрос
+## Request
 
 ```bash
 curl -s -X POST "$CP/approvals" \
@@ -50,81 +51,81 @@ curl -s -X POST "$CP/approvals" \
     "task": "TASK-000123",
     "artifactId": "<artifact-id>",
     "assignedPrincipalId": "<reviewer-principal-id>",
-    "comment": "Проверьте изменения в схеме перед выкладкой",
+    "comment": "Review the schema changes before rollout",
     "gate": true
   }'
 ```
 
-| Правило | Ответ при нарушении |
+| Rule | Response on violation |
 |---|---|
-| Право `approvals.manage` | `403 permission_denied` |
-| Ровно одно из `requiredRoleId` / `assignedPrincipalId` | `422 invalid_approval` |
-| `gate: true` требует `task` | `422 invalid_approval` |
-| Gate нельзя повесить на терминальную задачу | `422 invalid_approval` |
-| Задача, артефакт, workspace, роль, principal существуют в tenant'е | `404 not_found` |
+| Permission `approvals.manage` | `403 permission_denied` |
+| Exactly one of `requiredRoleId` / `assignedPrincipalId` | `422 invalid_approval` |
+| `gate: true` requires `task` | `422 invalid_approval` |
+| A gate cannot be put on a terminal task | `422 invalid_approval` |
+| The task, artifact, workspace, role, principal exist in the tenant | `404 not_found` |
 
-Запрос gate берёт блокировку строки задачи: параллельный `:complete` либо
-завершится раньше, чем gate появится, либо дождётся его — gate не может
-«прицепиться» к задаче, которая в этот момент становится терминальной.
+A gate request takes the task row lock: a concurrent `:complete` either
+finishes before the gate appears or waits for it — a gate cannot
+"attach" to a task that is becoming terminal at that moment.
 
-## Решение
+## Decision
 
 ```bash
 curl -s -X POST "$CP/approvals/<approval-id>:approve" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"comment": "Схема согласована"}'
+  -d '{"comment": "Schema approved"}'
 
 curl -s -X POST "$CP/approvals/<approval-id>:reject" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"comment": "Нужна обратная совместимость для старых клиентов"}'
+  -d '{"comment": "Backward compatibility for old clients is required"}'
 ```
 
-Решить approval можно только при выполнении **обоих** условий:
+You can decide an approval only when **both** conditions hold:
 
-1. API-право `approvals.decide` (в режиме PDP — на ресурсе `approval:<id>`);
+1. The API permission `approvals.decide` (in PDP mode, on the `approval:<id>` resource);
 2. **eligibility**:
-    - если задан `assignedPrincipalId` — решает только этот principal;
-    - если задан `requiredRoleId` — решает держатель роли, назначенной на
-      уровне tenant'а, либо на `workspaceId` approval'а или любом из его
-      предков.
+    - if `assignedPrincipalId` is set, only that principal decides;
+    - if `requiredRoleId` is set, a holder of the role assigned at the
+      tenant level, or on the approval's `workspaceId` or any of its
+      ancestors, decides.
 
-Иначе — `403 not_eligible`.
+Otherwise — `403 not_eligible`.
 
-!!! note "Роль ищется по workspace approval'а, а не задачи"
-    Scope роли определяется полем `workspaceId` самого approval. Если его не
-    передать, подойдёт только роль, назначенная на уровне tenant'а.
-    Указывайте `workspaceId`, когда решать должны держатели роли в конкретной
-    ветке дерева.
+!!! note "The role is looked up by the approval's workspace, not the task's"
+    The role scope is defined by the `workspaceId` field of the approval itself. If you do not
+    pass it, only a role assigned at the tenant level qualifies.
+    Specify `workspaceId` when holders of the role in a specific
+    branch of the tree must decide.
 
-## Отмена
+## Cancellation
 
-`POST /approvals/{id}:cancel` (`approvals.manage`) переводит `pending` в
-`cancelled`; повторная отмена идемпотентна, отмена решённого —
+`POST /approvals/{id}:cancel` (`approvals.manage`) moves `pending` to
+`cancelled`; a repeated cancellation is idempotent, cancelling a decided one is
 `409 approval_already_decided`.
 
-Отмена **gate** открывает задачу так же, как решение. Поэтому отменить
-чужой gate можно только с полными полномочиями решающего —
-`approvals.decide` и eligibility; автор запроса может отменить свой gate
-всегда. Иначе — `403 not_eligible`.
+Cancelling a **gate** opens the task just like a decision. That is why you can cancel
+someone else's gate only with the full authority of a decider —
+`approvals.decide` and eligibility; the author of the request can always cancel their own gate.
+Otherwise — `403 not_eligible`.
 
 ## Gate
 
-Gate-approval (`gate: true`) — механизм принуждения. Пока хотя бы один gate
-задачи в `pending`:
+A gate approval (`gate: true`) is an enforcement mechanism. While at least one gate
+of the task is `pending`:
 
-| Операция | Результат |
+| Operation | Result |
 |---|---|
 | `POST /tasks/{ref}:claim`, `:reclaim` | `409 approval_required` |
 | `POST /tasks/{ref}:complete` | `409 approval_required` |
-| `POST /runs/{id}:succeed` с `completeTask: true` | `409 approval_required` |
-| `GET /work/available` | Задача не выдаётся |
-| `GET /tasks/{ref}/claimability` | Причина `approval_required` со списком `pendingApprovals` |
+| `POST /runs/{id}:succeed` with `completeTask: true` | `409 approval_required` |
+| `GET /work/available` | The task is not returned |
+| `GET /tasks/{ref}/claimability` | Reason `approval_required` with a `pendingApprovals` list |
 
-Проверка выполняется внутри транзакции захвата или завершения под
-блокировкой задачи: незакоммиченное решение не видно, поэтому gate
-открывается только после commit решения.
+The check runs inside the claim or completion transaction under the
+task lock: an uncommitted decision is not visible, so the gate
+opens only after the decision is committed.
 
-`details` ошибки перечисляет, что держит задачу:
+The error's `details` lists what is holding the task:
 
 ```json
 {
@@ -136,51 +137,51 @@ Gate-approval (`gate: true`) — механизм принуждения. Пок
 }
 ```
 
-### Ожидание решения исполнителем
+### Waiting for a decision as an executor
 
-Gate не останавливает уже идущий run, но не даст его успешно завершить
-задачу. Правильный порядок для исполнителя — записать checkpoint, запросить
-gate и приостановить run, освободив claim:
+A gate does not stop a run that is already in progress, but it will not let the run successfully complete
+the task. The correct order for an executor is to write a checkpoint, request
+a gate, and suspend the run, releasing the claim:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant R as Исполнитель
+    participant R as Executor
     participant CP as Control Plane
-    participant D as Решающий
+    participant D as Decider
     R->>CP: POST /runs/{r}/checkpoints
     R->>CP: POST /approvals {task, gate: true, assignedPrincipalId: D}
     R->>CP: POST /runs/{r}:suspend {waitingForApprovalId}
-    Note over CP: claim освобождён, задача ждёт
+    Note over CP: claim released, task is waiting
     D->>CP: POST /approvals/{id}:approve
-    Note over CP: gate открыт; если тип объявил исход —<br/>воркер исполняет его
+    Note over CP: gate open; if the type declared an outcome,<br/>the worker executes it
     R->>CP: :claim → :start-run → GET /runs/{new}/context
 ```
 
-Подробнее о приостановке — в [Исполнении](execution.md).
+For more on suspension, see [Execution](execution.md).
 
-## Исходы, объявленные типом задачи
+## Outcomes declared by the task type
 
-Без дополнительной настройки решение только открывает gate: дальнейшие шаги
-(завести задачу на правки, закрыть проверку) делает кто-то вручную. Тип
-задачи может объявить, **что ядро сделает после решения**, в поле
-`approvalSchema` (обоснование — CP-ADR-0061).
+Without additional configuration, a decision only opens the gate: further steps
+(creating a rework task, closing the review) are done manually by someone. A task
+type can declare **what the core does after the decision** in the
+`approvalSchema` field (rationale: CP-ADR-0061).
 
-!!! note "Ядро не знает доменных действий"
-    Исходы — закрытый словарь обобщённых действий над сущностями ядра:
-    создать работу, завершить задачу, прокомментировать, сменить статус.
-    Всё предметное («слить ветку», «опубликовать релиз») остаётся данными
-    типа и интеграциями, а не кодом ядра.
+!!! note "The core does not know domain actions"
+    Outcomes are a closed vocabulary of generic actions on core entities:
+    create work, complete a task, comment, change status.
+    Everything domain-specific ("merge a branch", "publish a release") remains type data
+    and integrations, not core code.
 
-### Когда исходы исполняются
+### When outcomes are executed
 
-Только для **gate**-approval'а на задаче, версия типа которой объявляет
-непустой список действий для принятого решения. Обычный (не gate) approval
-совещательный: тип не может знать, о чём был произвольный approval, лишь
-упоминающий задачу. Задача помнит версию типа, с которой создана, поэтому
-исполняются исходы, объявленные на момент её создания.
+Only for a **gate** approval on a task whose type version declares
+a non-empty list of actions for the decision made. A regular (non-gate) approval
+is advisory: the type cannot know what an arbitrary approval that merely
+mentions the task was about. A task remembers the type version it was created with, so
+the outcomes declared at the time of its creation are executed.
 
-### Формат approvalSchema
+### approvalSchema format
 
 ```json
 {
@@ -194,14 +195,14 @@ sequenceDiagram
           {"ensureWork": {
             "type": "task",
             "key": "rework:$.approval.id",
-            "title": "Доработка по замечаниям: $.task.publicId! $.task.title",
-            "description": "Замечания: $.approval.comment",
+            "title": "Rework per review comments: $.task.publicId! $.task.title",
+            "description": "Comments: $.approval.comment",
             "assignee": "$.task.assigneeId!",
             "priority": "$.task.priority",
             "workspace": "$.task.workspaceId",
             "relation": {"spawned_by": "$.task.id!"}
           }},
-          {"comment": {"body": "Заведена задача на доработку"}},
+          {"comment": {"body": "A rework task has been created"}},
           {"transition": {"status": "blocked"}}
         ]
       }
@@ -210,110 +211,110 @@ sequenceDiagram
 }
 ```
 
-- Исполняется только гейт `default`; другие имена гейтов отклоняются при
-  публикации типа — исходы, которые молча не исполняются, хуже отказа.
-- Исходы — `approved` и `rejected`; каждый — список до 20 действий,
-  исполняемых **по порядку**.
-- Действие — объект с одним ключом (имя действия) и объектом входов.
+- Only the `default` gate is executed; other gate names are rejected when
+  the type is published — outcomes that silently do not execute are worse than a refusal.
+- The outcomes are `approved` and `rejected`; each is a list of up to 20 actions,
+  executed **in order**.
+- An action is an object with one key (the action name) and an object of inputs.
 
-### Словарь действий
+### Action vocabulary
 
-| Действие | Входы | Что делает |
+| Action | Inputs | What it does |
 |---|---|---|
-| `ensureWork` | `type`, `key`, `title` (обязательные); `description`, `assignee`, `priority`, `workspace`, `relation {<тип связи>: ref}` | Создаёт задачу типа `type`, если задачи с этим `key` ещё нет в tenant'е, и связывает её `relation`. `workspace` по умолчанию — workspace задачи approval'а. Созданная задача получает `origin.kind = "process"`, `ref = approval:<id>` |
-| `completeTask` | `task?` (по умолчанию задача approval'а) | Обычный `:complete`: ребро в `completionStatus` должно быть объявлено, gate не должен держать задачу. Уже завершённая — не ошибка (`alreadyCompleted`) |
-| `comment` | `body`, `task?` | Комментарий в тред задачи от имени решившего |
-| `transition` | `status`, `task?` | Обычный `PATCH status` — только по объявленному ребру; уже в статусе — не ошибка |
-| `invokeSkill` | `skill` (`имя@версия`); `inputs?`, `expect?`, `onSuccess?`, `onFailure?` | Ставит в очередь вызов скилла и считается исполненным, когда вызов поставлен. `onSuccess`/`onFailure` — действия того же словаря (без `invokeSkill`), которые исполняются после собственных действий исхода, когда все вызовы исхода завершились: `onSuccess`, если вызов успешен так, как требует `expect`, иначе `onFailure`. В них доступно выражение `$.invocation.…` |
+| `ensureWork` | `type`, `key`, `title` (required); `description`, `assignee`, `priority`, `workspace`, `relation {<relation type>: ref}` | Creates a task of type `type` if there is no task with this `key` in the tenant yet, and links it with `relation`. `workspace` defaults to the workspace of the approval's task. The created task gets `origin.kind = "process"`, `ref = approval:<id>` |
+| `completeTask` | `task?` (defaults to the approval's task) | A regular `:complete`: the edge to `completionStatus` must be declared, and no gate may be holding the task. An already completed task is not an error (`alreadyCompleted`) |
+| `comment` | `body`, `task?` | A comment in the task thread on behalf of the decider |
+| `transition` | `status`, `task?` | A regular `PATCH status` — only along a declared edge; already in the status is not an error |
+| `invokeSkill` | `skill` (`name@version`); `inputs?`, `expect?`, `onSuccess?`, `onFailure?` | Enqueues a skill invocation and counts as executed once the invocation is enqueued. `onSuccess`/`onFailure` are actions from the same vocabulary (without `invokeSkill`) that run after the outcome's own actions, once all invocations of the outcome have finished: `onSuccess` if the invocation succeeded as required by `expect`, otherwise `onFailure`. The `$.invocation.…` expression is available in them |
 
-!!! tip "Закрывать задачу — в реакциях на вызов"
-    Одобрение — основание для внешней записи, только пока его задача открыта.
-    Поэтому `completeTask` и переход в итоговый статус по результату скилла
-    объявляйте в `onSuccess`/`onFailure`, а не рядом с `invokeSkill`. Пример
-    с уведомлением роли скиллом `notify.send@1` — в статье
-    [Уведомления](../notifications/index.md#notify-send).
+!!! tip "Close the task in the invocation reactions"
+    An approval is grounds for an external write only while its task is open.
+    That is why you should declare `completeTask` and the transition to the final status based on the skill result
+    in `onSuccess`/`onFailure`, not next to `invokeSkill`. An example
+    of notifying a role with the `notify.send@1` skill is in
+    [Notifications](../notifications/index.md#notify-send).
 
-### Выражения
+### Expressions
 
-Строковые входы могут ссылаться на контекст решения ограниченным JSON-path
-— без вызовов, индексов и фильтров:
+String inputs can reference the decision context with a restricted JSON-path
+— without calls, indexes, or filters:
 
-| Выражение | Значение |
+| Expression | Value |
 |---|---|
-| `$.task.<f>` | Поле задачи approval'а |
-| `$.spawnedBy.<f>` | Поле задачи, от которой задача approval'а порождена связью `spawned_by` (самое раннее ребро) |
+| `$.task.<f>` | A field of the approval's task |
+| `$.spawnedBy.<f>` | A field of the task from which the approval's task was spawned via a `spawned_by` relation (the earliest edge) |
 | `$.approval.<f>` | `id`, `comment`, `decidedBy`, `decidedAt`, `outcome` |
-| `$.invocation.<f>` | Только в `onSuccess`/`onFailure`: `id`, `skill`, `status`, `output.<ключ>`, `error.code`, `error.message` |
-| `$.task.artifact[<type>].metadata.<field>` | Поле `metadata` самого свежего артефакта этого типа на задаче (так же для `$.spawnedBy`) |
+| `$.invocation.<f>` | Only in `onSuccess`/`onFailure`: `id`, `skill`, `status`, `output.<key>`, `error.code`, `error.message` |
+| `$.task.artifact[<type>].metadata.<field>` | A `metadata` field of the most recent artifact of this type on the task (same for `$.spawnedBy`) |
 
-Поля задачи `<f>`: `id`, `publicId`, `title`, `description`, `assigneeId`,
+Task fields `<f>`: `id`, `publicId`, `title`, `description`, `assigneeId`,
 `workspaceId`, `status`, `priority`.
 
-- Строка, целиком состоящая из одного выражения, даёт значение как есть
-  (в том числе `null`); любая другая строка — шаблон, где каждое выражение
-  заменяется текстом, `null` — пустой строкой.
-- Суффикс `!` делает выражение **обязательным**: если оно разрешилось в
-  `null` или пустую строку, действие не исполняется, исход падает с кодом
-  `unresolved_expression`. Так незаполненный контекст не превращается,
-  например, в задачу без исполнителя.
-- Суффикс `|truncate:N` ограничивает текстовое значение N символами
+- A string consisting entirely of one expression yields the value as is
+  (including `null`); any other string is a template where each expression
+  is replaced with text, and `null` with an empty string.
+- The `!` suffix makes an expression **required**: if it resolves to
+  `null` or an empty string, the action is not executed and the outcome fails with the code
+  `unresolved_expression`. This way an unfilled context does not turn,
+  for example, into a task without an assignee.
+- The `|truncate:N` suffix limits a text value to N characters
   (`$.task.title|truncate:150`).
-- Контекст снимается один раз перед первым действием исхода.
-- Решивший должен иметь право читать то, на что ссылаются выражения:
-  `tasks.read` на задачи и `artifacts.read`, если есть ссылки на артефакты.
+- The context is captured once before the outcome's first action.
+- The decider must have permission to read what the expressions reference:
+  `tasks.read` on tasks and `artifacts.read` if there are references to artifacts.
 
-Вся схема проверяется **при публикации версии типа** (`POST /task-types`):
-закрытый словарь действий и входов, корректные выражения, известные типы
-связей, `transition` своей задачи в литеральный статус — по lifecycle этой
-же версии. Нарушение — `422 invalid_approval_schema` с путём до ошибки.
+The entire schema is validated **when the type version is published** (`POST /task-types`):
+a closed vocabulary of actions and inputs, valid expressions, known relation
+types, a `transition` of its own task to a literal status — against the lifecycle of that
+same version. A violation — `422 invalid_approval_schema` with the path to the error.
 
-### Исполнение исхода
+### Outcome execution
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant D as Решающий
+    participant D as Decider
     participant API as control-plane-api
     participant DB as PostgreSQL
     participant W as control-plane-worker
     D->>API: :approve / :reject
-    API->>DB: status, outcomeStatus = pending,<br/>снимок полномочий решившего (одна транзакция)
-    loop каждый цикл воркера
-        W->>DB: approvals с outcomeStatus ∈ {pending, deferred}<br/>и наступившим сроком (FOR UPDATE SKIP LOCKED)
-        W->>DB: действия по порядку, каждое под savepoint,<br/>строка в approval_outcome_actions
+    API->>DB: status, outcomeStatus = pending,<br/>snapshot of the decider's authority (one transaction)
+    loop each worker cycle
+        W->>DB: approvals with outcomeStatus ∈ {pending, deferred}<br/>and a due time reached (FOR UPDATE SKIP LOCKED)
+        W->>DB: actions in order, each under a savepoint,<br/>a row in approval_outcome_actions
     end
-    W->>DB: outcomeStatus = executed | failed | deferred + событие
+    W->>DB: outcomeStatus = executed | failed | deferred + event
 ```
 
-Ключевые свойства:
+Key properties:
 
-- **Полномочия решившего.** Каждое действие идёт через обычную команду ядра
-  с контекстом, восстановленным из снимка полномочий решившего на момент
-  решения, и проверяется тем же авторизатором, что и API (включая режим
-  PDP). Действие, на которое у решившего нет права, не исполняется — код
-  `forbidden`. Автор созданной задачи, комментария, перехода — решивший.
-- **Credential должен быть жив.** При каждом исполнении проверяется, что
-  credential снимка не отозван и не истёк, а principal активен; иначе
-  `forbidden` с `cause: credential_inactive`.
-- **Идемпотентность.** Ключ — `(approval, индекс действия)`: выполненное
-  действие не повторяется никогда, повторная попытка — no-op.
-- **Живой claim на цели — не сбой.** Если `completeTask` или `transition`
-  упирается в чужой или собственный живой claim решившего, исход переходит в
-  `deferred` и повторяется через `CP_APPROVAL_OUTCOME_DEFER_SECONDS`
-  (15 с по умолчанию); попытка не засчитывается. Уже выполненные действия
-  не ждут.
-- **Неожиданная ошибка** (не доменная) откатывает попытку и засчитывается:
-  повтор с backoff `CP_OUTBOX_BACKOFF_*`; после `CP_OUTBOX_MAX_ATTEMPTS`
-  попыток исход становится `failed` с кодом `outcome_attempts_exhausted`.
+- **The decider's authority.** Each action goes through a regular core command
+  with a context restored from the snapshot of the decider's authority at the time of the
+  decision, and is checked by the same authorizer as the API (including PDP
+  mode). An action the decider has no permission for is not executed — code
+  `forbidden`. The author of the created task, comment, or transition is the decider.
+- **The credential must be alive.** On each execution the core checks that the
+  snapshot's credential is not revoked or expired and that the principal is active; otherwise
+  `forbidden` with `cause: credential_inactive`.
+- **Idempotency.** The key is `(approval, action index)`: an executed
+  action is never repeated, a retry is a no-op.
+- **A live claim on the target is not a failure.** If `completeTask` or `transition`
+  runs into someone else's live claim or the decider's own, the outcome moves to
+  `deferred` and is retried after `CP_APPROVAL_OUTCOME_DEFER_SECONDS`
+  (15 s by default); the attempt is not counted. Already executed actions
+  do not wait.
+- **An unexpected error** (not a domain one) rolls back the attempt and is counted:
+  retry with backoff `CP_OUTBOX_BACKOFF_*`; after `CP_OUTBOX_MAX_ATTEMPTS`
+  attempts the outcome becomes `failed` with the code `outcome_attempts_exhausted`.
 
-### Состояния исхода
+### Outcome states
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: решение gate с объявленными действиями
-    pending --> executed: все действия выполнены
-    pending --> failed: доменный сбой действия /<br/>исчерпаны попытки
-    pending --> deferred: действие упёрлось в живой claim
+    [*] --> pending: gate decision with declared actions
+    pending --> executed: all actions executed
+    pending --> failed: domain failure of an action /<br/>attempts exhausted
+    pending --> deferred: action ran into a live claim
     deferred --> executed
     deferred --> failed
     deferred --> deferred
@@ -321,33 +322,33 @@ stateDiagram-v2
     executed --> [*]
 ```
 
-`outcomeStatus = null` — у решения нет исхода (обычный approval или тип без
-действий для этого решения).
+`outcomeStatus = null` — the decision has no outcome (a regular approval or a type without
+actions for this decision).
 
-### Сбой исхода
+### Outcome failure
 
-При сбое действия:
+When an action fails:
 
-- его частичные записи откатываются, **оставшиеся действия не выполняются**;
-- решение **не откатывается**: approval остаётся `approved` / `rejected`,
-  gate открыт;
-- `outcomeStatus = failed`, событие `approval.outcome_failed` с
+- its partial writes are rolled back, **the remaining actions are not executed**;
+- the decision is **not rolled back**: the approval stays `approved` / `rejected`,
+  the gate is open;
+- `outcomeStatus = failed`, the event `approval.outcome_failed` with
   `failedAction {index, action, code, cause, message, details}`;
-- решившему заводится задача на разбор (системный тип, исполнитель —
-  решивший, связь `related_to` с задачей approval'а); при повторном сбое —
-  комментарий в ту же задачу. Её автор — системный service-principal ядра
-  tenant'а, который не может войти в систему и только атрибутирует записи ядра.
+- a triage task is created for the decider (system type, assignee is the
+  decider, a `related_to` relation to the approval's task); on a repeated failure,
+  a comment is added to the same task. Its author is the tenant's core system
+  service principal, which cannot sign in and only attributes core records.
 
-Типичные коды в `failedAction.code`:
+Typical codes in `failedAction.code`:
 
-| Код | Причина | Лечение |
+| Code | Reason | Fix |
 |---|---|---|
-| `forbidden` | У решившего нет права на действие; `cause` — исходный код отказа | Выдать право и сделать replay решившим |
-| `unresolved_expression` | Обязательное выражение `…!` пустое | Дополнить данные (исполнителя, связь, артефакт) и сделать replay |
-| `invalid_transition` | Ребро lifecycle не объявлено | Выпустить версию типа с ребром — для новых задач; для текущей — довести вручную |
-| `outcome_attempts_exhausted` | Неожиданные ошибки исчерпали попытки | Разобрать `lastError`, сделать replay |
+| `forbidden` | The decider has no permission for the action; `cause` is the original denial code | Grant the permission and replay as the decider |
+| `unresolved_expression` | A required `…!` expression is empty | Fill in the data (assignee, relation, artifact) and replay |
+| `invalid_transition` | The lifecycle edge is not declared | Publish a type version with the edge — for new tasks; finish the current one manually |
+| `outcome_attempts_exhausted` | Unexpected errors exhausted the attempts | Investigate `lastError`, replay |
 
-### Просмотр и повтор
+### Viewing and replaying
 
 ```bash
 curl -s "$CP/approvals/<approval-id>/outcome" -H "Authorization: Bearer $TOKEN"
@@ -372,69 +373,69 @@ curl -s "$CP/approvals/<approval-id>/outcome" -H "Authorization: Bearer $TOKEN"
 }
 ```
 
-`POST /approvals/{id}:replay-outcome` (`approvals.decide`) продолжает с
-первого невыполненного действия синхронно и возвращает то же представление.
-Допустим для `failed` и для **зависшего** `pending` (были неудачные попытки
-или воркер не трогал исход не меньше 10 минут); иначе
-`409 outcome_not_replayable`. Replay может:
+`POST /approvals/{id}:replay-outcome` (`approvals.decide`) continues synchronously from
+the first unexecuted action and returns the same representation.
+It is allowed for `failed` and for a **stuck** `pending` (there were failed attempts
+or the worker has not touched the outcome for at least 10 minutes); otherwise
+`409 outcome_not_replayable`. A replay can be performed by:
 
-- **решивший** — полномочием становится его **текущий** credential (обычное
-  лечение `forbidden`: выдать право и повторить);
-- **admin** — остаётся снимок решения, и его живость проверяется.
+- **the decider** — the authority becomes their **current** credential (the usual
+  fix for `forbidden`: grant the permission and retry);
+- **an admin** — the decision snapshot stays, and its liveness is checked.
 
-Прочим — `403 not_eligible`.
+Anyone else gets `403 not_eligible`.
 
 ## API
 
-| Метод | Путь | Права |
+| Method | Path | Permissions |
 |---|---|---|
 | `POST` | `/approvals` | `approvals.manage` |
 | `GET` | `/approvals?status=&taskId=` | `approvals.read` |
 | `GET` | `/approvals/{id}` | `approvals.read` |
 | `POST` | `/approvals/{id}:approve`, `:reject` | `approvals.decide` + eligibility |
-| `POST` | `/approvals/{id}:cancel` | `approvals.manage`; для чужого gate — ещё `approvals.decide` + eligibility |
+| `POST` | `/approvals/{id}:cancel` | `approvals.manage`; for someone else's gate, also `approvals.decide` + eligibility |
 | `GET` | `/approvals/{id}/outcome` | `approvals.read` |
-| `POST` | `/approvals/{id}:replay-outcome` | `approvals.decide`; решивший или admin |
+| `POST` | `/approvals/{id}:replay-outcome` | `approvals.decide`; the decider or an admin |
 
-MCP-инструменты: `cp_request_approval`, `cp_list_approvals`, `cp_approve`,
-`cp_reject` (см. [CLI и MCP-сервер](cli-and-mcp.md)).
+MCP tools: `cp_request_approval`, `cp_list_approvals`, `cp_approve`,
+`cp_reject` (see [CLI and MCP server](cli-and-mcp.md)).
 
-## События
+## Events
 
-| Событие | Payload |
+| Event | Payload |
 |---|---|
 | `approval.requested` | `taskId`, `artifactId`, `requiredRoleId`, `assignedPrincipalId`, `gate`, `workspaceId`, `taskPublicId`, `taskTitle`, `requestedBy`, `comment` |
-| `approval.approved`, `approval.rejected` | `taskId`, `artifactId`, `outcomeStatus`, `decisionBy`, `comment`, `channel` (канал решения, например `telegram`; `null` для прямого вызова API) |
+| `approval.approved`, `approval.rejected` | `taskId`, `artifactId`, `outcomeStatus`, `decisionBy`, `comment`, `channel` (decision channel, for example `telegram`; `null` for a direct API call) |
 | `approval.cancelled` | `taskId`, `cancelledBy` |
-| `approval.outcome_executed` | Исход и evidence по каждому действию |
-| `approval.outcome_failed` | То же плюс `failedAction` и id задачи на разбор |
-| `approval.outcome_deferred` | Действие, которое ждёт, и claim, который его держит; пишется один раз при переходе |
+| `approval.outcome_executed` | The outcome and evidence for each action |
+| `approval.outcome_failed` | The same plus `failedAction` and the id of the triage task |
+| `approval.outcome_deferred` | The action that is waiting and the claim that holds it; written once on the transition |
 
-Актор событий исхода — решивший; `causationId` указывает на событие
-решения.
+The actor of outcome events is the decider; `causationId` points to the decision
+event.
 
-## Пример: проверка человеком
+## Example: human review
 
-Типовой процесс «исполнитель сделал — человек проверил»:
+A typical "the executor did it, a human reviewed it" process:
 
-1. Тип задачи проверки объявляет исходы: `approved` → `completeTask`;
-   `rejected` → `ensureWork` задачи на доработку с исполнителем исходной
-   задачи и связью `spawned_by`, затем `completeTask`.
-2. Исполнитель завершает свою задачу и заводит задачу проверки со связью
-   `spawned_by` на исходную.
-3. На задаче проверки создаётся gate-approval, назначенный человеку.
-4. Человек решает approval и пишет причину в `comment`.
-5. Воркер исполняет исход: проверка закрывается, при отклонении появляется
-   задача на доработку с текстом замечаний.
+1. The review task type declares outcomes: `approved` → `completeTask`;
+   `rejected` → `ensureWork` of a rework task with the assignee of the original
+   task and a `spawned_by` relation, then `completeTask`.
+2. The executor completes their task and creates a review task with a
+   `spawned_by` relation to the original.
+3. A gate approval assigned to a human is created on the review task.
+4. The human decides the approval and writes the reason in `comment`.
+5. The worker executes the outcome: the review is closed, and on rejection a
+   rework task with the review comments appears.
 
-Если проверка нужна для **каждой** задачи какого-то вида, проще объявить её
-критерием приёмки самого типа (`human` в `acceptance` типа): тогда задача ждёт
-решения на себе, отказ возвращает её тому же исполнителю, а отдельные задачи
-проверки и доработки не нужны. См. [Приёмка типа](task-types.md#type-acceptance).
+If a review is needed for **every** task of some kind, it is simpler to declare it
+as an acceptance criterion of the type itself (`human` in the type's `acceptance`): then the task waits
+for the decision on itself, a rejection returns it to the same executor, and separate review and
+rework tasks are not needed. See [Type acceptance](task-types.md#type-acceptance).
 
-## См. также
+## See also
 
-- [Типы задач и статусы](task-types.md) — где объявляется `approvalSchema`.
-- [Исполнение — claims и runs](execution.md) — приостановка и возобновление.
-- [Авторизация и права](authorization.md) — роли и eligibility.
-- [События](events.md)
+- [Task types and statuses](task-types.md) — where `approvalSchema` is declared.
+- [Execution — claims and runs](execution.md) — suspension and resumption.
+- [Authorization and permissions](authorization.md) — roles and eligibility.
+- [Events](events.md)

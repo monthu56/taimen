@@ -1,57 +1,59 @@
-# Хранилище объектов (MinIO)
 
-Как в установке Taimen устроено S3-совместимое хранилище: зачем оно ядру,
-какие бакеты и учётные записи заводятся, как подключить
-внешний S3 вместо MinIO контура, что бэкапить и как разбирать типичные сбои.
-Статья для инженера эксплуатации.
+# Object storage (MinIO)
 
-## Кто пользуется хранилищем
+How S3-compatible storage works in a Taimen installation: why the core needs
+it, which buckets and accounts are created, how to connect an external S3
+instead of the bundled MinIO, what to back up, and how to troubleshoot common
+failures. This article is for the operations engineer.
 
-| Потребитель | Бакет (переменная, умолчание) | Учётная запись | Что лежит |
+## Who uses the storage
+
+| Consumer | Bucket (variable, default) | Account | What is stored |
 |---|---|---|---|
-| Control Plane (API и worker) | `CP_S3_BUCKET`, `artifacts` | отдельный пользователь `CP_S3_ACCESS_KEY_ID` с политикой только на свой бакет | Содержимое артефактов задач (см. [Артефакты](../control-plane/artifacts.md#content)) |
+| Control Plane (API and worker) | `CP_S3_BUCKET`, `artifacts` | a dedicated user `CP_S3_ACCESS_KEY_ID` with a policy limited to its own bucket | Task artifact content (see [Artifacts](../control-plane/artifacts.md#content)) |
 
-Ядро хранит в PostgreSQL только записи: ссылку на объект, размер, media
-type и SHA-256. Байты — только в хранилище. Объект содержимого адресуется
-контрольной суммой внутри tenant'а: `tenants/<tenant-id>/sha256/<hex>`.
-Одинаковые файлы одного tenant'а хранятся одним объектом, файлы разных
-tenant'ов не пересекаются.
+The core keeps only records in PostgreSQL: the object reference, size, media
+type, and SHA-256. The bytes live only in the storage. A content object is
+addressed by its checksum within the tenant: `tenants/<tenant-id>/sha256/<hex>`.
+Identical files of one tenant are stored as one object; files of different
+tenants never overlap.
 
-## MinIO в compose
+## MinIO in compose
 
-| Сервис | Профили | Назначение |
+| Service | Profiles | Purpose |
 |---|---|---|
-| `minio` | `core` | S3-сервер, данные в томе `platform_minio`, лимит памяти `MINIO_MEM_LIMIT` (256m), healthcheck `mc ready local` |
-| `minio-bootstrap` | `core` | одноразовый: бакет, политика и пользователь ядра; завершается после старта |
+| `minio` | `core` | S3 server, data in the `platform_minio` volume, memory limit `MINIO_MEM_LIMIT` (256m), healthcheck `mc ready local` |
+| `minio-bootstrap` | `core` | one-shot: bucket, policy, and the core user; exits after startup |
 
-MinIO входит в профиль `core` и хранит только содержимое артефактов ядра.
-Имя тома (историческое) — `${COMPOSE_PROJECT_NAME}_platform_minio`,
-переопределяется `VOLUME_PLATFORM_MINIO`.
+MinIO is part of the `core` profile and stores only the core's artifact
+content. The volume name (historical) is `${COMPOSE_PROJECT_NAME}_platform_minio`,
+overridden by `VOLUME_PLATFORM_MINIO`.
 
-**Наружу MinIO не смотрит.** Портов на хост не публикуется, маршрута в
-Caddy (профиль `edge`) нет. Клиенты не получают адресов объектов: байты
-артефактов входят через `PUT /api/v1/artifact-contents` и выходят через
-`GET /api/v1/artifacts/{id}/content`, где ядро проверяет права и пишет
-событие выдачи.
+**MinIO is not exposed.** No ports are published to the host, and there is
+no route in Caddy (the `edge` profile). Clients never receive object
+addresses: artifact bytes come in through `PUT /api/v1/artifact-contents`
+and go out through `GET /api/v1/artifacts/{id}/content`, where the core
+checks permissions and records a download event.
 
-### Что делает `minio-bootstrap`
+### What `minio-bootstrap` does
 
-Сервис выполняет набор команд `mc` от root-учётки MinIO:
+The service runs a set of `mc` commands as the MinIO root account:
 
-1. создаёт бакет `CP_S3_BUCKET` (`mc mb --ignore-existing`);
-2. создаёт политику `cp-artifacts` (см. ниже);
-3. заводит пользователя `CP_S3_ACCESS_KEY_ID` с секретом
+1. creates the `CP_S3_BUCKET` bucket (`mc mb --ignore-existing`);
+2. creates the `cp-artifacts` policy (see below);
+3. creates the user `CP_S3_ACCESS_KEY_ID` with the secret
    `CP_S3_SECRET_ACCESS_KEY`;
-4. привязывает к нему политику, если она ещё не привязана.
+4. attaches the policy to that user if it is not attached yet.
 
-Все шаги идемпотентны: сервис можно перезапускать при каждом `up`.
-`control-plane-api` ждёт его успешного завершения
-(`service_completed_successfully`); зависимость помечена необязательной,
-чтобы установка с внешним S3, где сервиса нет, тоже поднималась.
+All steps are idempotent: the service can be restarted on every `up`.
+`control-plane-api` waits for it to complete successfully
+(`service_completed_successfully`); the dependency is marked optional so
+that an installation with an external S3, where the service does not exist,
+also starts.
 
-### Политика пользователя ядра
+### The core user's policy
 
-Политика `cp-artifacts` для бакета по умолчанию `artifacts`:
+The `cp-artifacts` policy for the default bucket `artifacts`:
 
 ```json
 {"Version": "2012-10-17", "Statement": [
@@ -62,114 +64,115 @@ Caddy (профиль `edge`) нет. Клиенты не получают ад�
 ]}
 ```
 
-- **Объекты своего бакета** — чтение, запись и удаление: загрузка
-  содержимого, выдача, удаление администратором и очистка worker'ом.
-- **`s3:ListBucket` на бакет** нужен, потому что при старте API проверяет
-  бакет запросом `HeadBucket`, а без этого права хранилище отвечает `403` и
-  ядро считает хранилище недоступным.
-- **Создавать бакеты ядру не нужно** и нельзя: бакет заводит
-  `minio-bootstrap`. Других бакетов пользователь ядра не видит, root-ключи
-  ядру не выдаются.
+- **Objects in its own bucket**: read, write, and delete, for content
+  upload, download, deletion by an administrator, and cleanup by the worker.
+- **`s3:ListBucket` on the bucket** is needed because at startup the API
+  checks the bucket with a `HeadBucket` request; without this permission the
+  storage returns `403` and the core treats the storage as unavailable.
+- **The core does not need to create buckets** and is not allowed to:
+  `minio-bootstrap` creates the bucket. The core user sees no other buckets,
+  and root keys are never given to the core.
 
-## Ключи
+## Keys
 
-Все четыре ключа генерирует `make secrets` (`tools/fill_secrets.py`), если в
-`.env` они пусты:
+`make secrets` (`tools/fill_secrets.py`) generates all four keys if they are
+empty in `.env`:
 
-| Переменная | Кто использует |
+| Variable | Who uses it |
 |---|---|
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | root-учётка `minio`; ею ходит только `minio-bootstrap` |
-| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | пользователь ядра: `minio-bootstrap` заводит его, процессы Control Plane ходят под ним |
-| `CP_S3_BUCKET` | бакет содержимого артефактов, по умолчанию `artifacts` |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the `minio` root account; only `minio-bootstrap` uses it |
+| `CP_S3_ACCESS_KEY_ID`, `CP_S3_SECRET_ACCESS_KEY` | the core user: `minio-bootstrap` creates it, Control Plane processes run under it |
+| `CP_S3_BUCKET` | the artifact content bucket, `artifacts` by default |
 
-`CP_S3_ACCESS_KEY_ID` и `CP_S3_SECRET_ACCESS_KEY` в `compose.yml`
-обязательны (`${VAR:?…}`): без них не поднимется ни MinIO-bootstrap, ни
-процессы ядра. Остальные настройки ядра (`CP_S3_ENDPOINT_URL`,
-`CP_S3_REGION`, таймауты, лимиты) — в [Конфигурации Control Plane](../control-plane/configuration.md#content-store).
+`CP_S3_ACCESS_KEY_ID` and `CP_S3_SECRET_ACCESS_KEY` are required in
+`compose.yml` (`${VAR:?…}`): without them neither MinIO-bootstrap nor the
+core processes start. The other core settings (`CP_S3_ENDPOINT_URL`,
+`CP_S3_REGION`, timeouts, limits) are in the [Control Plane configuration](../control-plane/configuration.md#content-store).
 
-!!! warning "Ключи — секреты"
-    Храните `.env` вместе с остальной конфигурацией установки: без него
-    восстановленный том MinIO не откроется ни root-учёткой, ни пользователем
-    ядра. См. [Секреты и ротация](secrets.md).
+!!! warning "Keys are secrets"
+    Keep `.env` together with the rest of the installation configuration:
+    without it, a restored MinIO volume opens neither with the root account
+    nor with the core user. See [Secrets and rotation](secrets.md).
 
-## Внешний S3 вместо MinIO
+## External S3 instead of MinIO
 
-Содержимое артефактов можно держать у любого S3-совместимого провайдера.
-Файл `compose.s3.example.yml` в корне суперпроекта выводит `minio` и
-`minio-bootstrap` из профиля `core` (назначает им профиль, который установка
-не поднимает); подключайте его вторым файлом:
+You can keep artifact content with any S3-compatible provider. The
+`compose.s3.example.yml` file in the superproject root takes `minio` and
+`minio-bootstrap` out of the `core` profile (it assigns them a profile that
+the installation does not start); include it as the second file:
 
 ```bash
 docker compose -f compose.yml -f compose.s3.example.yml --profile core --profile edge up -d
 ```
 
-В `.env`:
+In `.env`:
 
 ```dotenv
 CP_S3_ENDPOINT_URL=https://s3.example.com
-CP_S3_REGION=<регион провайдера>
-CP_S3_BUCKET=<бакет>
-CP_S3_ACCESS_KEY_ID=<ключ пользователя>
-CP_S3_SECRET_ACCESS_KEY=<секрет пользователя>
+CP_S3_REGION=<provider region>
+CP_S3_BUCKET=<bucket>
+CP_S3_ACCESS_KEY_ID=<user key>
+CP_S3_SECRET_ACCESS_KEY=<user secret>
 ```
 
-- Бакет создайте заранее средствами провайдера.
-- Пользователю нужны те же права, что у политики выше: `ListBucket` на бакет
-  и `GetObject`, `PutObject`, `DeleteObject` на его объекты.
-- MinIO контура при этом не нужен.
+- Create the bucket in advance with the provider's tools.
+- The user needs the same permissions as the policy above: `ListBucket` on
+  the bucket and `GetObject`, `PutObject`, `DeleteObject` on its objects.
+- The bundled MinIO is not needed in this case.
 
-!!! note "Хранилище выключено совсем"
-    Если `CP_S3_ENDPOINT_URL` пуст, Control Plane работает без хранилища:
-    артефакты-ссылки и JSON-артефакты создаются как обычно, а маршруты
-    содержимого отвечают `503 content_store_unavailable`. В поставочном
-    `compose.yml` адрес по умолчанию — `http://minio:9000`.
+!!! note "Storage disabled entirely"
+    If `CP_S3_ENDPOINT_URL` is empty, Control Plane runs without storage:
+    link artifacts and JSON artifacts are created as usual, and the content
+    routes return `503 content_store_unavailable`. In the shipped
+    `compose.yml` the default address is `http://minio:9000`.
 
-## Резервное копирование { #backup }
+## Backup { #backup }
 
-Том `platform_minio` содержит содержимое артефактов ядра. Бэкапьте его
-вместе с базой Control Plane:
+The `platform_minio` volume holds the core's artifact content. Back it up
+together with the Control Plane database:
 
-- **`control-plane-db` ↔ MinIO.** Записи артефактов — в базе Control Plane,
-  байты — в MinIO. Снимайте их в одном окне. Если том MinIO старше базы,
-  у части записей `contentState = stored` объекта не окажется, и выдача
-  таких артефактов ответит `503 content_store_unavailable`.
+- **`control-plane-db` ↔ MinIO.** Artifact records live in the Control Plane
+  database, the bytes in MinIO. Take them in the same window. If the MinIO
+  volume is older than the database, some records with `contentState = stored`
+  will have no object, and downloading such artifacts returns
+  `503 content_store_unavailable`.
 
-Скрипт ежедневного бэкапа и порядок восстановления — в
-[Резервном копировании](backup.md). Снимайте копию тома **после** дампа
-базы Control Plane: объекты неизменяемы и адресуются контрольной суммой, так
-что объекты записей из дампа к этому моменту уже лежат в томе. Исключение —
-содержимое, которое администратор удалил между дампом и копией тома.
+The daily backup script and the restore procedure are in
+[Backup](backup.md). Copy the volume **after** the Control Plane database
+dump: objects are immutable and addressed by checksum, so the objects of the
+records in the dump are already in the volume by then. The exception is
+content that an administrator deleted between the dump and the volume copy.
 
-## Очистка и рост
+## Cleanup and growth
 
-- **Незавершённые загрузки.** Загрузка, на которую за
-  `CP_ARTIFACT_UPLOAD_TTL_SECONDS` (24 часа по умолчанию) не сослался ни один
-  артефакт, удаляется worker'ом вместе с объектом, если тот больше никому не
-  нужен. Если хранилище недоступно, строки остаются до следующего прохода.
-- **Содержимое артефактов хранится бессрочно.** Закрытие задачи его не
-  удаляет. Удалить байты конкретного артефакта может администратор tenant'а:
-  `POST /api/v1/artifacts/{id}:purge-content` (см.
-  [Удаление содержимого](../control-plane/artifacts.md#purge-content)).
-- **Потолок одного файла** — `CP_ARTIFACT_MAX_BYTES` (100 МиБ по умолчанию);
-  тип артефакта может сузить его своим `maxBytes`.
+- **Incomplete uploads.** An upload that no artifact references within
+  `CP_ARTIFACT_UPLOAD_TTL_SECONDS` (24 hours by default) is deleted by the
+  worker together with its object, if nobody else needs the object. If the
+  storage is unavailable, the rows remain until the next pass.
+- **Artifact content is kept indefinitely.** Closing a task does not delete
+  it. A tenant administrator can delete the bytes of a specific artifact:
+  `POST /api/v1/artifacts/{id}:purge-content` (see
+  [Deleting content](../control-plane/artifacts.md#purge-content)).
+- **The ceiling for one file** is `CP_ARTIFACT_MAX_BYTES` (100 MiB by default);
+  an artifact type can narrow it with its own `maxBytes`.
 
-Рост тома учитывайте в [Ресурсах и масштабировании](capacity.md).
+Account for volume growth in [Resources and scaling](capacity.md).
 
-## Типичные проблемы
+## Common problems
 
-| Симптом | Причина | Что делать |
+| Symptom | Cause | What to do |
 |---|---|---|
-| `503 content_store_unavailable` на `PUT /artifact-contents` при работающем MinIO | `CP_S3_ENDPOINT_URL` пуст — хранилище в ядре выключено | Задать адрес и пересоздать процессы Control Plane |
-| `503 content_store_unavailable`, в журнале API предупреждение `content store unavailable at start-up` | MinIO не поднят, неверные ключи или у пользователя нет `ListBucket` | `docker compose ps minio minio-bootstrap`, логи `minio-bootstrap`; проверить ключи в `.env` и политику |
-| `503 content_store_unavailable` только при чтении отдельных артефактов | Объекта нет в хранилище при записи `stored`: том восстановлен из более старой копии, чем база | Восстановить том MinIO из копии, согласованной с базой |
-| `docker compose up` падает на `set CP_S3_ACCESS_KEY_ID` | Ключей ядра нет в `.env` | `make secrets` — допишет недостающие ключи |
-| `413 request_too_large` на загрузке | Файл больше `CP_ARTIFACT_MAX_BYTES` | Уменьшить файл или поднять лимит установки |
-| `422 artifact_too_large` при создании артефакта | Файл больше `maxBytes` зарегистрированного типа артефакта | Выпустить версию типа с большим `maxBytes` (не выше `CP_ARTIFACT_MAX_BYTES`) |
+| `503 content_store_unavailable` on `PUT /artifact-contents` while MinIO is running | `CP_S3_ENDPOINT_URL` is empty, so storage is disabled in the core | Set the address and recreate the Control Plane processes |
+| `503 content_store_unavailable`, with the warning `content store unavailable at start-up` in the API log | MinIO is not up, the keys are wrong, or the user lacks `ListBucket` | `docker compose ps minio minio-bootstrap`, `minio-bootstrap` logs; check the keys in `.env` and the policy |
+| `503 content_store_unavailable` only when reading individual artifacts | The object is missing from storage while the record says `stored`: the volume was restored from an older copy than the database | Restore the MinIO volume from a copy consistent with the database |
+| `docker compose up` fails on `set CP_S3_ACCESS_KEY_ID` | The core keys are missing from `.env` | `make secrets` adds the missing keys |
+| `413 request_too_large` on upload | The file is larger than `CP_ARTIFACT_MAX_BYTES` | Reduce the file or raise the installation limit |
+| `422 artifact_too_large` when creating an artifact | The file is larger than the registered artifact type's `maxBytes` | Publish a version of the type with a larger `maxBytes` (not above `CP_ARTIFACT_MAX_BYTES`) |
 
-## См. также
+## See also
 
-- [Артефакты и комментарии](../control-plane/artifacts.md)
-- [Конфигурация Control Plane](../control-plane/configuration.md#content-store)
-- [Резервное копирование](backup.md)
-- [Секреты и ротация](secrets.md)
-- [Промышленное развёртывание](deployment.md)
+- [Artifacts and comments](../control-plane/artifacts.md)
+- [Control Plane configuration](../control-plane/configuration.md#content-store)
+- [Backup](backup.md)
+- [Secrets and rotation](secrets.md)
+- [Production deployment](deployment.md)

@@ -1,42 +1,44 @@
-# Загрузка знаний
 
-Статья описывает все способы положить знания в память — статьи, документы
-готовыми фрагментами, структурированные факты, наблюдения внешних систем, снимки
-источников и загрузку каталога документов, — а также обновление, удаление и расчёт
-эмбеддингов. Она для интеграторов, которые наполняют базу знаний.
+# Knowledge ingestion
 
-## Какой способ выбрать
+This article describes every way to put knowledge into memory (articles,
+documents as ready-made fragments, structured facts, observations from
+external systems, source snapshots, and loading a document directory), as well
+as updating, deleting, and computing embeddings. It is for integrators who
+populate the knowledge base.
 
-| Способ | Маршрут | Когда использовать | Идемпотентность | Эмбеддинги |
+## Which method to choose
+
+| Method | Route | When to use | Idempotency | Embeddings |
 |---|---|---|---|---|
-| Статья / заметка | `POST /api/brain/retain` | Сырой текст статьи «как есть», короткие заметки и решения агентов | `external_id` | Один чанк на запись |
-| Документ фрагментами | `POST /api/brain/documents` | Миграция базы знаний: PDF/DOCX/HTML разобраны у вас на фрагменты | `natural_key` + `replace` | Каждый фрагмент |
-| Структурный узел | `POST /api/brain/facts` | Узел с собственным ключом, типом и свойствами | `natural_key` | Один чанк |
-| Наблюдение | `POST /api/memory/observations[:batch]` | События внешних систем (трекер, CRM, почта, ядро) | `source.system` + `stream` + `external_id` | Только для `text`-assertions |
-| Снимок источника | `POST /api/memory/reconcile` | Полное состояние источника (код, реестр, трекер) по доменному пакету | `snapshotId` | Нет |
-| Каталог документов | `cb ingest --vault …` | Markdown-vault с frontmatter, загрузка с машины администратора | mark-and-sweep | Каждый фрагмент |
+| Article / note | `POST /api/brain/retain` | Raw article text "as is", short notes and agent decisions | `external_id` | One chunk per record |
+| Document as fragments | `POST /api/brain/documents` | Knowledge base migration: PDF/DOCX/HTML already split into fragments on your side | `natural_key` + `replace` | Each fragment |
+| Structural node | `POST /api/brain/facts` | A node with its own key, type, and properties | `natural_key` | One chunk |
+| Observation | `POST /api/memory/observations[:batch]` | Events from external systems (tracker, CRM, email, the core) | `source.system` + `stream` + `external_id` | Only for `text` assertions |
+| Source snapshot | `POST /api/memory/reconcile` | The full state of a source (code, registry, tracker) according to a domain pack | `snapshotId` | None |
+| Document directory | `cb ingest --vault …` | A Markdown vault with frontmatter, loaded from the administrator's machine | mark-and-sweep | Each fragment |
 
-Все маршруты записи требуют права **записи** в namespace (см.
-[Namespaces и доступ](namespaces.md)) и принимают заголовок `X-Run-Id` — сквозной
-идентификатор, который попадает в provenance и аудит.
+All write routes require **write** permission on the namespace (see
+[Namespaces and access](namespaces.md)) and accept the `X-Run-Id` header, an
+end-to-end identifier that goes into provenance and audit.
 
-!!! tip "Главное правило"
-    Всегда передавайте стабильный ключ (`external_id`, `natural_key`, `source.external_id`).
-    Тогда повторная отправка обновит запись, а не создаст копию, а удаление по
-    требованию пройдёт по тому же ключу.
+!!! tip "The main rule"
+    Always pass a stable key (`external_id`, `natural_key`, `source.external_id`).
+    Then sending again updates the record instead of creating a copy, and a
+    deletion on request goes through the same key.
 
-## Статья: `POST /api/brain/retain`
+## Article: `POST /api/brain/retain`
 
-Основной путь для контента, скопированного со страницы: текст кладётся как есть,
-оригинал сохраняется в узле и возвращается в source-view.
+The main path for content copied from a page: the text is stored as is, and
+the original is kept in the node and returned in the source view.
 
 ```bash
 curl -X POST "$MEMORY_URL/api/brain/retain" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
-    "content": "Как оформить пропуск для гостя.\n\nЗаявку подаёт сотрудник...",
+    "content": "How to get a guest pass.\n\nAn employee submits the request...",
     "type": "article",
-    "title": "Гостевой пропуск",
+    "title": "Guest pass",
     "external_id": "https://kb.example.com/articles/guest-pass",
     "provenance": {"source": "kb.example.com", "actor": "kb-import"},
     "confidence": 0.9,
@@ -44,13 +46,13 @@ curl -X POST "$MEMORY_URL/api/brain/retain" \
   }'
 ```
 
-Ответ `201`:
+Response `201`:
 
 ```json
 {
   "retained": true,
   "type": "article",
-  "title": "Гостевой пропуск",
+  "title": "Guest pass",
   "natural_key": "https://kb.example.com/articles/guest-pass",
   "namespace": "support",
   "origin": "agent",
@@ -59,106 +61,106 @@ curl -X POST "$MEMORY_URL/api/brain/retain" \
 }
 ```
 
-Как обрабатываются поля:
+How the fields are processed:
 
-| Поле | По умолчанию | Что происходит |
+| Field | Default | What happens |
 |---|---|---|
-| `content` | — | Кладётся в `props.content` узла и целиком в **один** чанк индекса |
-| `type` | `note` | Тип узла и метка AGE |
-| `title` | первая непустая строка `content` (до 120 символов) | Заголовок узла и чанка |
-| `external_id` | — | Становится `natural_key` узла. Без него ключ выводится из содержимого: `fact:<sha1[:16]>` или `fact:<trace_id>:<sha1[:16]>` |
-| `provenance` | — | Сохраняется целиком в `props.provenance`; поля `actor`, `actor_id`, `issue_id`, `trace_id`, `kind`, `source` копируются в свойства узла |
-| `provenance.source` | `agent:run/<run_id>` | Становится `source_path` чанка — целью цитаты |
-| `provenance.trace_id` / `issue_id` / `run_id` | `run_id` из `X-Run-Id` | Трейс: узел связывается ребром `IN_TRACE` с якорем `pc-trace:<trace_id>`, в ответе — `"trace"` |
-| `links` | — | Рёбра `LINKS_TO` к **существующим** узлам |
-| `confidence` | `0.8` | Сохраняется в узле |
-| `pii`, `pii_categories` | — | Явная маркировка ПДн (при `CB_PII_PROTECTION=true`) |
+| `content` | — | Stored in the node's `props.content` and, in full, in **one** index chunk |
+| `type` | `note` | Node type and AGE label |
+| `title` | the first non-empty line of `content` (up to 120 characters) | Node and chunk title |
+| `external_id` | — | Becomes the node's `natural_key`. Without it, the key is derived from the content: `fact:<sha1[:16]>` or `fact:<trace_id>:<sha1[:16]>` |
+| `provenance` | — | Stored as a whole in `props.provenance`; the fields `actor`, `actor_id`, `issue_id`, `trace_id`, `kind`, `source` are copied to the node's properties |
+| `provenance.source` | `agent:run/<run_id>` | Becomes the chunk's `source_path`, the citation target |
+| `provenance.trace_id` / `issue_id` / `run_id` | `run_id` from `X-Run-Id` | Trace: the node is linked by an `IN_TRACE` edge to the anchor `pc-trace:<trace_id>`; the response has `"trace"` |
+| `links` | — | `LINKS_TO` edges to **existing** nodes |
+| `confidence` | `0.8` | Stored in the node |
+| `pii`, `pii_categories` | — | Explicit personal data labeling (with `CB_PII_PROTECTION=true`) |
 
-!!! warning "Без `external_id` правка текста создаёт новую запись"
-    Ключ, выведенный из содержимого, меняется вместе с текстом. Обновлённая статья
-    без `external_id` окажется рядом со старой. Используйте URL статьи или
-    идентификатор из вашей системы.
+!!! warning "Without `external_id`, editing the text creates a new record"
+    A key derived from the content changes with the text. An updated article
+    without `external_id` ends up next to the old one. Use the article URL or
+    an identifier from your system.
 
-!!! note "Одна статья — один фрагмент"
-    `retain` индексирует весь `content` одним чанком (без `heading`). Для длинных
-    документов это ухудшает точность поиска, а у моделей эмбеддингов есть предел
-    длины входа. Длинные тексты разбивайте сами и загружайте через
+!!! note "One article, one fragment"
+    `retain` indexes the whole `content` as one chunk (without `heading`). For
+    long documents this hurts search precision, and embedding models have an
+    input length limit. Split long texts yourself and load them through
     `POST /api/brain/documents`.
 
-## Документ фрагментами: `POST /api/brain/documents`
+## Document as fragments: `POST /api/brain/documents`
 
-Для миграции существующих баз знаний: вы парсите документ у себя и присылаете
-готовые текстовые фрагменты. Движок считает эмбеддинги, создаёт узел документа и
-кладёт фрагменты в индекс одним вызовом.
+For migrating existing knowledge bases: you parse the document on your side
+and send ready-made text fragments. In one call, the engine computes
+embeddings, creates the document node, and puts the fragments into the index.
 
 ```bash
 curl -X POST "$MEMORY_URL/api/brain/documents" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
     "natural_key": "doc:licenses-2026",
-    "title": "Реестр лицензий",
+    "title": "License register",
     "type": "document",
     "namespace": "support",
     "source_path": "s3://kb/licenses.pdf",
     "meta": {"collection": "licenses"},
     "properties": {"owner": "legal"},
     "chunks": [
-      {"text": "Лицензия на строительство...", "heading": "Раздел 1", "order": 0},
-      {"text": "Лицензия на проектирование...", "heading": "Раздел 2", "order": 1}
+      {"text": "Construction license...", "heading": "Section 1", "order": 0},
+      {"text": "Design license...", "heading": "Section 2", "order": 1}
     ],
     "replace": true
   }'
 ```
 
-Ответ `201`:
+Response `201`:
 
 ```json
 {"natural_key": "doc:licenses-2026", "namespace": "support", "type": "document",
  "chunks": 2, "replaced": true}
 ```
 
-| Поле | По умолчанию | Смысл |
+| Field | Default | Meaning |
 |---|---|---|
-| `natural_key` | — | Ключ документа (идемпотентность) |
-| `title` | — | Заголовок узла и всех фрагментов |
-| `type` | `document` | Тип узла |
-| `namespace` или `scope.namespace` | namespace по умолчанию | База знаний (оба сразу — только одинаковые) |
-| `source_path` | `agent:run/<X-Run-Id>` | Цель цитат в выдаче |
-| `meta` | `{}` | Теги, копируются на каждый фрагмент и в свойства узла; фильтр `filters.meta` в `search` |
-| `properties` | `{}` | Свойства узла |
-| `links` | — | Рёбра `LINKS_TO` к существующим узлам |
-| `chunks[]` | `[]` | `{text, heading, order}`; без `order` — позиция в массиве |
-| `replace` | `true` | `true` — сначала удалить все фрагменты узла в этом namespace |
-| `pii`, `pii_categories` | — | Явная маркировка ПДн; автодетекция идёт по всем фрагментам |
+| `natural_key` | — | Document key (idempotency) |
+| `title` | — | Title of the node and of all fragments |
+| `type` | `document` | Node type |
+| `namespace` or `scope.namespace` | default namespace | Knowledge base (if both, they must be identical) |
+| `source_path` | `agent:run/<X-Run-Id>` | Citation target in results |
+| `meta` | `{}` | Tags, copied to each fragment and to the node's properties; the `filters.meta` filter in `search` |
+| `properties` | `{}` | Node properties |
+| `links` | — | `LINKS_TO` edges to existing nodes |
+| `chunks[]` | `[]` | `{text, heading, order}`; without `order`, the position in the array |
+| `replace` | `true` | `true`: first delete all of the node's fragments in this namespace |
+| `pii`, `pii_categories` | — | Explicit personal data labeling; automatic detection runs over all fragments |
 
-Ограничение — **500 фрагментов за вызов**. Большой документ досылайте частями:
+The limit is **500 fragments per call**. Send a large document in parts:
 
 ```mermaid
 sequenceDiagram
-    participant C as Клиент
+    participant C as Client
     participant M as memory-service
     C->>M: documents {chunks[0..499], order 0..499, replace: true}
     M-->>C: 201 chunks=500, replaced=true
     C->>M: documents {chunks[500..999], order 500..999, replace: false}
     M-->>C: 201 chunks=500, replaced=false
-    Note over C,M: Продолжения обязательно с явным order —<br/>иначе order начнётся с 0 и перезапишет первые фрагменты
+    Note over C,M: Continuations must have an explicit order;<br/>otherwise order starts at 0 and overwrites the first fragments
 ```
 
-!!! danger "Явный `order` в продолжениях"
-    Фрагменты уникальны по `(namespace, node_key, order)`. Если в продолжении не
-    передать `order`, он возьмётся из позиции в массиве (0, 1, 2…) и **заменит**
-    фрагменты первой части.
+!!! danger "Explicit `order` in continuations"
+    Fragments are unique by `(namespace, node_key, order)`. If you do not pass
+    `order` in a continuation, it is taken from the position in the array
+    (0, 1, 2…) and **replaces** the fragments of the first part.
 
-## Структурный узел: `POST /api/brain/facts`
+## Structural node: `POST /api/brain/facts`
 
-Запись узла с собственным ключом, типом и свойствами (используется агентами):
+Writes a node with its own key, type, and properties (used by agents):
 
 ```json
 {
   "natural_key": "decision:cache-ttl",
   "type": "decision",
-  "title": "TTL кэша — 5 минут",
-  "properties": {"content": "Решили держать TTL кэша 5 минут.", "status": "accepted"},
+  "title": "Cache TTL is 5 minutes",
+  "properties": {"content": "We decided to keep the cache TTL at 5 minutes.", "status": "accepted"},
   "links": ["component:api-gateway"],
   "run_id": "run-42",
   "confidence": 0.8,
@@ -166,13 +168,14 @@ sequenceDiagram
 }
 ```
 
-Текст индексируемого чанка — `properties.content`, а если его нет — `title`. Цель
-цитаты — `agent:run/<run_id>` (`run_id` из тела или `X-Run-Id`).
+The text of the indexed chunk is `properties.content`, or `title` if there is
+none. The citation target is `agent:run/<run_id>` (`run_id` from the body or
+from `X-Run-Id`).
 
-## Наблюдения: `POST /api/memory/observations` {#observations}
+## Observations: `POST /api/memory/observations` {#observations}
 
-Наблюдение — неизменяемое свидетельство внешней системы. Этим путём Control Plane
-доставляет в память свои доменные события.
+An observation is an immutable piece of evidence from an external system.
+Control Plane delivers its domain events to memory this way.
 
 ```bash
 curl -X POST "$MEMORY_URL/api/memory/observations" \
@@ -195,150 +198,159 @@ curl -X POST "$MEMORY_URL/api/memory/observations" \
 # 201 {"observation_id": "obs-…", "duplicate": false, "status": "processed"}
 ```
 
-Повторная доставка того же `source.system` + `source.stream` + `source.external_id`
-вернёт тот же `observation_id` с `"duplicate": true`. Поля и ограничения — в
-[Модели знаний](knowledge-model.md). Поля принимаются и в camelCase
-(`occurredAt`, `externalId`).
+Delivering the same `source.system` + `source.stream` + `source.external_id`
+again returns the same `observation_id` with `"duplicate": true`. Fields and
+limits are in [Knowledge model](knowledge-model.md). Fields are also accepted
+in camelCase (`occurredAt`, `externalId`).
 
-### Конвейер проекции
+### Projection pipeline
 
 ```text
 POST observation
-  ├─ сырая запись (идемпотентно, ACK сразу)             — всегда
-  ├─ structured assertions → узлы / факты / чанки       — синхронно, без LLM
-  └─ неструктурированный content → lexical/recent-каналы — виден сразу
-       └─ извлечение LLM                               — только явно (consolidate)
+  ├─ raw record (idempotent, immediate ACK)             — always
+  ├─ structured assertions → nodes / facts / chunks     — synchronous, no LLM
+  └─ unstructured content → lexical/recent channels     — visible immediately
+       └─ LLM extraction                               — only on request (consolidate)
 ```
 
-Assertions — структурированные утверждения, не требующие LLM:
+Assertions are structured statements that need no LLM:
 
-| `assert` | Содержимое | Результат |
+| `assert` | Content | Result |
 |---|---|---|
-| `entity` | `{"entity": {"key" или "type"+"id", "title", "properties"}}` | Узел-сущность |
-| `fact` | `{"fact": {"subject", "predicate", "object", "valid_from", "valid_to", "supersedes", "confidence"}}` | Temporal-факт с `evidence=asserted`; отсутствующие концы создаются placeholder-узлами |
-| `text` | `{"text": {"content", "key", "title", "type"}}` | Узел с текстом и индексируемый чанк с цитатой на `provenance.uri` |
+| `entity` | `{"entity": {"key" or "type"+"id", "title", "properties"}}` | An entity node |
+| `fact` | `{"fact": {"subject", "predicate", "object", "valid_from", "valid_to", "supersedes", "confidence"}}` | A temporal fact with `evidence=asserted`; missing endpoints are created as placeholder nodes |
+| `text` | `{"text": {"content", "key", "title", "type"}}` | A node with text and an indexed chunk citing `provenance.uri` |
 
-Ошибка проекции не теряет сырую запись. Статус отражает результат:
+A projection error does not lose the raw record. The status reflects the result:
 
-| Статус | Смысл |
+| Status | Meaning |
 |---|---|
-| `processed` | Всё спроецировано |
-| `partially_processed` | Часть assertions не спроецировалась |
-| `failed` | Проекция не удалась |
+| `processed` | Everything was projected |
+| `partially_processed` | Some assertions were not projected |
+| `failed` | Projection failed |
 
-Посмотреть проблемные — `GET /api/memory/observations?namespace=…&status=failed`,
-повторить обработку — `POST /api/memory/consolidate` (идемпотентно). Эмбеддинг
-сырого `content` наблюдений выключен по умолчанию (`CB_OBSERVATIONS_EMBED=false`):
-lexical- и recent-каналы находят их и без векторов, а приём не зависит от внешнего
-провайдера.
+To see the problematic ones, use `GET /api/memory/observations?namespace=…&status=failed`;
+to retry processing, use `POST /api/memory/consolidate` (idempotent).
+Embedding of the raw `content` of observations is off by default
+(`CB_OBSERVATIONS_EMBED=false`): the lexical and recent channels find them
+without vectors, and ingestion does not depend on an external provider.
 
-| Что | Когда видно поиску |
+| What | When search sees it |
 |---|---|
-| Сырое наблюдение (lexical/recent) | Сразу после ACK |
-| Узлы и факты из assertions | Сразу после ACK |
-| Вектор `text`-assertion | После эмбеддинга (синхронно при доступном провайдере, иначе после consolidate) |
-| Знания, выведенные LLM | Только после явного извлечения |
+| Raw observation (lexical/recent) | Right after ACK |
+| Nodes and facts from assertions | Right after ACK |
+| Vector of a `text` assertion | After embedding (synchronously if the provider is available, otherwise after consolidate) |
+| Knowledge inferred by an LLM | Only after explicit extraction |
 
-### Пакетный приём
+### Batch ingestion
 
-`POST /api/memory/observations:batch` принимает
-`{"observations": [...], "scope": {"namespace": "…"}}` и отвечает `207` с
-результатами по элементам (`results[]` с `observation_id` либо `error`) и
-счётчиками `accepted`/`duplicates`/`failed`. Ошибка одного элемента не откатывает
-остальные. Максимум — `CB_OBSERVATIONS_MAX_BATCH` (по умолчанию 500), больше → `413`.
+`POST /api/memory/observations:batch` accepts
+`{"observations": [...], "scope": {"namespace": "…"}}` and responds `207` with
+per-element results (`results[]` with an `observation_id` or an `error`) and
+the counters `accepted`/`duplicates`/`failed`. An error in one element does
+not roll back the others. The maximum is `CB_OBSERVATIONS_MAX_BATCH` (500 by
+default); more → `413`.
 
-## Снимки источников: `POST /api/memory/reconcile` {#reconcile}
+## Source snapshots: `POST /api/memory/reconcile` {#reconcile}
 
-Сверка принимает **полное** состояние источника (например, эндпоинты и файлы
-репозитория, записи реестра) в формате доменного пакета и приводит к нему граф:
+Reconciliation accepts the **full** state of a source (for example, a
+repository's endpoints and files, registry records) in the format of a domain
+pack and brings the graph in line with it:
 
-- новое открывается, изменившееся закрывается и открывается новой версией
-  (`supersedes`), пропавшее закрывается (`valid_to = observedAt`);
-- **ничего не удаляется** — прошлое состояние доступно через `as_of`;
-- снимок одного `(source, scope)` не закрывает сущности другого источника;
-- связь на сущность, которой ещё нет, хранится отложенной и становится ребром, когда
-  цель появится;
-- повтор того же `(namespace, source, scope, snapshotId)` ничего не меняет и
-  возвращает `"duplicate": true`; снимок старше последнего принятого → `409`;
-- максимум `CB_RECONCILE_MAX_ITEMS` (по умолчанию 20000) элементов в снимке.
+- what is new is opened, what changed is closed and opened as a new version
+  (`supersedes`), what disappeared is closed (`valid_to = observedAt`);
+- **nothing is deleted**: the past state is available through `as_of`;
+- a snapshot of one `(source, scope)` does not close entities of another source;
+- a relation to an entity that does not exist yet is kept pending and becomes
+  an edge when the target appears;
+- repeating the same `(namespace, source, scope, snapshotId)` changes nothing
+  and returns `"duplicate": true`; a snapshot older than the last accepted one
+  → `409`;
+- at most `CB_RECONCILE_MAX_ITEMS` (20000 by default) items in a snapshot.
 
-Пример тела и ответа — в [API](api.md#reconcile). В платформе клиенты публикуют
-снимки не напрямую, а через Control Plane (`POST /api/v1/knowledge/snapshots`), который
-вычисляет namespace воркспейса и вызывает сверку service account'ом ядра. При
-включённом ограничении маршрутов ядра прямой вызов доступен только identity ядра
-(см. [Namespaces и доступ](namespaces.md#core-routes)).
+An example body and response are in [API](api.md#reconcile). In the platform,
+clients do not publish snapshots directly but through Control Plane
+(`POST /api/v1/knowledge/snapshots`), which computes the workspace namespace
+and calls reconciliation with the core service account. When the core routes
+restriction is on, only the core identity can call it directly (see
+[Namespaces and access](namespaces.md#core-routes)).
 
-## Каталог документов: `cb ingest`
+## Document directory: `cb ingest`
 
-CLI проецирует каталог Markdown-файлов (vault, только чтение) в граф и индекс:
+The CLI projects a directory of Markdown files (vault, read-only) into the
+graph and the index:
 
 ```bash
-cb init-db                          # граф и таблицы (идемпотентно)
-cb ingest --vault /opt/taimen/kb    # или CB_VAULT_PATH
-cb ingest --vault /opt/taimen/kb --reset            # пересоздать граф и индекс
-cb ingest --vault /opt/taimen/kb --extract-entities # + сущности из текста через LLM
+cb init-db                          # graph and tables (idempotent)
+cb ingest --vault /opt/taimen/kb    # or CB_VAULT_PATH
+cb ingest --vault /opt/taimen/kb --reset            # recreate the graph and index
+cb ingest --vault /opt/taimen/kb --extract-entities # + entities from text via LLM
 cb stats
 ```
 
-Особенности:
+Specifics:
 
-- vault проецируется в namespace по умолчанию (`CB_DEFAULT_NAMESPACE`);
-- frontmatter документа задаёт тип и свойства узла, ссылки превращаются в рёбра;
-- текст режется на фрагменты по заголовкам Markdown, затем по абзацам с
-  ограничением размера; `heading` фрагмента — «хлебные крошки» заголовков
-  (`Раздел > Подраздел`);
-- ingest самоочищается (mark-and-sweep): узлы, рёбра и чанки vault-происхождения,
-  не встреченные в текущем прогоне, удаляются — **только** в этом namespace и
-  **только** vault-происхождения; записи через API не затрагиваются;
-- `CB_CACHE_DIR` включает кэш: неизменённые заметки и уже посчитанные эмбеддинги
-  пропускаются.
+- the vault is projected into the default namespace (`CB_DEFAULT_NAMESPACE`);
+- a document's frontmatter sets the node's type and properties, and links
+  become edges;
+- text is split into fragments by Markdown headings, then by paragraphs with
+  a size limit; a fragment's `heading` is the heading "breadcrumbs"
+  (`Section > Subsection`);
+- ingest cleans up after itself (mark-and-sweep): nodes, edges, and chunks of
+  vault origin not encountered in the current run are deleted, **only** in
+  this namespace and **only** of vault origin; records written through the API
+  are not affected;
+- `CB_CACHE_DIR` enables a cache: unchanged notes and already computed
+  embeddings are skipped.
 
-!!! warning "`--reset` удаляет граф и индекс целиком"
-    Флаг пересоздаёт граф и таблицу чанков для всего инстанса, а не для одного
-    namespace. Делайте бэкап перед использованием.
+!!! warning "`--reset` deletes the graph and index entirely"
+    The flag recreates the graph and the chunks table for the whole instance,
+    not for one namespace. Make a backup before you use it.
 
-## Эмбеддинги
+## Embeddings
 
-Эмбеддинги считает сервис — единая модель и размерность для всех namespaces.
+The service computes embeddings, with a single model and dimension for all
+namespaces.
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Провайдер | `CB_EMBEDDING_PROVIDER`: `openai` (любой OpenAI-совместимый endpoint) или `fake` |
-| Модель | `CB_EMBEDDING_MODEL`, по умолчанию `text-embedding-3-small` |
-| Размерность | `CB_EMBEDDING_DIM`, по умолчанию `1536`; для моделей `text-embedding-3-*` передаётся параметром `dimensions` |
-| Батч | 64 текста на запрос к провайдеру |
-| Таймаут | `CB_EMBEDDING_TIMEOUT`, по умолчанию 25 с |
-| Вход | `"<title> — <heading>\n<text>"` |
+| Provider | `CB_EMBEDDING_PROVIDER`: `openai` (any OpenAI-compatible endpoint) or `fake` |
+| Model | `CB_EMBEDDING_MODEL`, `text-embedding-3-small` by default |
+| Dimension | `CB_EMBEDDING_DIM`, `1536` by default; for `text-embedding-3-*` models, passed as the `dimensions` parameter |
+| Batch | 64 texts per request to the provider |
+| Timeout | `CB_EMBEDDING_TIMEOUT`, 25 s by default |
+| Input | `"<title> — <heading>\n<text>"` |
 
-Если провайдер вернул вектор другой размерности, запись падает с ошибкой, которая
-называет обе размерности. Смена модели требует переиндекса — см.
-[Конфигурацию](configuration.md#reindex).
+If the provider returns a vector of a different dimension, the write fails with
+an error that names both dimensions. Changing the model requires a reindex;
+see [Configuration](configuration.md#reindex).
 
-!!! danger "Провайдер `fake` — не для реальных данных"
-    `fake` считает векторы хешированием слов той же размерности, поэтому проходит все
-    проверки схемы, но семантического поиска нет — выдача лексическая. Сервис пишет
-    об этом предупреждение в лог. Данные, проиндексированные так, после включения
-    настоящего провайдера нужно переиндексировать.
+!!! danger "The `fake` provider is not for real data"
+    `fake` computes vectors by hashing words at the same dimension, so it
+    passes all schema checks, but there is no semantic search: results are
+    lexical. The service logs a warning about this. Data indexed this way must
+    be reindexed after you enable a real provider.
 
-## Строгий режим видов
+## Strict kind mode
 
-Если для namespace включён строгий режим (`PUT /api/memory/namespaces/{ns}/kinds`
-с `"strict": true`), запись сущности неизвестного вида или с ключом/атрибутами вне
-схемы вида отвергается ответом `422` на `/api/brain/facts`, `/api/brain/retain`,
-`/api/brain/documents` и `/api/memory/reconcile`. В наблюдениях такой assertion
-получает статус ошибки, а само наблюдение сохраняется. Подробнее — в
-[Модели знаний](knowledge-model.md#domain-packs).
+If strict mode is enabled for a namespace (`PUT /api/memory/namespaces/{ns}/kinds`
+with `"strict": true`), writing an entity of an unknown kind, or with a
+key/attributes outside the kind's schema, is rejected with `422` on
+`/api/brain/facts`, `/api/brain/retain`, `/api/brain/documents`, and
+`/api/memory/reconcile`. In observations, such an assertion gets an error
+status, while the observation itself is kept. Details are in
+[Knowledge model](knowledge-model.md#domain-packs).
 
-## Удаление
+## Deletion
 
-| Что удаляем | Маршрут | Повторный вызов | Аудит |
+| What is deleted | Route | Repeated call | Audit |
 |---|---|---|---|
-| Узел (статья, факт) с рёбрами и чанками | `DELETE /api/brain/nodes/{natural_key}?namespace=…` | `404` | событие `delete` |
-| Документ с рёбрами и всеми фрагментами | `DELETE /api/brain/documents/{natural_key}?namespace=…` | `200 {"deleted": false}` | событие `delete` (только при фактическом удалении) |
-| Наблюдение | `DELETE /api/memory/observations/{id}?namespace=…&mode=redact\|purge` | `404` | событие удаления в аудит-контуре |
+| A node (article, fact) with its edges and chunks | `DELETE /api/brain/nodes/{natural_key}?namespace=…` | `404` | `delete` event |
+| A document with its edges and all fragments | `DELETE /api/brain/documents/{natural_key}?namespace=…` | `200 {"deleted": false}` | `delete` event (only on an actual deletion) |
+| An observation | `DELETE /api/memory/observations/{id}?namespace=…&mode=redact\|purge` | `404` | deletion event in the audit trail |
 
 ```bash
-# natural_key может содержать слэши — экранировать не нужно
+# natural_key may contain slashes; no escaping is needed
 curl -X DELETE \
   "$MEMORY_URL/api/brain/nodes/https://kb.example.com/articles/guest-pass?namespace=support&actor=kb-admin" \
   -H "Authorization: Bearer $TOKEN"
@@ -346,42 +358,44 @@ curl -X DELETE \
 
 ```json
 {"deleted": true, "natural_key": "https://kb.example.com/articles/guest-pass",
- "type": "article", "title": "Гостевой пропуск", "chunks_deleted": 1,
+ "type": "article", "title": "Guest pass", "chunks_deleted": 1,
  "trace_id": "3f2c…"}
 ```
 
-- Удаление **безвозвратное**: узел удаляется вместе с рёбрами (`DETACH DELETE`),
-  фрагменты — из индекса. Снимок удалённого (тип, заголовок, число фрагментов)
-  попадает в аудит; `actor` и `trace_id` (или `X-Run-Id`) передаются query-параметрами.
-- Узлы аудит-контура (`audit_event`, `pc_trace`) удалить нельзя → `400`.
-- Для наблюдений `redact` затирает содержимое (запись и id остаются), `purge`
-  удаляет строку. Чанки наблюдения удаляются, свидетельство вычёркивается из фактов;
-  факты без оставшихся свидетельств выпадают из выдачи.
-- Документы-источники (vault) не затрагиваются.
+- Deletion is **irreversible**: the node is deleted together with its edges
+  (`DETACH DELETE`), and its fragments are removed from the index. A snapshot
+  of what was deleted (type, title, number of fragments) goes to audit;
+  `actor` and `trace_id` (or `X-Run-Id`) are passed as query parameters.
+- Audit trail nodes (`audit_event`, `pc_trace`) cannot be deleted → `400`.
+- For observations, `redact` wipes the content (the record and id remain),
+  and `purge` deletes the row. The observation's chunks are deleted, and the
+  evidence is removed from facts; facts with no remaining evidence drop out of
+  results.
+- Source documents (vault) are not affected.
 
-!!! note "Ключ-URL за прокси"
-    Некоторые reverse-прокси схлопывают `//` в пути, и `https://x` доезжает как
-    `https:/x`. Сервис восстанавливает схему в ключах маршрутов по `natural_key`
-    автоматически.
+!!! note "URL keys behind a proxy"
+    Some reverse proxies collapse `//` in the path, so `https://x` arrives as
+    `https:/x`. The service restores the scheme in route keys by `natural_key`
+    automatically.
 
-## Рекомендации
+## Recommendations
 
-- Используйте URL или идентификатор исходной системы как `external_id` /
-  `natural_key` — это делает загрузку идемпотентной и упрощает удаление по требованию
-  субъекта ПДн.
-- Передавайте `source_path` / `provenance.source`, по которым пользователь сможет
-  открыть оригинал: это цель цитаты во всех ответах.
-- Длинные документы разбивайте на фрагменты по разделам и передавайте `heading` —
-  раздел попадает и в эмбеддинг, и в выдачу.
-- Массовую загрузку ведите последовательно: rate limiting на уровне API нет, а
-  каждый вызов синхронно ходит к провайдеру эмбеддингов.
-- ФИО и адреса помечайте явно (`"pii": true, "pii_categories": ["fio"]`) — автоматика
-  их не распознаёт.
+- Use the URL or the source system's identifier as `external_id` /
+  `natural_key`: this makes loading idempotent and simplifies deletion at the
+  request of a data subject.
+- Pass `source_path` / `provenance.source` that let the user open the
+  original: it is the citation target in all answers.
+- Split long documents into fragments by section and pass `heading`: the
+  section goes into both the embedding and the results.
+- Run bulk loading sequentially: there is no rate limiting at the API level,
+  and each call synchronously calls the embedding provider.
+- Label full names and addresses explicitly (`"pii": true, "pii_categories": ["fio"]`);
+  automatic detection does not recognize them.
 
-## См. также
+## See also
 
-- [Модель знаний](knowledge-model.md)
-- [Поиск и сборка контекста](retrieval.md)
+- [Knowledge model](knowledge-model.md)
+- [Search and context assembly](retrieval.md)
 - [API](api.md)
-- [Конфигурация](configuration.md)
-- [Контекст Control Plane](../control-plane/context.md)
+- [Configuration](configuration.md)
+- [Control Plane context](../control-plane/context.md)
