@@ -5,7 +5,9 @@ useDefault = true
 
 [allowlist]
 description = "Example values in guide/"
+regexTarget = "line"
 regexes = [
   '''eyJhbGciOiJSUzI1NiIsImtpZCI6\.\.\.''',
   '''invoice-42-approved''',
+  '''`verification_unavailable` \| 503 \| no keys''',
 ]
