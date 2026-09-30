@@ -171,8 +171,8 @@ flowchart LR
 
 | Сервис | Образ | Порт | Зависит от | Volume | Healthcheck | Лимит |
 |---|---|---|---|---|---|---|
-| `minio` | `minio/minio:RELEASE.2024-10-13T13-34-11Z`, `server /data` | 9000, не публикуется | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
-| `minio-bootstrap` | `minio/mc:RELEASE.2024-10-08T09-37-26Z`, одноразовый: бакет `${CP_S3_BUCKET}`, политика `cp-artifacts` и пользователь ядра | — | `minio` (healthy) | — | — | — |
+| `minio` | `cgr.dev/chainguard/minio@sha256:4692462f…`, `server /data` | 9000, не публикуется | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
+| `minio-bootstrap` | `cgr.dev/chainguard/minio-client@sha256:19c80ef1…` (-dev), одноразовый: бакет `${CP_S3_BUCKET}`, политика `cp-artifacts` и пользователь ядра | — | `minio` (healthy) | — | — | — |
 
 Хранит только содержимое артефактов ядра; см.
 [Хранилище объектов](../operations/object-storage.md).

@@ -270,7 +270,7 @@ services:
   minio:
     # The official MinIO images on Docker Hub and quay.io are no longer served anonymously;
     # the Chainguard build is the same server (Apache-2.0 image, AGPL-3.0 MinIO), pinned by digest.
-    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:71674988a1c7ddd5724928633199152b11e4ddefd6c6ce2d60772ff4a8f22ca9}
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:4692462f35d97d7e82c30371d82f057703c5d9489bcae726010594c812f2d285}
     profiles: [core]
     restart: unless-stopped
     command: ["server", "/data"]

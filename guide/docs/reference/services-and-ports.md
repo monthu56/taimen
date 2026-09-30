@@ -174,8 +174,8 @@ explicitly: `make up PROFILES="core notify edge"` or
 
 | Service | Image | Port | Depends on | Volume | Healthcheck | Limit |
 |---|---|---|---|---|---|---|
-| `minio` | `minio/minio:RELEASE.2024-10-13T13-34-11Z`, `server /data` | 9000, not published | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
-| `minio-bootstrap` | `minio/mc:RELEASE.2024-10-08T09-37-26Z`, one-shot: bucket `${CP_S3_BUCKET}`, policy `cp-artifacts`, and the core user | — | `minio` (healthy) | — | — | — |
+| `minio` | `cgr.dev/chainguard/minio@sha256:4692462f…`, `server /data` | 9000, not published | — | `platform_minio` | `mc ready local` | `${MINIO_MEM_LIMIT:-256m}` |
+| `minio-bootstrap` | `cgr.dev/chainguard/minio-client@sha256:19c80ef1…` (-dev), one-shot: bucket `${CP_S3_BUCKET}`, policy `cp-artifacts`, and the core user | — | `minio` (healthy) | — | — | — |
 
 It stores only the content of core artifacts; see
 [Object storage](../operations/object-storage.md).

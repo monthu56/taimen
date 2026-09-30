@@ -14,3 +14,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: compose
+    # Chainguard images (cgr.dev/chainguard/*) are pinned by digest and updated by hand:
+    # Dependabot cannot query cgr.dev (private_source_authentication_failure). It names
+    # them without the registry host, hence both patterns.
+    ignore:
+      - dependency-name: "chainguard/*"
+      - dependency-name: "cgr.dev/chainguard/*"
