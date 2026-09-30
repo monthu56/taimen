@@ -54,7 +54,7 @@ x-healthcheck-py: &healthcheck-py
 services:
   # ---------------------------------------------------------------- core: IAM
   iam-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     profiles: [core]
     restart: unless-stopped
     environment:
@@ -102,7 +102,7 @@ services:
 
   # ------------------------------------------------------- core: Control Plane
   control-plane-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     profiles: [core]
     restart: unless-stopped
     environment:
@@ -331,7 +331,7 @@ services:
   # channels, a consumer of core events. Its own database; service account — secrets/notification-iam.env
   # (written by deploy/bootstrap.py).
   notification-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     profiles: [notify]
     restart: unless-stopped
     environment:
@@ -389,7 +389,7 @@ services:
   # (federation:exchange); there are no roles or tenant in the realm — authority lives in IAM and
   # the Control Plane. The realm is the template deploy/keycloak/platform-realm.json.
   keycloak-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     profiles: [idp]
     restart: unless-stopped
     environment:
