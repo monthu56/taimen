@@ -11,7 +11,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 PROFILES ?= core edge
 COMPOSE := docker compose $(foreach p,$(PROFILES),--profile $(p))
-COMPONENTS_PY := platform-auth-sdk platform-llm skill-sdk iam-service control-plane memory-service notification-service
+COMPONENTS_PY := platform-auth-sdk platform-llm skill-sdk package-sdk iam-service control-plane memory-service notification-service
 ENV_NAME ?= $(or $(shell sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2>/dev/null),taimen)
 GUIDE_MISSING = echo "there is no guide/ directory: the guide is added to the repository separately (guide/mkdocs.yml)"
 # The package SDK is the package-sdk/ submodule; until it is checked out, the package targets
@@ -89,6 +89,11 @@ test-control-plane:
 	@echo "== pytest (unit, client; db-test on 5434): control-plane"; cd control-plane && docker compose --profile test up -d --wait db-test >/dev/null && uv run --quiet pytest -q tests/unit tests/client; status=$$?; docker compose --profile test down >/dev/null 2>&1; exit $$status
 test-skill-sdk:
 	@echo "== pytest: skill-sdk"; cd skill-sdk && uv run --quiet --all-extras pytest -q
+# package-sdk: the moved tools' tests run on the component's fixture snapshot of the packages —
+# PACKAGE_SDK_UMBRELLA over the whole suite expects the platform packages, and the umbrella ships
+# only packages/example; the umbrella's packages and installation go against the format's schema.
+test-package-sdk:
+	@echo "== pytest: package-sdk (+ umbrella packages against the schema)"; cd package-sdk && uv run --quiet --all-extras pytest -q && PACKAGE_SDK_UMBRELLA=$(CURDIR) uv run --quiet --all-extras pytest -q tests/test_umbrella_packages.py
 test-memory-service:
 	@echo "== pytest (unit): memory-service"; cd memory-service && uv run --quiet --extra mcp pytest -q --ignore=tests/integration
 test-%:

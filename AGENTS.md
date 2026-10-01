@@ -13,9 +13,18 @@ languages. Legal texts (`LICENSE`, `cla/`) are not translated.
 
 - The components are submodules flat at the root: `control-plane`, `iam-service`,
   `memory-service`, `notification-service`, `platform-auth-sdk`, `skill-sdk`,
-  `platform-llm`. The flat layout is mandatory: the components take their neighbours
-  (`../platform-auth-sdk`, `../platform-llm`, the core client) as path dependencies.
+  `platform-llm`, `package-sdk`. The flat layout is mandatory: the components take
+  their neighbours (`../platform-auth-sdk`, `../platform-llm`, the core client;
+  `package-sdk` also `../control-plane` and `../skill-sdk`) as path dependencies.
   Do not move submodules into subdirectories.
+- Catalog packages (`packages/`, the installation `deploy/packages.yaml`) are checked,
+  tested, planned and applied with the package SDK from the `package-sdk` submodule
+  (`make packages-check`, `make packages-plan`, `make packages-apply`); this repository
+  has no package tools of its own. Packages are written with the Claude Code plugin
+  `package-author` of the same submodule: `uv tool install --reinstall
+  "./package-sdk[mcp,sandbox,skills]"`, then `claude plugin marketplace add
+  ./package-sdk` and `claude plugin install package-author@package-sdk` (see the
+  README, "Package authoring in Claude Code").
 - `compose.yml`, `.env.example`, `Makefile` — building and running the platform.
 - `deploy/` — bootstrap (`deploy/bootstrap.py`), the edge (`deploy/caddy/`), the
   Keycloak realm template (`deploy/keycloak/`).

@@ -129,7 +129,8 @@
 Раскладка плоская намеренно: `control-plane`, `memory-service`,
 `notification-service` и `skill-sdk` берут соседей (`../platform-auth-sdk`,
 `../platform-llm`, клиент ядра) path-зависимостью, поэтому образы собираются из
-корня этого репозитория.
+корня этого репозитория. `package-sdk` так же берёт для своих экстр `../control-plane`
+(ядро и его клиент) и `../skill-sdk`.
 
 Сам этот репозиторий — сборка: `compose.yml`, `.env.example`, `Makefile`,
 [deploy/](deploy/README.md) (bootstrap и внешний контур), `tools/` (скрипты сборки
@@ -199,6 +200,34 @@ make up PROFILES="core notify edge"   # с уведомлениями
 Агентов с собственными principals и PAT заводит `make bootstrap ARGS="--agents
 agents.json"`; формат реестра и запуск демона runner'а — в
 [deploy/README.md](deploy/README.md).
+
+### Автор пакетов в Claude Code
+
+Пакеты каталога (типы задач, правила, процессы, агенты, интеграции, онтологии,
+уведомления) пишутся с агентом в Claude Code через плагин `package-author`
+компонента [package-sdk](package-sdk/README.md). Сабмодуль `package-sdk/` —
+одновременно marketplace `package-sdk` (`.claude-plugin/marketplace.json`) и исходники
+плагина (`plugin/package-author`). Из корня этого репозитория:
+
+```bash
+# MCP-сервер плагина — package-sdk mcp. Ставить из постоянного checkout:
+# ядро и skill-sdk подключаются editable-ссылками на соседние каталоги.
+uv tool install --reinstall "./package-sdk[mcp,sandbox,skills]"
+
+# marketplace и плагин (внутри Claude Code — те же команды через /plugin)
+claude plugin marketplace add ./package-sdk
+claude plugin install package-author@package-sdk
+```
+
+Внутри сессии: `/plugin marketplace add ./package-sdk`, затем
+`/plugin install package-author@package-sdk`. Вместо локального сабмодуля можно
+указать репозиторий компонента на GitHub: `/plugin marketplace add
+taimen-ai/package-sdk`. Установки, на которые сервер может ходить, —
+`PACKAGE_SDK_SERVERS` в окружении сессии; инструменты ядра `cp_*` скиллам даёт
+MCP-плагин оператора из раздела выше. Проверка: в новой сессии `/plugin` показывает
+`package-author`, `/mcp` — сервер `package-sdk` с инструментами `pkg_*`. Подробно —
+[README плагина](package-sdk/plugin/package-author/README.md) и
+[статья руководства](guide/docs/packages/author-plugin.ru.md).
 
 ## Руководство
 

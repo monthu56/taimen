@@ -1,7 +1,8 @@
 # Umbrella CI. Component tests run here, not only in their own repositories:
-# control-plane, memory-service, notification-service and skill-sdk take their neighbours
-# (platform-auth-sdk, platform-llm, the core client) as path dependencies and do not build
-# in a standalone checkout. A checkout with submodules gives everyone neighbours at pinned revisions.
+# control-plane, memory-service, notification-service, skill-sdk and package-sdk take their
+# neighbours (platform-auth-sdk, platform-llm, the core, the core client, skill-sdk) as path
+# dependencies and do not build in a standalone checkout. A checkout with submodules gives
+# everyone neighbours at pinned revisions.
 name: ci
 
 on:
@@ -37,6 +38,11 @@ jobs:
           - component: skill-sdk
             tests: tests
             extra: --all-extras
+          # The moved tools' tests run on the component's fixture snapshot of the packages: the
+          # umbrella ships only packages/example, and the suite expects the platform packages.
+          - component: package-sdk
+            tests: tests
+            extra: --all-extras
           - component: iam-service
             tests: tests
           - component: memory-service
@@ -60,6 +66,12 @@ jobs:
       - name: pytest
         working-directory: ${{ matrix.component }}
         run: uv run ${{ matrix.extra }} pytest -q ${{ matrix.tests }}
+      - name: Umbrella packages against the package schema
+        if: matrix.component == 'package-sdk'
+        working-directory: package-sdk
+        env:
+          PACKAGE_SDK_UMBRELLA: ${{ github.workspace }}
+        run: uv run ${{ matrix.extra }} pytest -q tests/test_umbrella_packages.py
 
   control-plane:
     name: control-plane (all tests, PostgreSQL)
@@ -101,9 +113,7 @@ jobs:
         # The package SDK from its submodule in the core's environment: the core's code at the revision tested above
         env:
           PYTHONPATH: ${{ github.workspace }}/package-sdk/src
-        run: |
-          if [ ! -f package-sdk/pyproject.toml ]; then echo "no package-sdk submodule yet — skipping"; exit 0; fi
-          uv run --project control-plane python -m package_sdk.cli check --install deploy/packages.yaml
+        run: uv run --project control-plane python -m package_sdk.cli check --install deploy/packages.yaml
 
   notification-service:
     name: notification-service (all tests, PostgreSQL)
@@ -164,7 +174,6 @@ jobs:
       - name: Catalog packages (schema and references, without the core's code)
         # The package SDK is the package-sdk submodule; the core's validators run in the control-plane job
         run: |
-          if [ ! -f package-sdk/pyproject.toml ]; then echo "no package-sdk submodule yet — skipping"; exit 0; fi
           PYTHONPATH=package-sdk/src uv run --no-project --with pyyaml --with jsonschema \
             python -m package_sdk.cli check --schema-only --install deploy/packages.yaml
       - name: Documentation links

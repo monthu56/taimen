@@ -131,7 +131,8 @@ this repository.
 The flat layout is intentional: `control-plane`, `memory-service`,
 `notification-service` and `skill-sdk` take their neighbours (`../platform-auth-sdk`,
 `../platform-llm`, the core client) as path dependencies, so images are built from the
-root of this repository.
+root of this repository. `package-sdk` takes `../control-plane` (the core and its
+client) and `../skill-sdk` the same way for its extras.
 
 This repository itself is the assembly: `compose.yml`, `.env.example`, `Makefile`,
 [deploy/](deploy/README.md) (bootstrap and the edge), `tools/` (build and check
@@ -201,6 +202,34 @@ Linux the signing key `secrets/iam-signing.pem` must be owned by uid 10001 (mode
 Agents with their own principals and PATs are created by `make bootstrap ARGS="--agents
 agents.json"`; the registry format and how to start the runner daemon are in
 [deploy/README.md](deploy/README.md).
+
+### Package authoring in Claude Code
+
+Catalog packages (task types, rules, processes, agents, integrations, ontologies,
+notifications) are written with an agent in Claude Code through the `package-author`
+plugin of the [package-sdk](package-sdk/README.md) component. The `package-sdk/`
+submodule is both the `package-sdk` marketplace (`.claude-plugin/marketplace.json`) and
+the source of the plugin (`plugin/package-author`). From the root of this repository:
+
+```bash
+# The plugin's MCP server is package-sdk mcp. Install it from a permanent checkout:
+# the core and skill-sdk are linked as editable references to the neighbouring directories.
+uv tool install --reinstall "./package-sdk[mcp,sandbox,skills]"
+
+# The marketplace and the plugin (inside Claude Code, the same commands through /plugin)
+claude plugin marketplace add ./package-sdk
+claude plugin install package-author@package-sdk
+```
+
+Inside a session: `/plugin marketplace add ./package-sdk`, then
+`/plugin install package-author@package-sdk`. Instead of the local submodule you can
+point to the component's repository on GitHub: `/plugin marketplace add
+taimen-ai/package-sdk`. The installations the server may reach are listed in
+`PACKAGE_SDK_SERVERS` in the session environment; the core's `cp_*` tools come to the
+skills from the operator's MCP plugin above. Check: in a new session `/plugin` shows
+`package-author`, and `/mcp` shows the `package-sdk` server with its `pkg_*` tools.
+Details are in the [plugin README](package-sdk/plugin/package-author/README.md) and the
+[guide article](guide/docs/packages/author-plugin.md).
 
 ## Guide
 

@@ -38,8 +38,9 @@ make check-<component>      # for example make check-control-plane
 ```
 
 `control-plane`, `memory-service`, `notification-service` and `skill-sdk` depend on
-their neighbours (`../platform-auth-sdk`, `../platform-llm`) by path, so work from a
-checkout of this repository or keep the neighbours next to the component.
+their neighbours (`../platform-auth-sdk`, `../platform-llm`) by path, and `package-sdk`
+on `../control-plane` and `../skill-sdk`, so work from a checkout of this repository or
+keep the neighbours next to the component.
 
 ## Where to send changes
 
