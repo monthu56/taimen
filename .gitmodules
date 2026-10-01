@@ -26,3 +26,7 @@
 	path = platform-llm
 	url = https://github.com/taimen-ai/platform-llm.git
 	branch = main
+[submodule "package-sdk"]
+	path = package-sdk
+	url = https://github.com/taimen-ai/package-sdk.git
+	branch = main
