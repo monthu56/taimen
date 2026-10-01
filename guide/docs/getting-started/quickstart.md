@@ -135,7 +135,7 @@ jsonschema).
 
 `--operator` is the display name of the first human administrator; set your
 own. Expected output (IDs and paths shortened; the lines of step 5b come from
-`tools/cp_packages.py`, which prints them in Russian):
+`package-sdk`, which prints them in Russian):
 
 ```text
 1. waiting for services

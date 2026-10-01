@@ -224,9 +224,9 @@ make packages-check
 ```
 
 
-1. `tools/cp_packages.py check`: schema, references, and core validators for
+1. `package-sdk check`: schema, references, and core validators for
    the packages in `packages/`.
-2. `tools/cp_packages.py check --install <installation file>`: checks the
+2. `package-sdk check --install <installation file>`: checks the
    installation file.
 3. `pytest -q tools/tests` (through `uv run --no-project` with `pytest`,
    `pyyaml`, `jsonschema`, `regex`, `ruamel.yaml`).

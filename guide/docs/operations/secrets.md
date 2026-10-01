@@ -53,6 +53,8 @@ or the line is commented out), `make secrets` adds it.
 | `iam-signing.pem` | Private access token signing key (RSA 3072) | `make secrets` | `iam-service` (uid 10001, docker secret) |
 | `harness-pat` | Operator PAT (read/write/admin) | bootstrap, step 4 | Moved to the operator's workstation |
 | `control-plane-iam.env` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET`: the core service account | bootstrap, step 2a | `docker compose` (`env_file` of the three core processes) |
+| `runtime-console-oidc-secret` | Secret of the console's OIDC client `runtime-console` (the same one as in the IdP); `0600`, owned by uid 10001 | `make secrets` or the OIDC client setup script | `console` (uid 10001, docker secret) |
+| `runtime-console-cookie-secret` | Console cookie key, at least 32 bytes; `0600`, owned by uid 10001 | `make secrets` | `console` (uid 10001, docker secret) |
 
 Permissions: everything is `0600`. Files mounted into a container (signing
 keys) must be owned by uid `10001` on Linux:

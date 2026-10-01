@@ -72,7 +72,7 @@ The `admin` permission covers any other.
 | `processes.write` | Publishing a process version (on the process workspace). |
 | `processes.operate` | Explicit instance start, `:suspend`, `:resume`, `:cancel` (on the instance workspace). |
 | `packages.test` | Checking and testing a package in the core sandbox, process replay (`/packages:test`, `:replay`). |
-| `packages.plan` | Planning and applying a package (`/packages:plan`, `/packages:apply`); applying also requires the kind permissions. |
+| `packages.plan` | Planning and applying a package (`/packages:plan`, `/packages:apply`) and recording the link of objects to their package (`/packages:record`); applying and recording also require the kind permissions. |
 | `calendars.write` | Publishing a business calendar. |
 | `goals.read` | Reading goals (Goals). |
 | `goals.write` | Creating and changing goals. |

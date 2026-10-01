@@ -117,6 +117,24 @@ error class: `ValidationError` 422, `BadRequestError` 400, `ConflictError`
 | `unknown_requirement` | 422 | A role or capability from the requirements is not found in the task scope. | Create the role in the task's workspace. |
 | `verification_unavailable` | 503 | Nothing to verify the token with: JWKS has been unavailable longer than `CP_IAM_JWKS_STALE_AFTER_SECONDS`, or the revocation source is unavailable. | Check that `iam-service` is reachable from the container. |
 
+### Disabling and enabling a principal { #principal-disable-enable }
+
+`POST /api/v1/principals/{principal_id}:disable` and `:enable` (CP-ADR-0077). The gate
+`POST /api/v1/authz:check` returns the same denials for the `disable` and `enable` actions on
+the `principal` resource: the response's `reason.code` carries the endpoint's code.
+
+| Code | HTTP | Cause | What to do |
+|---|---|---|---|
+| `permission_denied` | 403 | The `principals.write` permission is missing. | Grant the permission in the binding. |
+| `principal_kind_not_disableable`, `principal_kind_not_enableable` | 422 | The target is a service account (`service`). | A service is switched off by its installer. |
+| `cannot_disable_self` | 409 | An attempt to disable yourself. | Another person with the permissions disables you. |
+| `permission_escalation` | 403 | `:disable`: the target has `admin` in an unrevoked binding or API key, and the caller has no `admin` (`details.missing=["admin"]`). `:enable`: the permissions of the target's live keys and unrevoked bindings exceed the caller's (`details.missing`). | Act as an administrator. |
+| `use_agent_retire` | 409 | `:disable`: the target is the principal of a registry agent (`details.agent`). | Retire the agent with `POST /api/v1/agents/{key}:retire`. |
+| `use_agent_publish` | 409 | `:enable`: the target is the principal of a registry agent in any status (`details.agent`, `details.agentStatus`). | Bring the agent back by publishing a revision. |
+
+Repeating the call on an already disabled (`:disable`) or already active (`:enable`) principal
+returns `200` without changes.
+
 ### Idempotency
 
 | Code | HTTP | Cause | What to do |
@@ -152,6 +170,8 @@ error class: `ValidationError` 422, `BadRequestError` 400, `ConflictError`
 | Code | HTTP | Cause | What to do |
 |---|---|---|---|
 | `action_already_finished` | 409 | The action is already finished. | Do not finish it again. |
+| `agent_revision_mismatch` | 422 | `:start-run`: the revision does not belong to the caller's agent, or a principal without an agent passed it. | Pass a revision of your own agent (`GET /agents/me`) or omit the field. |
+| `agent_revision_required` | 422 | `:start-run` from a principal linked to an agent without `agentRevisionId`. | Pass a revision of your own agent (`GET /agents/me`). |
 | `artifact_mismatch` | 422 | The run does not belong to the specified task. | Check `taskId` and `runId`. |
 | `budget_exceeded` | 409 | The run exceeded its duration budget. | Finish the run; increase `maxDurationSeconds` for a new one. |
 | `invalid_action` | 422 | Empty action name. | Set `action`. |
@@ -312,21 +332,12 @@ error class: `ValidationError` 422, `BadRequestError` 400, `ConflictError`
 | `task_terminal` | 409 | A skill with `external_write` cannot act for a closed task. | — |
 | `unsupported_skill_condition` | 422 | Skill conditions of this kind are not supported yet. | Remove the condition. |
 
-### Harness manifest and tool search
+### Tool search
 
 | Code | HTTP | Cause | What to do |
 |---|---|---|---|
-| `invalid_compile_reason` | 422 | `run_started` is reserved for automatic compilation. | Specify another reason. |
-| `invalid_declaration` | 422 | Declared manifest sections must be an object. | Fix the manifest. |
-| `invalid_ephemeral_kind` | 422 | Invalid `kind` of an ephemeral record. | See the message. |
-| `invalid_ephemeral_summary` | 422 | Empty or too long `summary`. | Shorten it. |
-| `invalid_fallback_attempt` | 422 | A provider fallback must declare a `model.attempt` greater than the active one. | Increase `attempt`. |
-| `invalid_model_attempt` | 422 | `model.attempt` is not a positive integer. | Fix it. |
 | `invalid_tool_query` | 422 | The tool search query is too long. | Shorten it. |
 | `invalid_tool_schema` | 422 | A tool's input schema must be an object. | Fix the schema. |
-| `server_authoritative_section` | 422 | Sections computed by the server cannot be declared. | Remove the section. |
-| `unknown_manifest_section` | 422 | Unknown manifest section. | Remove the section. |
-| `unsafe_manifest_payload` | 422 | A memory reference contains local paths or sensitive keys. | Remove them. |
 
 ### Events and operations
 
@@ -446,6 +457,23 @@ The response is `{"detail": "<code>"}`.
 | `provisioning_source_exists` | 409 | The SCIM source is already registered. |
 | `population_managed_by_directory` | 409 | The principal population is managed by the directory (SCIM). |
 
+### Disabling and enabling people { #iam-people }
+
+`POST /api/v1/tenants/{tenant_id}/principals/{principal_id}:disable` and `:enable` (scope
+`iam:people`).
+
+| Code | HTTP | Cause |
+|---|---|---|
+| `human_principal_required` | 422 | With `iam:people`, only people are disabled and enabled. |
+| `self_disable_forbidden`, `self_enable_forbidden` | 409 | An attempt to disable or enable yourself. |
+| `people_admin_protected` | 403 | `:disable`: the target is a member of the `people-admins` group; only the IAM bootstrap disables it, the caller's membership does not count. `:enable`: the target belongs to an IAM privilege group (for example, `people-admins`) that the caller is not a member of; a member of the same group or the IAM bootstrap enables it. |
+| `principal_paused` | 409 | `:enable`: the principal is paused by another process; `:enable` does not lift that. |
+| `principal_provisioned` | 409 | `:enable`: the person was disabled by the SCIM source; only that source enables them (`active: true`). |
+| `principal_status_not_enableable` | 409 | `:enable`: a principal cannot be enabled from this status. |
+| `principal_conflict` | 409 | `:enable`: the principal's status changed concurrently; re-read and retry. |
+| `idempotency_key_required` | 400 | `:enable` with a token and without the `Idempotency-Key` header (the bootstrap token does not need the key). |
+| `idempotency_key_reused` | 409 | `:enable`: the caller has already used this `Idempotency-Key` for another principal. |
+
 ### Identity federation
 
 | Code | HTTP | Cause |
@@ -464,6 +492,38 @@ SCIM endpoints respond in the SCIM format (`scimType`): `invalidFilter`,
 `IAM_SCIM_AUDIENCE`, 403 without the `IAM_SCIM_SCOPE` scope or without an
 active provisioning source, 502/503 when the upstream provider is
 unavailable.
+
+## Runtime console: people { #console-people }
+
+The flows of the console's "People and roles" section (add, disable, enable a person) are
+orchestrated by the console BFF over IAM and the core. The response comes in two forms.
+
+- **Rejection by request body**: an immediate `422` in the Control Plane envelope
+  `{"error": {"code"}}`, and the flow does not start: `invalid_person` ("Add"),
+  `invalid_profile` ("Enable").
+- **Flow report**: `200`, with the rejection inside the report:
+    - "Disable" and "Enable": the top-level `error` field is
+      `{"service": "iam"|"cp", "status", "code", "missing"?}`, and the step fields (`iam`, `cp`,
+      plus `binding` for enabling) show where the flow stopped (`failed`);
+    - "Add": there is no top-level `error`; the rejection is in the flow step with `status: "failed"`:
+      `steps[i].error = {"status", "code", "missing"?}`, without `service`.
+
+Besides the IAM and core codes (see [above](#principal-disable-enable) and
+[iam-service](#iam-people)), the BFF returns its own:
+
+| Code | HTTP | Cause | What to do |
+|---|---|---|---|
+| `iam_login_closed` | 403 | "Enable": the core member is active but IAM sign-in is closed (partial disabling), and the caller has no `admin`. Only an administrator can reopen sign-in, and not when IAM answers `principal_provisioned` (disabled by HR sync, SCIM) or `principal_paused` (paused in IAM): an administrator gets those denials too. | Repeat "Enable" as an administrator. |
+| `iam_principal_unknown` | 409 | "Enable": the core principal has no binding rows with this console's IAM, so there is nothing to attach a new binding to. | Enable through the core API: `:enable`, then a binding `POST /api/v1/principals/{principal_id}/iam-bindings` with explicit permissions. |
+| `invalid_profile` | 422 | "Enable": the permission profile is neither `member` nor `admin`. A direct response, not a report. | Choose a profile from the list. |
+| `invalid_person` | 422 | "Add": the request body is unusable: an empty or too long field, an invalid e-mail, workspace, or roles, an unknown profile. A direct response, not a report. | Fill in the form. |
+| `permission_escalation` | 403 | "Add" and "Enable": the permissions of the chosen profile exceed the caller's (`missing`). Checked before IAM. | Choose the "member" profile or act as an administrator. |
+| `person_disabled` | 409 | "Add": the person with this e-mail is disabled, their IAM account is not active, or it is already linked to a disabled core member. | Bring them back with the "Enable" button. |
+| `identity_disabled` | 409 | "Add": the IdP account is disabled in IAM. | Sort out the account in IAM. |
+| `identity_mismatch` | 409 | "Add": the IdP account from the form does not match the one already linked to this person, or the IAM principal found by the IdP account or by the person's record is not a person (`kind` is not `human`). | Check the IdP identifier. |
+| `identity_bound_elsewhere` | 409 | "Add": the IAM account is already linked to another active core member, or the IdP account is linked to a principal outside the tenant. | Sort out the link in IAM and the core. |
+| `identity_unverifiable` | 501, 502 | "Add": IAM does not allow reading the IdP links; the flow is stopped. | Check the IAM version and its response. |
+| `lookup_incomplete` | 409 | "Add": the list of core members is too long to check everyone; the console refuses so as not to create a duplicate. | A limitation of the current console version. |
 
 ## platform-auth-sdk codes (resource services)
 

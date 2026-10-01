@@ -314,8 +314,11 @@ packages. The core does not know or check kind names: they arrive through
 the projection, steps, and ontology packages.
 
 **Registration and enabling** of ontology packages happen only through the
-core, by a platform administrator. Enabling replaces the namespace's whole
-set of packages, so list all the ones you need.
+core, by the installation: an ontology is a `KnowledgePack` object of a catalog
+package (registered by a platform administrator), and the `knowledge` section of
+the installation enables a set for the root of a workspace tree (`package-sdk
+plan` → `package-sdk apply`). Enabling replaces the namespace's whole set of
+packages, so list all the ones you need.
 
 !!! note "Reconciliation and review skills"
     `process.regulation_check@1` and `process.retrospective@1` are executed

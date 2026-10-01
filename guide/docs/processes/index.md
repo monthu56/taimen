@@ -8,7 +8,7 @@ back on cancellation. A process is written as data (a catalog package YAML
 file of kind `Process`), and the Control Plane core itself executes it. This
 article is for package authors and architects: the complete process
 language, with short examples. Rationale: TAI-ADR-0054, CP-ADR-0074; the
-fields are in the [schema reference](../reference/process-schema.md).
+fields are in the [schema reference](../reference/package-schema.md#process).
 
 ## Key points
 
@@ -54,7 +54,7 @@ packages/<package>/
 Process skeleton:
 
 ```yaml
-# yaml-language-server: $schema=../../schema/v1/object.schema.json
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<tag>/schema/v1/object.schema.json
 apiVersion: taimen.ai/v1
 kind: Process
 key: supplier-invoice
@@ -64,7 +64,8 @@ spec:
   workspaceId: ${WORKSPACE_ID}            # installation variable
   identity: {agent: invoice-process}       # process identity
   owner: [{role: finance-director}]        # process owner
-  calendar: ru                             # default calendar for cal.*
+  calendar: ru                             # default calendar for cal.* and deadlines
+  due: {workdays: 5, warnBefore: {workdays: 1}}   # deadline of the whole process (SLA)
   data: {…}                                # JSON Schema of instance data
   start: {…}                               # start event and instance key
   correlate: […]                           # which other events reach the instance
@@ -75,6 +76,8 @@ spec:
   timers: […]                              # process timers
   migrations: […]                          # moving open instances to a new version
 ```
+
+`package-sdk init` writes the `$schema` line: the address of the schema of the SDK release whose tag it was installed from (in a working copy without a tag, a relative path to the installed SDK's schema).
 
 !!! note "YAML 1.2"
     The package language is YAML 1.2: booleans are only `true`/`false`, and
@@ -218,7 +221,16 @@ an unknown field is an `unknown_data_field` check error.
 - **The task** is a regular core task in the instance's workspace, with the
   type `taskType` and an external reference to the process element. The
   result is the task fields (`customFields`) at completion, validated
-  against the step form; they get into data through `output.as`.
+  against the step form; they get into data through `output.as`. The step's
+  task `task` is visible there too: who did it is `task.assigneeId` (an
+  example is in [Expressions](expressions.md#variables)).
+- **The executor fills in the task fields.** A `human` step does not set the
+  `customFields` of the new task: the case data reaches the executor only as
+  the text of the description (`input.from`). If an outcome of the task
+  type's gate reads a field (`$.task.customFields.requestId!`), the type's
+  instructions must ask the executor to fill it in, as in the
+  [Example](../packages/tutorial.md#work). Prefilling task fields from the
+  step is not available yet.
 - **The form** is a JSON Schema of the data plus a JSON Forms `uischema` for
   presentation. Without `form.schema`, the result is validated against the
   task type's `fieldSchema`.
@@ -228,9 +240,9 @@ an unknown field is an `unknown_data_field` check error.
   yields a principal id, `agent:<key>`, or `role:<slug>`. A role means a
   task for the role without a specific executor: anyone who holds the role
   can take it.
-- **The deadline** `due` is a duration from task creation (`P2D`) or a
-  moment: `{at: <CEL>}`, for example from a date in the data using the
-  calendar.
+- **The deadline** `due` is the step's SLA: a duration from task creation
+  (`P2D`), a moment `{at: <CEL>}`, or a deadline in working days and hours by
+  the calendar with a warning threshold (see [Deadlines and SLA](#sla)).
 - **Escalations**: up to five levels. `after: due` fires at the deadline; a
   duration fires that long after the deadline. Actions: `remind` (remind the
   executor), `reassign` (reassign to `to`), `notify` (notify `to`), `raise`
@@ -267,14 +279,15 @@ receives it like any task (see
 ```
 
 The step creates one core approval for each approver from `approvers`.
+`approvers` and `quorum` are required: the quorum has no default.
 
 | Field | Values | Meaning |
 |---|---|---|
 | `mode` | `parallel` (default), `sequential` | all at once or one at a time: in `sequential`, one approval is open, for the first approver in order who has not voted yet |
-| `quorum` | `all`, `any`, `{atLeast: n}`, `{percent: p}` | how many approvals are needed: all remaining, one, `n`, or ⌈p·N/100⌉ (at least one) of the remaining approvers |
+| `quorum` | `all`, `any`, `{atLeast: n}`, `{percent: p}`; **required** | how many approvals are needed: all remaining, one, `n`, or ⌈p·N/100⌉ (at least one) of the remaining approvers |
 | `earlyDecision` | `true` (default) | decide as soon as the quorum is reached or becomes unreachable; `false` waits for the votes of all remaining approvers |
 | `separationOfDuties` | CEL → a list of principals | who is not allowed to vote |
-| `due`, `onDue` | a deadline; `approve`, `reject`, `escalate` | what to do if there is no decision by the deadline |
+| `due`, `onDue` | a deadline (see [Deadlines and SLA](#sla)); `approve`, `reject`, `escalate` | what to do if there is no decision by the deadline |
 | `escalations` | levels, as in `human` | deadline escalations |
 
 **A "two out of three" quorum** is `quorum: {atLeast: 2}`: two approvals
@@ -288,7 +301,10 @@ is a rejection (`no_approvers`).
 
 **The core enforces separation of duties, not the engine.** The list from
 `separationOfDuties` becomes the `excludedPrincipals` field of each
-approval. A vote by an excluded principal is rejected with `403
+approval. The process knows whom to exclude from its own data: for example,
+who reviewed the case is kept by `output.as` of the preceding `human` step,
+`reviewedBy: string(task.assigneeId)` (the full example is in
+[Expressions](expressions.md#variables)). A vote by an excluded principal is rejected with `403
 separation_of_duties_violation` on any path (from the workspace, a channel,
 MCP, or the API), even if they hold the approver role. Such an approval is
 not shown to them in the "Attention" list.
@@ -316,7 +332,9 @@ Step result: `step.result.outcome` (`approved` or `rejected`),
 `listen` waits for the first matching event from `any` (a deferred choice)
 and runs its `do` block; `step.result` is `{option, event}`. The timeout is
 a duration or a moment `{at: …}`; without `onTimeout` the flow simply moves
-on.
+on. A timeout and a deadline are different things: a timeout closes the wait,
+while a `due` deadline only records that the wait has dragged on (see
+[Deadlines and SLA](#sla)).
 
 !!! warning "The event must reach the instance"
     `listen` and `onEvent` hear only events that reached the instance by key
@@ -533,8 +551,9 @@ spec:
       holidays: ["2027-01-01", …]
 ```
 
-- The functions `cal.addWorkdays`, `cal.isWorkday`, `cal.workdaysBetween`
-  compute using the process calendar (`spec.calendar`) or a named key (see
+- The functions `cal.addWorkdays`, `cal.isWorkday`, `cal.workdaysBetween`,
+  `cal.addWorkingTime`, `cal.workingTimeBetween` compute using the process
+  calendar (`spec.calendar`) or a named key (see
   [Expressions](expressions.md#calendar)).
 - If an evaluation touched a year with `provisional: true` or a year that is
   not in the calendar (then only the weekend days of the week are known),
@@ -549,6 +568,243 @@ spec:
   publishing requires the `calendars.write` permission. The delivery ships
   no ready-made calendars: a calendar is published by a package (kind
   `Calendar`).
+
+### Calendar working hours { #working-hours }
+
+A calendar can describe not only working days but also working hours. They
+are used for deadlines in working hours (`due: {workhours: n}`) and by the
+functions `cal.addWorkingTime` and `cal.workingTimeBetween`. The
+`workingHours` field is optional (CP-ADR-0078 §2):
+
+```yaml
+spec:
+  timezone: Europe/Moscow
+  weekend: [6, 7]
+  workingHours:
+    intervals: [{from: "09:00", to: "13:00"}, {from: "14:00", to: "18:00"}]
+    weekdays: {5: [{from: "09:00", to: "16:45"}]}   # Friday is shorter
+    shortDayReduction: PT1H                         # a pre-holiday day is an hour shorter
+  years: […]
+```
+
+| Field | What it sets |
+|---|---|
+| `intervals` | the intervals of a regular working day in the calendar's local time (`timezone`), in order and without overlaps, at most ten; `24:00` is the end of the day |
+| `weekdays` | intervals for an ISO day of the week (1 is Monday) instead of `intervals`; `[]` means no working hours on that day |
+| `shortDayReduction` | how much shorter a short day is (the year's `shortDays`): subtracted from the end of the last interval, and from the earlier ones if it is shorter |
+
+- Working time is the intervals of the calendar's working days. A moved
+  working day (the year's `workdays`) takes the regular `intervals`; a holiday
+  or a weekend day has no working hours.
+- Counting from a moment outside working hours starts at the nearest working
+  interval. A deadline that used up an interval entirely is the end of the
+  interval (18:00), not the start of the next one.
+- A day of a year that is not in the calendar knows only the weekend days of
+  the week: its intervals are those of the day of the week, there are no short
+  days, and the answer is marked "provisional".
+- A calendar without `workingHours` behaves as before and counts only working
+  days. The field enters the canonical form of the calendar only if it is
+  present, so the hash of earlier calendar versions does not change.
+- Publication checks the hours: time `HH:MM` up to `24:00`, `from` earlier
+  than `to`, intervals in order and without overlaps, `shortDayReduction` a
+  whole number of minutes without years and months. A violation is
+  `422 invalid_calendar` with `details.code = invalid_working_hours`.
+
+!!! warning "Time as a quoted string"
+    Write `from: "09:00"`, not `from: 09:00`. YAML 1.1 loaders read `18:00`
+    without quotes as the sexagesimal number `1080`, and the calendar fails the
+    schema.
+
+## Deadlines and SLA { #sla }
+
+The SLA of a step and of a process is its `due` deadline; there is no second
+notion of a deadline (TAI-ADR-0059, CP-ADR-0078). Unlike a timeout, a deadline
+does not close the wait but records a fact: the core writes to the log that the
+deadline is near or breached, shows the deadline state in the instance, and can
+filter instances with a breached deadline. Notifying people and creating work
+for a breach is the job of notification rules and work derivation rules, not
+of the process.
+
+### Where a deadline is declared
+
+| Where | Field | From which moment |
+|---|---|---|
+| steps `human`, `approve` | `human.due`, `approve.due` | from entering the step (opening the task or the approval) |
+| steps `call`, `recall`, `listen` | `call.due`, `recall.due`, `listen.due` | from entering the step; the deadline of a child process is `call.due` of the `call: {process: …}` step |
+| the whole process | `spec.due` | from the instance start |
+
+A `wait` pause has no deadline: it sets the time itself. A stage has no SLA
+either: a stage deadline is expressed by its boundary timer.
+
+### Deadline forms
+
+```yaml
+due: P2D                                  # calendar time
+due: {at: "cal.addWorkdays(data.receivedAt, 3)"}   # a moment from the data
+due: {duration: PT4H, warnBefore: PT1H}   # calendar time with a threshold
+due: {workdays: 2}                        # working days by the process calendar
+due: {workhours: 8, calendar: ru}         # working hours by a named calendar
+due: {workhours: 8, warnBefore: {workhours: 2}}
+```
+
+| Form | What it means |
+|---|---|
+| `P2D`, `{duration: …}` | a continuous ISO 8601 duration, ignoring the calendar |
+| `{at: <CEL>}` | a moment (or a duration) from an expression over the instance data |
+| `{workdays: n}` | the same time of day `n` working days later (as `cal.addWorkdays`); if the calendar has working hours and the entry is outside them, counting starts at the beginning of the next working interval; `n` is an integer from 1 to 1000 |
+| `{workhours: n}` | `n` hours of working time from the entry (as `cal.addWorkingTime`); requires a calendar with [working hours](#working-hours); `n` is a number greater than 0, up to 10000 |
+| `calendar` | the key of the calendar for working units; by default the process's `spec.calendar` |
+| `warnBefore` | the warning threshold before the deadline: a duration, `{workdays: n}`, or `{workhours: n}`; no threshold by default |
+
+`warnBefore` and `calendar` are written only in the object form, next to
+`duration`, `workdays`, or `workhours`. The object has exactly one of these
+three fields. The earlier forms (`P2D`, `{at: …}`) work as before. `after: due`
+escalations and an approval's `onDue` count from the same deadline.
+
+The definition check rejects a deadline that cannot be computed: `422
+invalid_process` with findings in `details.problems`. The finding path is the
+unit field (`…/due/workhours`, `…/due/warnBefore/workdays`):
+
+| Finding | Cause |
+|---|---|
+| `sla_calendar_missing` | working units (`workdays`, `workhours` in the deadline or in `warnBefore`) without `calendar` and without `spec.calendar` |
+| `sla_calendar_without_hours` | `workhours` by a calendar whose latest version does not declare `workingHours` |
+| `unknown_calendar` | the named calendar does not exist |
+
+The package check and package tests find the same and take the calendar from
+the package, not from the catalog. This check does not re-check a published
+version: if a calendar later lost its working hours, the deadline is not
+computed (`process.sla_failed`), and the version keeps working.
+
+### Deadline facts
+
+A deadline gives the instance a deadline timer, and `warnBefore` also a
+warning timer. When the timer fires while the step (process) is still open,
+the core writes a log event, regardless of whether escalations are declared:
+
+| Event | When |
+|---|---|
+| `process.sla_warning` | the `warnBefore` threshold arrived and the step (process) is not closed |
+| `process.sla_breached` | the deadline arrived and the step (process) is not closed |
+| `process.sla_failed` | the deadline was not computed (`calendar_missing`, an expression error); the instance keeps working, the deadline state is `unknown` |
+
+| Payload field | What it means |
+|---|---|
+| `scope` | `step` is a step deadline, `process` a process deadline; for `process` the fields `element`, `attempt`, `activityId` are empty |
+| `element`, `attempt`, `activityId` | the step, the number of its attempt, and the attempt's open work |
+| `dueAt` | the declared deadline moment |
+| `warnAt` | the threshold moment (in `process.sla_warning`) |
+| `detectedAt`, `overdueSeconds` | when the core processed the breach and how many seconds after the deadline (in `process.sla_breached`) |
+| `detectedBy` | `timer`: the timer fired; `migration`: the deadline turned out to have passed during a migration |
+| `provisional` | the deadline was computed from a provisional calendar year |
+| `owner`, `assignee` | the addressees: the process owner and the step's assignee (below) |
+| `error` | the cause of the failure (in `process.sla_failed`) |
+
+- **One fact per attempt.** Each timer fires once, so a step attempt gets at
+  most one `process.sla_warning` and one `process.sla_breached`.
+- **Closing a step removes its deadline timers.** The step exit event
+  `process.step_exited` carries `breached` and `overdueSeconds`: whether the
+  step was closed after the deadline and by how much (see [Step
+  events](#step-events)).
+- **Re-entering means a new deadline.** Each entry into a step is a new
+  attempt with its own deadline from the moment of entry. Reassignment by an
+  escalation does not recreate the attempt and does not reset the deadline.
+  The process deadline counts from the instance start and is not reset by
+  re-entries.
+- **A new calendar version** recalculates unfired deadline timers, like the
+  other timers that call the calendar (`process.timer_rescheduled`,
+  `cause: calendar_changed`).
+
+### Addressees of deadline events { #sla-recipients }
+
+`owner` and `assignee` are addressees in the form that
+[notification rules](../notifications/notification-rules.md#process-recipients)
+understand: `{principalId, roleId, workspaceId}`, with one of `principalId` and
+`roleId` filled in.
+
+- `owner` is the first resolvable candidate of the `spec.owner` chain (see
+  [Process owner and identity](#owner)). The core resolves a `role:<slug>` role
+  into a role id in the process workspace; for a tenant-level process, in the
+  instance workspace.
+- `assignee` is the step's assignee; for a process deadline and for a step
+  without an assignee the field is empty.
+- If no candidate resolved (the role is not set up), the field is empty, and
+  the event is still written.
+
+So a notification rule needs no specific person's id in an installation
+variable: the addressee arrives in the event.
+
+### Suspension and deadlines
+
+Suspending an instance stops the SLA clocks of its steps and process: deadline
+timers are frozen together with the others. The remainder is kept in the
+deadline's unit:
+
+| Deadline | Unit of the remainder | After resumption |
+|---|---|---|
+| `workhours`; `workdays` by a calendar with working hours | seconds of working time | the moment of resumption plus the remaining working time |
+| `workdays` by a calendar without working hours | working days and time of day | the remaining working days are counted by the calendar from resumption |
+| a duration | continuous seconds | the moment of resumption plus the remainder |
+| `{at: …}` | not kept | the deadline is computed from the data as before and is not moved by the pause |
+
+While the instance is suspended, the deadline state is `paused`.
+
+### Deadline state in an instance { #sla-state }
+
+`GET /api/v1/process-instances/{id}` shows the deadline of every open element
+and of the instance:
+
+- an open element has `attempt`, `due` (`dueAt`, `warnAt`, `provisional`,
+  `remainingSeconds`), `slaState`, and `overdueSeconds`;
+- the instance has `sla` of the same form for the process deadline, and
+  `slaState`, the worst of the states of the process deadline and the open
+  steps.
+
+| `slaState` | What it means |
+|---|---|
+| `ok` | the deadline is ahead, the threshold has not arrived |
+| `warning` | the `warnBefore` threshold arrived, the deadline is still ahead |
+| `breached` | the deadline has passed |
+| `paused` | the instance is suspended |
+| `unknown` | the deadline was not computed (`process.sla_failed`) |
+| `none` | there is no deadline |
+
+The state is computed on reading from `dueAt`, `warnAt`, and the current time.
+It does not depend on whether the worker has processed the timer: a passed
+deadline shows as `breached` at once.
+
+The instance list is filtered by deadline state with the `processes.read`
+permission:
+
+```bash
+curl -sS "https://platform.example.com/api/v1/process-instances?slaState=breached" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The `slaState` filter accepts only `breached` and `warning`; any other value is
+`400 invalid_request`. Suspended instances are not included in the filter. The
+MCP plugin shows the deadline and `slaState` in `cp_process_get` and
+`cp_process_explain`.
+
+### Which versions get deadlines { #engine-revision }
+
+SLA deadlines (deadline timers, `process.sla_*` events, a deadline on steps
+other than `human` and `approve`, and the process deadline) apply only to
+process versions published by a core with this capability. The core marks such
+versions with engine semantics revision 2 (`engine_revision`); earlier versions
+stay at revision 1.
+
+- Instances of a revision 1 version run and replay as before and get no
+  deadline facts until they are migrated to a new version. Step events are
+  written for all instances.
+- **Republishing without changes does not raise the revision.** Publishing the
+  same version with the same content returns the already published version,
+  with its earlier revision. For the process to get deadlines, it needs a new
+  version (`spec.version: N+1`) and, for open instances, a migration map with
+  `policy: migrate` (see [Versions and migrations](#versions)).
+- A process with `due: P2D` gets deadline facts after republishing by the same
+  calendar-time deadline. Switching to working time is a separate package
+  edit.
 
 ## Decision tables
 
@@ -644,7 +900,9 @@ onEvent:
 
 While suspended, timers stop, and responses to stage work are deferred and
 fed in order after resumption. Events (`correlate`, `onEvent`) are
-executed, which is why `resume` from `onEvent` works.
+executed, which is why `resume` from `onEvent` works. The SLA clocks of steps
+and the process stop too: after resumption, deadlines move by the length of the
+pause in the deadline's units (see [Suspension and deadlines](#sla)).
 
 Operator commands require the `processes.operate` permission on the
 instance's workspace:
@@ -657,7 +915,7 @@ instance's workspace:
 
 A command in an unsuitable status gives `409 invalid_process_instance_state`.
 
-## Outcomes and statuses
+## Outcomes and statuses { #outcomes }
 
 The instance status is `running`, `suspended`, `completed`, `failed`, or
 `cancelled`. The outcome (`outcome`) is set by the step
@@ -679,7 +937,7 @@ the task and pending approvals), and pending and frozen timers. The log
 consists of per-step records: the input (what arrived, `actorId`,
 `eventId`), each decision with a `reason`, and each intent.
 
-### Process events
+### Process events { #process-events }
 
 | Event | When |
 |---|---|
@@ -687,8 +945,10 @@ consists of per-step records: the input (what arrived, `actorId`,
 | `process.started`, `process.correlated` | an instance started; an event reached an existing instance |
 | `process.data_changed` | data changed |
 | `process.stage_entered`, `process.stage_exited` | a stage was entered or exited |
+| `process.step_entered`, `process.step_exited` | entry into a waiting step and exit from it (see [below](#step-events)) |
 | `process.milestone_reached`, `process.milestone_lost` | a milestone was reached; a milestone stopped holding |
-| `process.timer_fired`, `process.timer_rescheduled` | a timer fired; a deadline moved (`cause`: `data_changed`, `calendar_changed`, `resumed`) |
+| `process.timer_fired`, `process.timer_rescheduled` | a timer fired; a deadline moved (`cause`: `data_changed`, `calendar_changed`, `resumed`, `migrated`) |
+| `process.sla_warning`, `process.sla_breached`, `process.sla_failed` | a deadline is near, breached, not computed (see [Deadlines and SLA](#sla)) |
 | `process.escalated` | an escalation level |
 | `process.suspended`, `process.resumed` | suspension and resumption |
 | `process.compensated` | compensations completed |
@@ -700,6 +960,57 @@ consists of per-step records: the input (what arrived, `actorId`,
 The author of an instance's events (`actorId`) is the process identity; you
 can subscribe to these events like to any core events (see
 [Events](../control-plane/events.md)).
+They are read with the `events.read` permission on the process workspace;
+the events carry no instance data: data requires `processes.read` and the
+instance projection.
+
+### Step events { #step-events }
+
+An instance entering a waiting step and leaving it are `process.step_entered`
+and `process.step_exited` in the common log. From them the console,
+notification rules, work derivation rules, and other processes see where a case
+stands without reading the instance log (CP-ADR-0074 §13 amendment).
+
+- **A waiting step** is one that opens work and waits for a response: `human`,
+  `approve`, `call`, `recall`, `listen`, `wait` (the `stepKind` field).
+  Instant steps (`set`, `decide`, `remember`, `do`, `complete`, `raise`) give no
+  step events.
+- **What the step waits for** is the `waitsFor` field: `task`, `approval`,
+  `skill`, `agent`, `child`, `event`, `time`, or `memory`. The entry carries a
+  reference to the open work: `taskId`, `approvalIds`, `skillInvocationId`,
+  `childInstanceId`.
+- **The attempt** `attempt` is the number of the entry into this element in the
+  instance, from 1. It is the same in the entry and the exit, even if the
+  element has several pieces of work open at once (`onEvent`, `correlate`).
+  `activityId` is the attempt's open work.
+- **The deadline**: the entry carries `due`, `warnAt`, and `provisional`, the
+  exit `breached` and `overdueSeconds`, if a deadline is declared (see
+  [Deadlines and SLA](#sla)). The time spent on the step is the exit's
+  `durationSeconds`, in calendar time.
+- **Exactly one event.** Redelivery of the entry, a worker restart, and a step
+  retry give neither duplicates nor gaps: a waiting step gets one pair of events
+  per attempt.
+
+The outcome of an exit is the `outcome` field:
+
+| `outcome` | When |
+|---|---|
+| `completed` | the step got its response: the task was completed, the approval was decided (approved or rejected), the skill responded, the knowledge base responded, the `listen` event arrived, the child process finished |
+| `cancelled` | the process itself withdrew the step's work (the `activity_cancelled` decision); an escalation with `action: raise` whose error was caught by `try` |
+| `withdrawn` | a participant outside the process cancelled the step's work: the step's task moved to the `terminal_cancelled` category, or the step's approval was cancelled |
+| `interrupted` | an interrupting boundary timer closed the flow |
+| `failed` | the instance moved to `failed`, including an escalation with `action: raise` without a handler |
+| `timed_out` | the step's timeout fired |
+| `migrated` | the element has no counterpart in the new version during a migration |
+
+- The author (`actorId`) of a `withdrawn` exit is the participant who closed
+  the step's work; for other step events, the process identity.
+- An `approve` step follows the quorum: if after a vote was withdrawn the
+  approval was decided by the quorum, the outcome is `completed`; `withdrawn`
+  only when nobody is left to vote (`no_approvers`).
+- Step events are a projection of the instance log, not new engine decisions,
+  so they do not change the replay of old or new logs. A step opened before
+  step events appeared is closed with attempt 1.
 
 ## Versions and migrations { #versions }
 
@@ -725,6 +1036,17 @@ can subscribe to these events like to any core events (see
   The state is moved according to the map: elements that are not named keep
   their ids, and the flow position is "after the same element". Each moved
   instance gets a log record and a `process.migrated` event.
+- **A migration recalculates deadlines** by the new version: the deadlines of
+  open steps from the moment of entering the step, the process deadline from
+  the instance start. A new deadline is a `process.timer_rescheduled` event with
+  `cause: migrated`, and the step task's deadline is updated. A deadline that
+  has already passed under the new rule gives one `process.sla_breached` with
+  `detectedBy: migration`. Escalation levels whose moment has passed are
+  cancelled without firing; future ones are set. A deadline that appears on a
+  step for the first time is computed the same way, from the entry. Instances
+  pinned to the old version (`pin`) keep their earlier deadlines. The package
+  plan shows in advance which deadlines a migration will change: the
+  `deadlines` section (see [Package tests](package-tests.md#plan)).
 - **A removed element with open instances and no map** is a
   `migration_required` plan error: applying is refused until a policy is
   chosen.
@@ -736,13 +1058,13 @@ can subscribe to these events like to any core events (see
   start new instances (`409 process_retired`).
 
 It is more convenient to rename an element with the command
-`tools/pkg.py rename --file <process> --from <id> --to <id>`: it changes the
+`package-sdk edit rename --file <process> --from <id> --to <id>`: it changes the
 id, the references, and the tests and adds the `migrations` map itself (see
 [Catalog packages](../control-plane/catalog-packages.md#pkg)). How the plan
 shows the fate of instances is covered in
 [Package tests](package-tests.md#plan).
 
-## Process owner and identity
+## Process owner and identity { #owner }
 
 - **The identity** `identity: {agent: <key>}` is an agent description of
   kind `service` or `agent` (see
@@ -760,8 +1082,10 @@ shows the fate of instances is covered in
   (event correlation).
 - **The owner** `owner` is an assignment chain, as in `human.assign`. Tasks
   about the process itself are addressed to the owner: a discrepancy with a
-  regulation, instance errors. The field is optional, but without it the
-  check gives a `process_owner_missing` warning.
+  regulation, instance errors. The owner is the `owner` addressee of the
+  `process.sla_*` deadline events (see [Addressees of deadline
+  events](#sla-recipients)). The field is optional, but without it the check
+  gives a `process_owner_missing` warning.
 - **The process author and the case operator are different roles**: the
   permission to describe a process (`processes.write`) does not grant the
   permission to stop or cancel someone else's case (`processes.operate`).
@@ -839,13 +1163,17 @@ part of the delivery.
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| `422 invalid_process` at publication | check findings: an unknown field, an expression type error, an unreachable step | run `cp_packages check --server` and fix using `file`, `line`, `hint` |
+| `422 invalid_process` at publication | check findings: an unknown field, an expression type error, an unreachable step | run `package-sdk check --server` and fix using `file`, `line`, `hint` |
 | `process_identity_required` | no `identity` | describe the identity agent and reference it |
 | the instance does not hear an event in `listen` | the event is not declared in `correlate` | add a `correlate` with the same key |
 | a second instance for the same case did not appear | by design: the key matched, and the event went to the existing instance (`process.correlated`) | — |
 | the step's task did not appear, the instance is `failed` with `intent_failed` | the core refused a command from the process identity (permissions, unknown role) | grant the identity the needed permission; check the assignment roles |
 | a deadline is marked "provisional" | the evaluation touched a calendar year with `provisional: true` or a year outside the calendar | publish the approved calendar year; the timers are recalculated automatically |
 | `409 process_version_conflict` | the version was already published with different content | increase `spec.version` |
+| a step declares `due`, but there are no `process.sla_*` events | the instance runs on a version published before SLA deadlines appeared (revision 1); republishing without changes returned the same version | publish `spec.version: N+1` and migrate open instances (see [Which versions get deadlines](#engine-revision)) |
+| `sla_calendar_missing` or `sla_calendar_without_hours` on publication | a deadline in working units without a calendar, or `workhours` by a calendar without working hours | set `spec.calendar` or `due.calendar`; add `workingHours` to the calendar |
+| a calendar fails the schema on `workingHours` | a time without quotes was read as a number | write `from: "09:00"` in quotes |
+| `slaState: unknown`, a `process.sla_failed` event | the deadline was not computed: no calendar, an expression error, the calendar lost its working hours | fix the calendar or the deadline expression; the instance keeps working |
 | `422 migration_required` when applying | open instances are on a removed element | add `migrations` with `pin` or `migrate` and a map |
 
 ## See also
@@ -853,6 +1181,6 @@ part of the delivery.
 - [Processes and the knowledge base](knowledge.md)
 - [Expressions](expressions.md)
 - [Package tests](package-tests.md)
-- [Process language schema](../reference/process-schema.md)
+- [Package schema: process](../reference/package-schema.md#process)
 - [Catalog packages](../control-plane/catalog-packages.md#processes)
 - [Approvals](../control-plane/approvals.md)

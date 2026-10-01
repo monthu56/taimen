@@ -16,7 +16,7 @@
 
 ```mermaid
 flowchart LR
-    P["Пакет<br/>notification-rules/*.yaml"] -->|cp_packages apply| NS["notification-service<br/>notification_rules"]
+    P["Пакет<br/>notification-rules/*.yaml"] -->|package-sdk apply| NS["notification-service<br/>notification_rules"]
     CP["Control Plane<br/>журнал событий"] -->|"фильтр = on.type ∪ close.on"| C["Потребитель событий"]
     NS --> C
     C -->|"правило: on.when → recipient → шаблон"| N["Уведомление"]
@@ -33,7 +33,7 @@ flowchart LR
 ## Пример
 
 ```yaml
-# yaml-language-server: $schema=../../schema/v1/object.schema.json
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<тег>/schema/v1/object.schema.json
 apiVersion: taimen.ai/v1
 kind: NotificationRule
 key: approval-requested
@@ -57,6 +57,8 @@ spec:
   close:
     "on": [approval.approved, approval.rejected, approval.cancelled]
 ```
+
+Строку `$schema` пишет `package-sdk init`: адрес схемы того выпуска SDK, с тега которого он поставлен (в рабочей копии без тега — относительный путь к схеме установленного SDK).
 
 !!! warning "Ключ `on` — в кавычках"
     Загрузчики YAML 1.1 (в том числе тот, которым установщик читает пакеты) читают
@@ -98,6 +100,97 @@ spec:
 создаётся, в журнал сервиса пишутся ключ правила и id события. Роль без
 держателей — запись в журнале доставки без адресатов. Principal или роль,
 неизвестные ядру, — событие для этого правила пропускается.
+
+### Адресат из события процесса { #process-recipients }
+
+События сроков процесса (`process.sla_warning`, `process.sla_breached`,
+`process.sla_failed`) сами несут адресатов: `payload.owner` — владелец
+процесса, `payload.assignee` — исполнитель шага. Оба в форме
+`{principalId, roleId, workspaceId}`, заполнено одно из `principalId` и
+`roleId` (см. [Сроки и SLA](../processes/index.md#sla-recipients)). Правилу
+не нужен id человека в переменной установки: кому писать, решает `owner`
+процесса.
+
+```yaml
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<тег>/schema/v1/object.schema.json
+apiVersion: taimen.ai/v1
+kind: NotificationRule
+key: process-sla-breached
+spec:
+  description: Срок шага процесса нарушен — уведомление владельцу процесса.
+  "on":
+    type: process.sla_breached
+    when: {eq: [{var: payload.scope}, step]}
+  recipient: {kind: role, ref: payload.owner.roleId, workspace: payload.owner.workspaceId}
+  notification:
+    type: process.sla_breached
+    title: "Нарушен срок: {{payload.definitionKey}} {{payload.instanceKey}}"
+    body: |-
+      Шаг «{{payload.element}}» (попытка {{payload.attempt}}) не закрыт в срок {{payload.dueAt}}.
+      Просрочка, с: {{payload.overdueSeconds}}.
+  dedupKeyTemplate: "process-sla:{{payload.instanceId}}:{{payload.scope}}:{{payload.element}}:{{payload.attempt}}"
+```
+
+- **Владелец-роль** — `kind: role` с `ref: payload.owner.roleId` и
+  `workspace: payload.owner.workspaceId`: уведомление получают держатели
+  роли в workspace процесса.
+- **Владелец-principal** — отдельное правило с `kind: assigned` и
+  `ref: payload.owner.principalId`. У каждого события заполнено одно из
+  полей, и правило, чей адресат пуст, уведомления не создаёт — два правила
+  рядом не дублируют друг друга.
+- **Исполнитель шага** — те же формы по `payload.assignee`.
+- **Срок процесса целиком** (`scope: process`) — своё правило: у него
+  `element` и `attempt` пусты, и ключ дедупликации с ними был бы пуст —
+  такое событие правило пропускает. Ключ срока процесса —
+  `process-sla:{{payload.instanceId}}:process`.
+- Владелец не разрешился (роль не заведена) — `owner` пуст, адресата нет,
+  уведомление не создаётся; событие в журнале ядра остаётся.
+
+На одну попытку шага ядро пишет не больше одного `process.sla_warning` и
+одного `process.sla_breached`, поэтому ключ «экземпляр + scope + шаг +
+попытка» даёт одно уведомление на нарушение, а повторный вход в шаг — новое.
+
+Уровень эскалации с `action: notify` (событие `process.escalated`) несёт
+своих адресатов в `payload.addressees` — по одному на каждый элемент `to`
+уровня, в его порядке, в той же форме `{principalId, roleId, workspaceId}`.
+Роль ядро ищет сначала в workspace экземпляра, затем на уровне tenant.
+Неразрешённый элемент — `null` в `addressees` и запись с причиной в
+`payload.unresolved`. Одно правило адресует один индекс; уровню с
+несколькими адресатами — правило на каждый индекс:
+
+```yaml
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<тег>/schema/v1/object.schema.json
+apiVersion: taimen.ai/v1
+kind: NotificationRule
+key: process-escalation-notify
+spec:
+  description: Уровень эскалации notify — уведомление первому адресату уровня.
+  "on":
+    type: process.escalated
+    when: {eq: [{var: payload.action}, notify]}
+  recipient: {kind: role, ref: payload.addressees.0.roleId, workspace: payload.addressees.0.workspaceId}
+  notification:
+    type: process.escalated
+    title: "Эскалация: {{payload.definitionKey}} {{payload.instanceKey}}"
+    body: "Шаг «{{payload.element}}» не сделан в срок, уровень {{payload.level}}."
+  dedupKeyTemplate: "process-escalated:{{payload.instanceId}}:{{payload.element}}:{{payload.level}}:0:{{event.id}}"
+```
+
+- **Адресат-роль** — `kind: role` с `ref: payload.addressees.0.roleId` и
+  `workspace: payload.addressees.0.workspaceId`, как выше. Роли нет ни в
+  workspace экземпляра, ни на уровне tenant — `addressees[0]` пуст, и
+  правило уведомления не создаёт.
+- **Адресат-principal** — для `to: [{agent: …}]` или id principal ядро
+  заполняет `addressees.<i>.principalId`, а `roleId` пуст. Такому адресату
+  нужно отдельное правило с `kind: assigned` и
+  `ref: payload.addressees.0.principalId` — как у владельца-principal: у
+  адресата заполнено одно из полей, и два правила рядом не дублируют друг
+  друга.
+- **Ключ** — экземпляр, шаг, уровень, индекс адресата и `event.id`. Номер
+  уровня считается в пределах шага, а шаг может входиться повторно (повтор
+  блока `retry`, возврат на доработку): ядро пишет одно `process.escalated` на
+  вход в шаг и уровень, и каждое такое событие — новое уведомление. Повторная
+  доставка того же события `event.id` не меняет — уведомление одно.
 
 ### Шаблоны и корни
 
@@ -243,12 +336,13 @@ scopes](../iam/tokens.md)).
 ## Применение пакетом
 
 Правила — объекты пакета в папке `notification-rules/`. Установщик
-`tools/cp_packages.py` применяет их **к сервису уведомлений, а не к ядру** и
+`package-sdk` применяет их **к сервису уведомлений, а не к ядру** и
 последними — после всех видов ядра:
 
-1. до первой записи — `:validate` всех правил установки; отказ сервиса
-   останавливает установку целиком;
-2. `POST` только тех правил, где `:validate` ответил `changed: true`; остальные —
+1. `plan` — `:validate` всех правил установки; отказ сервиса останавливает план
+   целиком, до записи дело не доходит;
+2. в секцию плана `notification-rules` попадают только правила, где `:validate`
+   ответил `changed: true`; `apply --plan` делает `POST` ровно их, остальные —
    «без изменений»;
 3. `retire.NotificationRule` файла установки — `:retire`; отправленные
    уведомления остаются.
@@ -257,14 +351,15 @@ scopes](../iam/tokens.md)).
 окружении), например `https://platform.example.com/notify`. Токен — переменная
 `NOTIFY_TOKEN` (access token audience `notification-service`, scope
 `notifications:admin`) или обмен того же IAM credential, которым установщик ходит
-в ядро, на этот audience (PAT должен допускать audience в потолке). Без адреса
-сервиса `apply` пропускает правила уведомлений с предупреждением.
+в ядро, на этот audience (PAT должен допускать audience в потолке). Установка с
+правилами уведомлений без адреса сервиса и токена не планируется: `plan` отказывает.
 
 ```bash
 export CP_TOKEN=<access-token audience control-plane>
 export NOTIFY_TOKEN=<access-token audience notification-service>
-python3 tools/cp_packages.py apply --install deploy/<окружение>/packages.yaml \
-  --server https://platform.example.com
+package-sdk plan --install deploy/<окружение>/packages.yaml \
+  --server https://platform.example.com --out plan.json
+package-sdk apply --plan plan.json --server https://platform.example.com
 ```
 
 ```text
@@ -275,7 +370,7 @@ python3 tools/cp_packages.py apply --install deploy/<окружение>/package
 Выгрузка действующей версии в пакет (ядро не нужно):
 
 ```bash
-python3 tools/cp_packages.py export --kind NotificationRule --key task-verified \
+package-sdk export --kind NotificationRule --key task-verified \
   --package packages/<пакет>
 ```
 
@@ -304,7 +399,7 @@ python3 tools/cp_packages.py export --kind NotificationRule --key task-verified 
 | Симптом | Причина | Что делать |
 |---|---|---|
 | Уведомлений о событиях нет совсем | В tenant'е нет включённых правил — потребитель не запущен | Применить пакет `notify` (`NOTIFICATION_SERVICE_URL` и токен заданы) |
-| `apply` пишет «NotificationRule не применены: не задан сервис уведомлений» | Нет `NOTIFICATION_SERVICE_URL` или токена | Задать переменную и `NOTIFY_TOKEN` (или PAT с audience `notification-service`) |
+| План не строится: «в установке есть правила уведомлений — нужен сервис уведомлений» | Нет `NOTIFICATION_SERVICE_URL` или токена | Задать переменную и `NOTIFY_TOKEN` (или PAT с audience `notification-service`) |
 | `422 invalid_notification_rule`, `unknown_event_type` | Тип события не из каталога ядра, известного сервису | Проверить тип; новый тип события появляется у сервиса с его обновлением |
 | `invalid_spec` на `/on` | `on` без кавычек превратился в `true` | Писать `"on":` |
 | `unknown_field` на пути `task.…` | У события нет задачи или поле не из проекции задачи | Убрать корень `task` или сменить событие |
@@ -318,5 +413,6 @@ python3 tools/cp_packages.py export --kind NotificationRule --key task-verified 
 - [Telegram](telegram.md) — решения кнопками.
 - [Пакеты каталога](../control-plane/catalog-packages.md) — вид `NotificationRule`.
 - [События](../control-plane/events.md) — каталог событий ядра.
+- [Процессы](../processes/index.md#sla) — сроки SLA и события `process.sla_*`.
 - [Цели, приёмка и evidence](../control-plane/goals-and-evidence.md#verification-stage) — `task.verification_failed`.
 - [Approvals](../control-plane/approvals.md)

@@ -49,6 +49,8 @@ bootstrap-токены всех профилей, включая экспери�
 | `iam-signing.pem` | Приватный ключ подписи access token (RSA 3072) | `make secrets` | `iam-service` (uid 10001, docker secret) |
 | `harness-pat` | PAT оператора (read/write/admin) | bootstrap, шаг 4 | Переносится на рабочее место оператора |
 | `control-plane-iam.env` | `CP_IAM_CLIENT_ID`, `CP_IAM_CLIENT_SECRET` — service account ядра | bootstrap, шаг 2a | `docker compose` (`env_file` трёх процессов ядра) |
+| `runtime-console-oidc-secret` | Секрет OIDC-клиента консоли `runtime-console` (тот же, что в IdP); `0600`, владелец uid 10001 | `make secrets` или скрипт заведения OIDC-клиента | `console` (uid 10001, docker secret) |
+| `runtime-console-cookie-secret` | Ключ cookie консоли, не короче 32 байт; `0600`, владелец uid 10001 | `make secrets` | `console` (uid 10001, docker secret) |
 
 Права: всё — `0600`. Файлы, которые монтируются в контейнер (ключи подписи),
 на Linux должны принадлежать uid `10001`:

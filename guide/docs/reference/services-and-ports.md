@@ -42,8 +42,9 @@ explicitly: `make up PROFILES="core notify edge"` or
 
 | Profile | Status | Services |
 |---|---|---|
-| `core` | core | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` |
+| `core` | core | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap`, `console` |
 | `edge` | core | `caddy`, `guide` |
+| `idp-dex` | tests only | `dex-render`, `dex`: a different OIDC IdP for the console compose test |
 
 
 !!! note "Dependencies between profiles"
@@ -180,6 +181,25 @@ explicitly: `make up PROFILES="core notify edge"` or
 It stores only the content of core artifacts; see
 [Object storage](../operations/object-storage.md).
 
+### console
+
+| Parameter | Value |
+|---|---|
+| Image | `${IMAGE_PREFIX:-taimen}/runtime-console`, built from `web/console/Dockerfile` (context `web/console`, `node:24-alpine`) |
+| User | `10001:10001` |
+| Port | 8090, not published; from outside, `/console/*` through Caddy |
+| Depends on | `iam-service`, `control-plane-api` (healthy) |
+| Secrets | `runtime_console_oidc_secret`, `runtime_console_cookie_secret` |
+| Healthcheck | `GET http://127.0.0.1:8090/console/healthz` |
+| Memory limit | `128m` |
+
+The console server and the built interface ship in one image; there is no
+database of its own, sessions live in process memory. Sign-in goes through the
+organization's OIDC IdP; calls to the core and IAM use internal names on behalf
+of the signed-in person.
+See [Console](../operator/console.md);
+the `RUNTIME_CONSOLE_*` variables are in the [reference](environment.md).
+
 ## Edge (`edge`)
 
 ### caddy
@@ -242,6 +262,8 @@ Names are set by the `VOLUME_*` variables (see
 | Secret | Default file | Used by |
 |---|---|---|
 | `iam_signing_key` | `./secrets/iam-signing.pem` | `iam-service` |
+| `runtime_console_oidc_secret` | `./secrets/runtime-console-oidc-secret` (`RUNTIME_CONSOLE_OIDC_SECRET_FILE`) | `console`, `dex-render` |
+| `runtime_console_cookie_secret` | `./secrets/runtime-console-cookie-secret` (`RUNTIME_CONSOLE_COOKIE_SECRET_FILE`) | `console` |
 
 Containers read secrets under an unprivileged uid (10001 for the core
 services). On Linux, run `chown 10001` on the files in `secrets/`, and keep

@@ -39,7 +39,7 @@ Where expressions appear:
 In YAML an expression is a string. A string literal inside an expression is
 enclosed in single quotes: `"'invoice:' + data.number"`.
 
-## Variables
+## Variables { #variables }
 
 | Variable | What | Type |
 |---|---|---|
@@ -65,6 +65,45 @@ its handler, and `compensated` (the step being compensated) inside
 | `decide` | the outputs of the table row; for `collect`, `{items: [...]}` |
 | `recall` | `{nodes, edges, truncated}` |
 | `listen` | `{option, event}` |
+
+In `output.as` of a `human` step, its task `task` is visible too: the form
+gives only the fields, and who did the task is `task.assigneeId`, the assignee
+at completion (in a scenario, `complete.by`). This is how you keep who
+reviewed the case for the separation of duties of the next approval:
+
+```yaml
+- id: review
+  human: {taskType: purchase-review, assign: [{role: purchase-buyer}]}
+  output:
+    as:
+      decision: step.result.decision
+      reviewedBy: string(task.assigneeId)   # the principal id as a string
+- id: approve-large
+  when: data.decision == 'approve'
+  approve:
+    approvers: [{role: purchase-approver}]
+    quorum: any
+    separationOfDuties: "[data.reviewedBy]"   # the reviewer does not approve
+```
+
+## Installation variables in expressions { #install-variables }
+
+A package's `${NAME}` is substituted into the file **as text before the
+expression is parsed**: the core sees ready CEL text. Hence two rules:
+
+```yaml
+# PURCHASE_APPROVAL_THRESHOLD=1000 is a number in the expression text; data.amount is a number,
+# so the integer is wrapped in double(), otherwise comparing int with double fails the check
+when: data.amount > double(${PURCHASE_APPROVAL_THRESHOLD})
+
+# REVIEW_CHANNEL=portal is a string: without quotes, CEL would read it as a variable name
+when: data.channel == '${REVIEW_CHANNEL}'
+```
+
+A value with a quote or a line break breaks the expression, so do not
+substitute such values into expressions. How variables
+are declared and where the values come from is in [Package
+anatomy](../packages/anatomy.md#variables).
 
 ## Types from the data schema { #types }
 
@@ -104,6 +143,8 @@ otherwise it would read as the year 1970.
 | `cal.addWorkdays(ts, n)` | the `n`-th workday after the day of `ts` (with `n < 0`, before it); the day of `ts` itself is not counted, `n = 0` returns the same moment; the time of day is preserved in the calendar's time zone |
 | `cal.isWorkday(ts)` | whether `ts` falls on a workday |
 | `cal.workdaysBetween(a, b)` | the number of workdays in `(a, b]`; negative when `b < a` |
+| `cal.addWorkingTime(ts, d)` | the moment after duration `d` of working time from `ts` by the calendar's [working hours](index.md#working-hours); a negative `d` goes back, a zero one returns `ts` itself |
+| `cal.workingTimeBetween(a, b)` | the duration of working time between `a` and `b` |
 
 The last argument is the calendar key (`cal.addWorkdays(ts, -3, 'ru')`). You
 can omit it if the process has `spec.calendar`; without a process calendar,
@@ -114,10 +155,15 @@ the short form is a type error at publication.
   not in the calendar, only the weekend days of the week are known.
 - An evaluation that touched a provisional year (`provisional: true`) or a
   year outside the calendar is marked "provisional".
+- Working-time functions require a calendar with `workingHours`. A calendar
+  without hours is an `expression_error` with `details.reason =
+  calendar_without_hours`; if no working time is found within the look-ahead,
+  `calendar_scan_limit`.
 
 ```yaml
 due: {at: "cal.addWorkdays(data.submissionEnd, -3)"}   # three workdays before the date
 when: cal.workdaysBetween(instance.clock, data.submissionEnd) < 3
+due: {at: "cal.addWorkingTime(data.receivedAt, duration('PT8H'))"}   # eight working hours after receipt
 ```
 
 ### Time and durations
@@ -208,8 +254,8 @@ profile historically use their own path syntaxes. They keep working until
 the packages are translated, and there is a command for the translation:
 
 ```bash
-python3 tools/cp_packages.py migrate-expr --package packages/<package>          # diff, writes nothing
-python3 tools/cp_packages.py migrate-expr --package packages/<package> --write  # write
+package-sdk migrate-expr --package packages/<package>          # diff, writes nothing
+package-sdk migrate-expr --package packages/<package> --write  # write
 ```
 
 - The command prints a diff per file; `--write` writes the changes while
@@ -245,5 +291,5 @@ python3 tools/cp_packages.py migrate-expr --package packages/<package> --write  
 
 - [Processes](index.md)
 - [Package tests](package-tests.md)
-- [Process language schema](../reference/process-schema.md#schema-cel)
+- [Package schema](../reference/package-schema.md#schema-cel)
 - [Work rules](../control-plane/work-rules.md)

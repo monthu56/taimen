@@ -36,7 +36,7 @@ CEL (Common Expression Language) в профиле платформы. Стат�
 В YAML выражение — строка. Строковый литерал внутри выражения берётся в
 одинарные кавычки: `"'invoice:' + data.number"`.
 
-## Переменные
+## Переменные { #variables }
 
 | Переменная | Что | Тип |
 |---|---|---|
@@ -61,6 +61,44 @@ CEL (Common Expression Language) в профиле платформы. Стат�
 | `decide` | выходы строки таблицы; у `collect` — `{items: [...]}` |
 | `recall` | `{nodes, edges, truncated}` |
 | `listen` | `{option, event}` |
+
+В `output.as` шага `human` видна и его задача `task`: форма даёт только поля,
+а кто задачу исполнил — `task.assigneeId`, исполнитель на момент завершения (в
+сценарии — `complete.by`). Так сохраняют того, кто разбирал дело, для
+разделения обязанностей следующего согласования:
+
+```yaml
+- id: review
+  human: {taskType: purchase-review, assign: [{role: purchase-buyer}]}
+  output:
+    as:
+      decision: step.result.decision
+      reviewedBy: string(task.assigneeId)   # id principal'а строкой
+- id: approve-large
+  when: data.decision == 'approve'
+  approve:
+    approvers: [{role: purchase-approver}]
+    quorum: any
+    separationOfDuties: "[data.reviewedBy]"   # разбиравший не согласует
+```
+
+## Переменные установки в выражениях { #install-variables }
+
+`${NAME}` пакета подставляется в файл **текстом до разбора** выражения:
+ядро видит уже готовый текст CEL. Отсюда два правила:
+
+```yaml
+# PURCHASE_APPROVAL_THRESHOLD=1000 — число в тексте выражения; data.amount — number,
+# поэтому целое оборачивают в double(), иначе сравнение int с double не пройдёт проверку
+when: data.amount > double(${PURCHASE_APPROVAL_THRESHOLD})
+
+# REVIEW_CHANNEL=portal — строка: без кавычек CEL прочитал бы её как имя переменной
+when: data.channel == '${REVIEW_CHANNEL}'
+```
+
+Значение с кавычкой или переводом строки ломает выражение — такие значения в
+выражения не подставляйте. Объявление
+переменных и откуда берутся значения — в [Анатомии пакета](../packages/anatomy.md#variables).
 
 ## Типы из схемы данных { #types }
 
@@ -100,6 +138,8 @@ data.?approval.orValue('') == 'approved'
 | `cal.addWorkdays(ts, n)` | `n`-й рабочий день после дня `ts` (при `n < 0` — до него); сам день `ts` не считается, `n = 0` — тот же момент; время суток сохраняется в поясе календаря |
 | `cal.isWorkday(ts)` | рабочий ли день `ts` |
 | `cal.workdaysBetween(a, b)` | число рабочих дней в `(a, b]`, при `b < a` — со знаком минус |
+| `cal.addWorkingTime(ts, d)` | момент через длительность `d` рабочего времени от `ts` по [рабочим часам](index.md#working-hours) календаря; отрицательная `d` — назад, нулевая — сам `ts` |
+| `cal.workingTimeBetween(a, b)` | длительность рабочего времени между `a` и `b` |
 
 Последний аргумент — ключ календаря (`cal.addWorkdays(ts, -3, 'ru')`). Его
 можно опустить, если у процесса есть `spec.calendar`; без календаря
@@ -110,10 +150,15 @@ data.?approval.orValue('') == 'approved'
   только выходные дни недели.
 - Вычисление, которое задело предварительный год (`provisional: true`) или
   год вне календаря, помечается «предварительно».
+- Функции рабочего времени требуют календарь с `workingHours`. Календарь без
+  часов — ошибка `expression_error` с `details.reason =
+  calendar_without_hours`; рабочее время не нашлось в пределах просмотра —
+  `calendar_scan_limit`.
 
 ```yaml
 due: {at: "cal.addWorkdays(data.submissionEnd, -3)"}   # за три рабочих дня до даты
 when: cal.workdaysBetween(instance.clock, data.submissionEnd) < 3
+due: {at: "cal.addWorkingTime(data.receivedAt, duration('PT8H'))"}   # восемь рабочих часов от получения
 ```
 
 ### Время и длительности
@@ -204,8 +249,8 @@ when: cal.workdaysBetween(instance.clock, data.submissionEnd) < 3
 команда:
 
 ```bash
-python3 tools/cp_packages.py migrate-expr --package packages/<пакет>          # diff, ничего не пишет
-python3 tools/cp_packages.py migrate-expr --package packages/<пакет> --write  # записать
+package-sdk migrate-expr --package packages/<пакет>          # diff, ничего не пишет
+package-sdk migrate-expr --package packages/<пакет> --write  # записать
 ```
 
 - Команда печатает diff по файлам; `--write` записывает с сохранением файла
@@ -240,5 +285,5 @@ python3 tools/cp_packages.py migrate-expr --package packages/<пакет> --writ
 
 - [Процессы](index.md)
 - [Тесты пакета](package-tests.md)
-- [Схема языка процессов](../reference/process-schema.md#schema-cel)
+- [Схема пакета](../reference/package-schema.md#schema-cel)
 - [Правила вывода работы](../control-plane/work-rules.md)

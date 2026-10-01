@@ -179,7 +179,8 @@ secrets, and you can commit it.
 | trace | `create_checkpoint`, `record_action`, `finish_action` |
 | artifacts | `create_artifact`, `get_artifact`, `list_artifacts` |
 | approvals | `request_approval`, `list_approvals`, `approve`, `reject`, `get_approval_outcome` |
-| tools | `search_tools`, `describe_tool`, `get_harness_manifest` |
+| tools | `search_tools`, `describe_tool` |
+| agents | `get_my_agent`, `get_agent`, `list_agents`, `publish_agent`, `list_agent_revisions` |
 
 The full contract is the Control Plane OpenAPI (`/openapi.json`, see
 [Control Plane API](../control-plane/api.md)).
@@ -195,9 +196,11 @@ The full contract is the Control Plane OpenAPI (`/openapi.json`, see
 
 !!! note "Who accesses memory directly"
     Executors get the task context through Control Plane (the harness and run context), not
-    from memory directly — see [Task context and memory](../control-plane/context.md). The
-    memory client is for services with their own grant on a namespace: knowledge ingestion
-    connectors, demos, package services.
+    from memory directly — see [Task context and memory](../control-plane/context.md). Package
+    code (processes, rules, skills, observers) also reaches memory only through the core (see
+    [Memory only through the core](index.md#memory-through-core)). The memory client is for
+    applications with their own grant on a namespace: knowledge ingestion connectors, chat
+    bots, consoles.
 
 ### Credential
 

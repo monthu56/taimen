@@ -116,6 +116,24 @@
 | `unknown_requirement` | 422 | Роль или capability из требований не найдена в scope задачи. | Создать роль в workspace задачи. |
 | `verification_unavailable` | 503 | Нечем проверить токен: JWKS недоступен дольше `CP_IAM_JWKS_STALE_AFTER_SECONDS` или источник отзыва недоступен. | Проверить доступность `iam-service` из контейнера. |
 
+### Отключение и включение principal { #principal-disable-enable }
+
+`POST /api/v1/principals/{principal_id}:disable` и `:enable` (CP-ADR-0077). Те же отказы
+возвращают ворота `POST /api/v1/authz:check` для действий `disable` и `enable` над
+ресурсом `principal`: в `reason.code` ответа — код эндпоинта.
+
+| Код | HTTP | Причина | Что делать |
+|---|---|---|---|
+| `permission_denied` | 403 | Нет права `principals.write`. | Выдать право в связке. |
+| `principal_kind_not_disableable`, `principal_kind_not_enableable` | 422 | Цель — сервисная учётка (`service`). | Сервис выключает его установщик. |
+| `cannot_disable_self` | 409 | Попытка отключить себя. | Отключает другой человек с правами. |
+| `permission_escalation` | 403 | `:disable`: у цели `admin` в неотозванной связке или API-ключе, а у вызывающего `admin` нет (`details.missing=["admin"]`). `:enable`: права живых ключей и неотозванных связок цели выходят за права вызывающего (`details.missing`). | Действовать администратором. |
+| `use_agent_retire` | 409 | `:disable`: цель — principal агента реестра (`details.agent`). | Выводить агента `POST /api/v1/agents/{key}:retire`. |
+| `use_agent_publish` | 409 | `:enable`: цель — principal агента реестра любого статуса (`details.agent`, `details.agentStatus`). | Возвращать агента публикацией ревизии. |
+
+Повтор по уже отключённому (`:disable`) или уже активному (`:enable`) principal'у —
+`200` без изменений.
+
 ### Идемпотентность
 
 | Код | HTTP | Причина | Что делать |
@@ -151,6 +169,8 @@
 | Код | HTTP | Причина | Что делать |
 |---|---|---|---|
 | `action_already_finished` | 409 | Action уже завершён. | Не завершать повторно. |
+| `agent_revision_mismatch` | 422 | `:start-run`: ревизия не принадлежит агенту вызывающего или передана principal без агента. | Передать ревизию своего агента (`GET /agents/me`) или не передавать поле. |
+| `agent_revision_required` | 422 | `:start-run` от principal, привязанного к агенту, без `agentRevisionId`. | Передать ревизию своего агента (`GET /agents/me`). |
 | `artifact_mismatch` | 422 | Run не принадлежит указанной задаче. | Сверить `taskId` и `runId`. |
 | `budget_exceeded` | 409 | Run превысил бюджет длительности. | Завершить run; увеличить `maxDurationSeconds` для нового. |
 | `invalid_action` | 422 | Пустое имя action. | Задать `action`. |
@@ -311,21 +331,12 @@
 | `task_terminal` | 409 | Skill с `external_write` не может действовать для закрытой задачи. | — |
 | `unsupported_skill_condition` | 422 | Условия skill этого вида пока не поддерживаются. | Убрать условие. |
 
-### Харнесс-манифест и поиск инструментов
+### Поиск инструментов
 
 | Код | HTTP | Причина | Что делать |
 |---|---|---|---|
-| `invalid_compile_reason` | 422 | `run_started` зарезервирован за автоматической компиляцией. | Указать другую причину. |
-| `invalid_declaration` | 422 | Объявленные разделы манифеста должны быть объектом. | Исправить манифест. |
-| `invalid_ephemeral_kind` | 422 | Недопустимый `kind` эфемерной записи. | См. сообщение. |
-| `invalid_ephemeral_summary` | 422 | Пустой или слишком длинный `summary`. | Сократить. |
-| `invalid_fallback_attempt` | 422 | Fallback провайдера должен объявлять `model.attempt` больше активного. | Увеличить `attempt`. |
-| `invalid_model_attempt` | 422 | `model.attempt` не положительное целое. | Исправить. |
 | `invalid_tool_query` | 422 | Слишком длинный запрос поиска инструментов. | Сократить. |
 | `invalid_tool_schema` | 422 | Input schema инструмента должна быть объектом. | Исправить схему. |
-| `server_authoritative_section` | 422 | Разделы, вычисляемые сервером, нельзя объявлять. | Убрать раздел. |
-| `unknown_manifest_section` | 422 | Неизвестный раздел манифеста. | Убрать раздел. |
-| `unsafe_manifest_payload` | 422 | Ссылка на память содержит локальные пути или чувствительные ключи. | Убрать их. |
 
 ### События и операции
 
@@ -445,6 +456,23 @@ runner, CLI, MCP-сервер, коннекторы) до или вместо о
 | `provisioning_source_exists` | 409 | SCIM-источник уже заведён. |
 | `population_managed_by_directory` | 409 | Популяцией principals управляет каталог (SCIM). |
 
+### Отключение и включение людей { #iam-people }
+
+`POST /api/v1/tenants/{tenant_id}/principals/{principal_id}:disable` и `:enable` (scope
+`iam:people`).
+
+| Код | HTTP | Причина |
+|---|---|---|
+| `human_principal_required` | 422 | По `iam:people` отключают и включают только людей. |
+| `self_disable_forbidden`, `self_enable_forbidden` | 409 | Попытка отключить или включить себя. |
+| `people_admin_protected` | 403 | `:disable`: цель — член группы `people-admins`; отключает её только bootstrap IAM, членство вызывающего не учитывается. `:enable`: цель входит в группу привилегий IAM (например, `people-admins`), в которой вызывающий не состоит; включает член той же группы или bootstrap IAM. |
+| `principal_paused` | 409 | `:enable`: principal приостановлен другим процессом; `:enable` это не снимает. |
+| `principal_provisioned` | 409 | `:enable`: человека отключил источник SCIM; включает его он же (`active: true`). |
+| `principal_status_not_enableable` | 409 | `:enable`: из этого статуса не включают. |
+| `principal_conflict` | 409 | `:enable`: статус principal'а изменился параллельно; перечитать и повторить. |
+| `idempotency_key_required` | 400 | `:enable` токеном без заголовка `Idempotency-Key` (bootstrap-токену ключ не обязателен). |
+| `idempotency_key_reused` | 409 | `:enable`: этот `Idempotency-Key` вызывающий уже использовал для другого principal'а. |
+
 ### Федерация identity
 
 | Код | HTTP | Причина |
@@ -462,6 +490,38 @@ SCIM-эндпоинты отвечают в формате SCIM (`scimType`): `i
 несовпадении `If-Match`, 401 без токена или с токеном не для
 `IAM_SCIM_AUDIENCE`, 403 без scope `IAM_SCIM_SCOPE` или без активного
 источника provisioning, 502/503 при недоступности upstream-провайдера.
+
+## Консоль runtime: люди { #console-people }
+
+Потоки раздела «Люди и роли» консоли (добавить, отключить, включить человека) — это
+оркестрация BFF консоли над IAM и ядром. Ответ бывает двух форм.
+
+- **Отказ по телу запроса** — сразу `422` в конверте Control Plane
+  `{"error": {"code"}}`, поток не начинается: `invalid_person` («Добавить»),
+  `invalid_profile` («Включить»).
+- **Отчёт потока** — `200`, и отказ лежит внутри отчёта:
+    - «Отключить» и «Включить»: верхнее поле `error` —
+      `{"service": "iam"|"cp", "status", "code", "missing"?}`, а поля шагов (`iam`, `cp`,
+      у включения ещё `binding`) показывают, где поток остановился (`failed`);
+    - «Добавить»: верхнего `error` нет, отказ — в шаге потока с `status: "failed"`:
+      `steps[i].error = {"status", "code", "missing"?}`, без `service`.
+
+Кроме кодов IAM и ядра (см. [выше](#principal-disable-enable) и
+[iam-service](#iam-people)), BFF отдаёт свои:
+
+| Код | HTTP | Причина | Что делать |
+|---|---|---|---|
+| `iam_login_closed` | 403 | «Включить»: участник ядра активен, а вход в IAM закрыт (частичное отключение), и у вызывающего нет `admin`. Открыть вход может только администратор, но не тогда, когда IAM отвечает `principal_provisioned` (отключила синхронизация кадров, SCIM) или `principal_paused` (приостановлен в IAM): эти отказы получит и администратор. | Повторить «Включить» администратором. |
+| `iam_principal_unknown` | 409 | «Включить»: у principal'а ядра нет строк связки с IAM этой консоли — новую связку не на что поставить. | Включать через API ядра: `:enable`, затем связка `POST /api/v1/principals/{principal_id}/iam-bindings` с явными правами. |
+| `invalid_profile` | 422 | «Включить»: профиль прав не `member` и не `admin`. Прямой ответ, не отчёт. | Выбрать профиль из списка. |
+| `invalid_person` | 422 | «Добавить»: тело запроса не годится: пустое или слишком длинное поле, неверный e-mail, workspace или роли, неизвестный профиль. Прямой ответ, не отчёт. | Заполнить форму. |
+| `permission_escalation` | 403 | «Добавить» и «Включить»: права выбранного профиля выходят за права вызывающего (`missing`). Проверяется до IAM. | Выбрать профиль «участник» или действовать администратором. |
+| `person_disabled` | 409 | «Добавить»: человек с этим e-mail отключён, его учётка IAM не активна или она уже связана с отключённым участником ядра. | Вернуть его кнопкой «Включить». |
+| `identity_disabled` | 409 | «Добавить»: учётка IdP отключена в IAM. | Разобраться с учёткой в IAM. |
+| `identity_mismatch` | 409 | «Добавить»: учётка IdP из формы не совпадает с уже связанной с этим человеком, либо principal IAM, найденный по учётке IdP или по записи человека, — не человек (`kind` не `human`). | Сверить идентификатор IdP. |
+| `identity_bound_elsewhere` | 409 | «Добавить»: учётка IAM уже связана с другим активным участником ядра, либо учётка IdP связана с principal'ом вне tenant. | Разобраться со связью в IAM и ядре. |
+| `identity_unverifiable` | 501, 502 | «Добавить»: IAM не даёт прочитать связи с IdP; поток остановлен. | Проверить версию IAM и его ответ. |
+| `lookup_incomplete` | 409 | «Добавить»: список участников ядра слишком длинный, проверить всех не удалось; консоль отказывает, чтобы не завести дубль. | Ограничение текущей версии консоли. |
 
 ## Коды platform-auth-sdk (resource services)
 

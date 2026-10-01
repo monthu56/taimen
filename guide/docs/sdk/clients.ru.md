@@ -182,7 +182,8 @@ tenant'у, workspace, проекту и репозиторию; `write_project_c
 | трасса | `create_checkpoint`, `record_action`, `finish_action` |
 | артефакты | `create_artifact`, `get_artifact`, `list_artifacts` |
 | approvals | `request_approval`, `list_approvals`, `approve`, `reject`, `get_approval_outcome` |
-| инструменты | `search_tools`, `describe_tool`, `get_harness_manifest` |
+| инструменты | `search_tools`, `describe_tool` |
+| агенты | `get_my_agent`, `get_agent`, `list_agents`, `publish_agent`, `list_agent_revisions` |
 
 Полный контракт — OpenAPI Control Plane (`/openapi.json`, см.
 [API Control Plane](../control-plane/api.md)).
@@ -199,9 +200,11 @@ tenant'у, workspace, проекту и репозиторию; `write_project_c
 !!! note "Кто ходит в память напрямую"
     Исполнители получают контекст задачи через Control Plane (контекст
     харнесса и run'а), а не из памяти напрямую — см.
-    [Контекст задачи и память](../control-plane/context.md). Клиент памяти
-    нужен сервисам с собственным грантом на namespace: коннекторам загрузки
-    знаний, демо, сервисам пакетов.
+    [Контекст задачи и память](../control-plane/context.md). Код пакетов —
+    процессы, правила, скиллы, наблюдатели — тоже ходит в память только через
+    ядро (см. [Память — только через ядро](index.md#memory-through-core)).
+    Клиент памяти нужен приложениям с собственным грантом на namespace:
+    коннекторам загрузки знаний, чат-ботам, консолям.
 
 ### Credential
 

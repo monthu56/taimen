@@ -40,14 +40,15 @@ python3 deploy/bootstrap.py --env .env
 | `--pat-ttl` | `15552000` (180 дней) | срок жизни выпускаемых PAT, секунды (не больше `IAM_PAT_MAX_TTL_SECONDS`, 365 дней) |
 | `--secrets-dir` | `secrets` | куда писать PAT и env-файлы service accounts |
 | `--packages` | `deploy/packages.yaml` | файл установки каталога (`kind: Installation`) — шаг 5b |
+| `--no-packages` | выкл. | пропустить шаг 5b: пакеты ставит человек планом (`plan --out` → `apply --plan`) |
 
 ### Зависимости
 
 Скрипт использует только стандартную библиотеку Python для HTTP, но шаг 5b
-импортирует `tools/cp_packages.py`, которому нужны **PyYAML** и **jsonschema**.
+импортирует `package-sdk`, которому нужны **PyYAML** и **jsonschema**.
 `make bootstrap` при установленном uv подключает их сам; без uv они нужны в
 системном Python.
-Доменные валидаторы Control Plane `cp_packages` берёт из сабмодуля
+Доменные валидаторы Control Plane `package-sdk` берёт из сабмодуля
 `control-plane/src`; если они не импортируются, выдаётся предупреждение и
 проверяется только схема формата.
 
@@ -234,9 +235,13 @@ service account нет.
     ```
 
 3. Токен пишется в `secrets/harness-pat` (0600); префикс и срок — в состояние.
-4. Проверочный обмен `POST /api/v1/platform-access-tokens:exchange` на токен
-   audience `control-plane` со всеми тремя scopes. Этим токеном выполняются
-   все последующие шаги.
+4. Первый обмен `POST /api/v1/platform-access-tokens:exchange` на токен
+   audience `control-plane` со всеми тремя scopes — сразу, чтобы неверный PAT
+   был виден на этом шаге. Все последующие шаги идут от имени оператора, но
+   токен берётся перед каждым запросом: access token живёт минуты, а шаг 5b —
+   дольше. Bootstrap обменивает PAT заново до истечения токена, а после
+   `401 invalid_credentials` — ещё раз и повторяет запрос, поэтому долгая
+   установка не падает на 401.
 
 Если `secrets/harness-pat` уже существует, выпуск пропускается и используется
 файл.
@@ -278,10 +283,20 @@ spec:
 Типы предметной области ставятся своими пакетами. Установка по умолчанию ставит
 образец `packages/example` — тип задачи `request`; замените его своими пакетами.
 
-`cp_packages.apply` сначала проверяет пакеты (JSON Schema формата, доменные
-валидаторы Control Plane, замкнутость ссылок), затем приводит tenant к ним в
-порядке `WorkspaceType`, `Capability`, `Role`, `Skill`, `ArtifactType`, `TaskType`,
-`Agent`, `ProjectTemplate`, `WorkRule`, `NotificationRule` (подробно — в [Пакетах
+Шаг ставит пакеты тем же единым планом, что и `package-sdk plan` → `apply
+--plan`: `install.plan` строит план и пишет его в
+`deploy/state/<окружение>.packages-plan.json`, `install.apply` применяет ровно
+его. Подтверждение человека здесь заменяет сам запуск bootstrap, и это помечено
+в журнале. Пустой план не применяется: повторный запуск ничего не пишет.
+
+План сначала проверяет пакеты (JSON Schema формата, доменные валидаторы Control
+Plane, замкнутость ссылок, `engines`, переменные установки), затем сравнивает их
+со стендом по секциям: каталог, план ядра для пакетов с процессами или
+календарями, онтологии и их включение, правила уведомлений, вывод из оборота.
+Каталог приводится в порядке `WorkspaceType`, `Capability`, `Role`, `Skill`,
+`ArtifactType`, `TaskType`, `Agent`, `ProjectTemplate`, `WorkRule`; у пакета с
+процессами или календарями типы задач, агентов, календари, процессы и правила
+ставит ядро своим планом (подробно — в [Пакетах
 каталога](../control-plane/catalog-packages.md)):
 
 | Вид объекта | Как применяется |
@@ -290,13 +305,22 @@ spec:
 | `WorkspaceType`, `Role` | создаются или приводятся `PATCH` |
 | `Capability` | только создание |
 | `Skill` | контракт неизменяем, меняется поднятием версии; описание и config — `PATCH` |
-| `retire` в файле установки | указанные типы и шаблоны → `deprecated` |
+| `retire` в файле установки | указанные объекты выводятся из оборота |
 
-Строки `${NAME}` в `spec` подставляются из `.env` и окружения процесса. Правила
-уведомлений (`NotificationRule`) применяются к сервису уведомлений, если задан
-`NOTIFICATION_SERVICE_URL`, иначе пропускаются с предупреждением. Результат — карта
-`catalog` в состоянии. Подробно —
-[Пакеты каталога](../control-plane/catalog-packages.md).
+Строки `${NAME}` в `spec` подставляются из `.env` и окружения процесса. Если в
+установке есть правила уведомлений (`NotificationRule`) или их вывод из
+оборота, нужен сервис уведомлений: адрес — `NOTIFICATION_SERVICE_URL`, токен —
+`NOTIFY_TOKEN` или обмен PAT оператора на audience `notification-service`
+(для такой установки bootstrap выпускает PAT оператора с этим audience;
+обменянный токен, как и токен ядра, обновляется перед истечением,
+`NOTIFY_TOKEN` — нет). Без
+адреса план отказывает, и bootstrap останавливается на шаге 5b. Итог шага —
+запись `packages` в состоянии: файл установки, путь к плану, `planHash`, число
+изменений и признак `applied`.
+
+Флаг `--no-packages` пропускает шаг: на работающем стенде пакеты ставит
+человек — `package-sdk lock` → `plan --out` → просмотр плана → `apply --plan`
+(см. [Установку и выпуск](../packages/install-and-release.md#plan)).
 
 ### 5c. Сервис уведомлений
 
@@ -311,7 +335,13 @@ Plane):
    перевыпускается, прежняя отзывается.
 2. `POST /api/v1/agents` — публикация описания в ядре.
 3. `PUT /api/v1/agents/{key}/identity` — привязка IAM principal учётки;
-   principal ядра и связку с правами из описания выводит ядро.
+   principal ядра и связку с правами из описания выводит ядро. Повтор с той же
+   учёткой ничего не меняет.
+4. Если учётка перевыпущена, а ядро помнит прежнюю (`409
+   agent_identity_conflict` на шаге 3), —
+   `POST /api/v1/agents/{key}/identity:replace`: principal ядра остаётся
+   прежним, прежняя связка отзывается, новая получает права текущей ревизии
+   описания.
 
 После выпуска файла скрипт напоминает пересоздать сервис
 (`docker compose --profile notify up -d notification-service`).
@@ -362,6 +392,8 @@ credential для MCP-плагина/CLI: ~/.config/iam/credentials.json, клю
 | `… ссылается на IAM tenant …, которого нет в IAM (volumes сброшены?)` | volumes сброшены, файл состояния остался | `make reset-state` и повторить bootstrap |
 | `пакеты не прошли проверку: …` | ошибка в YAML пакета | `make packages-check`, исправить пакет |
 | `platform-access-tokens:exchange: HTTP 500` | IAM не может прочитать ключ подписи | на Linux `chown 10001:10001 secrets/iam-signing.pem`, перезапустить `iam-service` |
+| `токен audience notification-service не получен` | в установке есть правила уведомлений, а PAT оператора выпущен без audience `notification-service` (например, до того, как они появились) | задать `NOTIFY_TOKEN` или удалить `secrets/harness-pat` и запустить bootstrap снова: шаг 4 выпустит PAT с этим audience |
+| `5b. установка пакетов остановлена: стенд ответил HTTP 401` | PAT оператора отозван или истёк: просроченный access token bootstrap обновляет сам | перевыпустить PAT (см. выше) |
 
 ## См. также
 

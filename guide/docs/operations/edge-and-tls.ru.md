@@ -39,6 +39,7 @@ flowchart LR
 | `/iam/*` | `iam-service:8010` | срезается (`handle_path`) | `core` | IAM для клиентов: JWKS, обмен/интроспекция/отзыв PAT, `tokens/exchange`, `federation:*`, SCIM; issuer `${TAIMEN_PUBLIC_URL}/iam`. Административные пути — 404 (см. ниже) |
 | `/api/v1/*`, `/health/*`, `/docs*`, `/redoc*`, `/openapi.json` | `control-plane-api:8000` | нет | `core` | Control Plane API, WebSocket-подписки идут тем же маршрутом. `/metrics` наружу не выводится |
 | `/notify/*` | `notification-service:8000` | срезается | `notify` | Сервис уведомлений: API и инбокс, вебхук бота Telegram (`/notify/channels/telegram/webhook`, проверяется секретом вебхука), точка приёма скилла `notify.send@1` |
+| `/console/*` | `console:8090` | **сохраняется** (`handle`; сервер консоли сам живёт под `/console`) | `core` | [Консоль](../operator/console.md): вход OIDC, API, WebSocket событий, интерфейс. `flush_interval -1` — потоки без буферизации. `/console` без слэша — редирект `301` на `/console/` |
 | `/guide/*` | `guide:8080` | срезается | `edge` | Это руководство: статический сайт MkDocs (`guide/Dockerfile`) |
 
 

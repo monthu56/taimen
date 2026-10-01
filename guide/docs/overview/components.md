@@ -20,9 +20,10 @@ which the components are attached as git submodules, **flat at the root**:
 ├── platform-auth-sdk/      # submodule (library)
 ├── skill-sdk/              # submodule (library)
 ├── platform-llm/           # submodule (library)
+├── package-sdk/            # submodule (package author tools)
 ├── compose.yml  .env.example  Makefile
 ├── deploy/                 # bootstrap.py, Caddyfile
-├── tools/                  # smoke, fill_secrets, cp_packages, …
+├── tools/                  # smoke, fill_secrets, docs_gen, …
 └── docs/                   # architecture and ADRs
 ```
 
@@ -46,6 +47,7 @@ submodule pointer in the superproject is updated in a separate commit.
 |---|---|---|---|
 | **control-plane** | Authoritative operational state: tasks, types, claims, runs, approvals, artifacts, goals, event log, harness protocol; the `control-plane` CLI, the `control-plane-mcp` MCP server, the `control-plane-agent` executor daemon | `control-plane-api`, `control-plane-worker`, `context-adapter` (one image) | PostgreSQL 16 (`control-plane-db`) |
 | **iam-service** | Tenants, principals, audiences, PAT, service accounts, federation with external IdPs, SCIM, RS256 token issuance, JWKS | `iam-service` | PostgreSQL 16 (`iam-db`) |
+| **console** | Web console of the running organization: pulse, work provenance, processes, rules, agents, control actions, packages, people and roles. Superproject code (`web/console`), no database of its own; see [Console](../operator/console.md) | `console` | none (sessions in memory) |
 | **memory-service** | Knowledge graph with temporal facts and provenance, documents, hybrid search (vector + lexical + graph), Context Compiler; HTTP API, MCP server, CLI | `memory-service` | PostgreSQL 16 with Apache AGE and pgvector (`memory-db`, its own image) |
 
 ### Libraries
@@ -55,6 +57,7 @@ submodule pointer in the superproject is updated in a separate commit.
 | **platform-auth-sdk** | The shared Policy Enforcement Point: IAM token verification against JWKS, trusted auth context, revocation, entitlement and policy checks, a single denial contract, audit. Used by all resource services |
 | **skill-sdk** | You write a skill once, in code; the SDK provides the contract, the invocation context, hosting over the `local`, `http`, and `mcp` protocols, and YAML export into a catalog package |
 | **platform-llm** | A shared LLM client: any OpenAI-compatible `/chat/completions`, responses constrained by a JSON schema, retries, and model fallback |
+| **package-sdk** | Tools for catalog package authors: the `package-sdk` CLI (`check`, `test`, `lock`, `plan`, `apply`), the format schemas, the `package_sdk.connector` observer runtime, and the `package-author` Claude Code plugin. See [Packages](../packages/index.md) |
 | **control-plane-client** | The Control Plane client (distribution in `control-plane/client`): PAT-to-token exchange, retries, typed calls. See [Service clients](../sdk/clients.md) |
 
 ### Peripheral components
@@ -85,7 +88,7 @@ flowchart LR
 
 | Profile | Services | Status | When to enable |
 |---|---|---|---|
-| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` | **stable core** | always (MinIO stores the core's artifact content) |
+| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap`, `console` | **stable core** | always (MinIO stores the core's artifact content) |
 | `edge` | `caddy` | stable | always, unless the edge is provided some other way |
 | `notify` | `notification-db`, `notification-service` | optional | notifications for people based on Control Plane events; bootstrap creates the service's account |
 

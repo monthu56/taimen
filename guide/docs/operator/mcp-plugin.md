@@ -228,7 +228,7 @@ Read-only (call freely):
 | `cp_list_task_types`, `cp_get_task_type` | the type registry: statuses, transitions, field schema, approval outcomes |
 | `cp_list_goals`, `cp_get_goal` | goals and their work |
 | `cp_list_comments` | the task discussion |
-| `cp_get_run`, `cp_get_run_context`, `cp_harness_manifest` | a run, its context, and a configuration snapshot |
+| `cp_get_run`, `cp_get_run_context` | a run and its context |
 | `cp_list_artifacts`, `cp_list_approvals`, `cp_list_events` | artifacts, approvals, the event log |
 | `cp_list_projects`, `cp_get_project`, `cp_project_config`, `cp_workspace_tree` | projects and the Workspace tree |
 | `cp_search_tools`, `cp_describe_tool`, `cp_describe_skill` | the catalog of tools and skills |

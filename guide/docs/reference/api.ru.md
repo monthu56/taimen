@@ -15,10 +15,22 @@
 <!-- generated:api-control-plane -->
 _Раздел генерируется из кода — не правьте его руками._
 
-Версия API `0.9.0`, операций: 176.
+Версия API `0.9.0`, операций: 225.
 
 | Метод | Путь | Описание | Периметр |
 |---|---|---|---|
+| `GET` | `/api/v1/agents` | A page of agents; include=status adds the observed state of each | публичный |
+| `POST` | `/api/v1/agents` | Publish an agent spec: a new revision only when its canonical hash differs | публичный |
+| `GET` | `/api/v1/agents/me` | The agent the caller is, with its current revision | публичный |
+| `PUT` | `/api/v1/agents/{key}/identity` | Link the IAM identity of an agent; the core derives principal and binding | публичный |
+| `POST` | `/api/v1/agents/{key}/identity:replace` | Move a service agent to a new IAM identity; the principal stays the same | публичный |
+| `GET` | `/api/v1/agents/{key}/revisions` | Revisions of an agent, newest first, without their specs (those are key@revision) | публичный |
+| `PATCH` | `/api/v1/agents/{key}/state` | Change the desired state or replicas; never a new revision | публичный |
+| `GET` | `/api/v1/agents/{key}/status` | Observed state of an agent | публичный |
+| `PUT` | `/api/v1/agents/{key}/status` | Report the observed state of an agent (placement service only) | публичный |
+| `POST` | `/api/v1/agents/{key}:retire` | Retire an agent: stop it, revoke its binding, keep its history | публичный |
+| `GET` | `/api/v1/agents/{ref}` | An agent by key (current revision) or key@revision | публичный |
+| `POST` | `/api/v1/agents:validate` | Run every check of POST /agents without saving anything | публичный |
 | `POST` | `/api/v1/api-keys/{api_key_id}:revoke` | Revoke Api Key | публичный |
 | `GET` | `/api/v1/approvals` | List Approvals | публичный |
 | `POST` | `/api/v1/approvals` | Request Approval | публичный |
@@ -28,10 +40,21 @@ _Раздел генерируется из кода — не правьте е�
 | `POST` | `/api/v1/approvals/{approval_id}:cancel` | Cancel | публичный |
 | `POST` | `/api/v1/approvals/{approval_id}:reject` | Reject | публичный |
 | `POST` | `/api/v1/approvals/{approval_id}:replay-outcome` | Resume a failed or stuck approval outcome at its first action that did not execute | публичный |
+| `PUT` | `/api/v1/artifact-contents` | Upload the bytes of an artifact; returns a contentRef | публичный |
+| `GET` | `/api/v1/artifact-types` | List Artifact Types | публичный |
+| `POST` | `/api/v1/artifact-types` | Create the next immutable version of an artifact type | публичный |
+| `GET` | `/api/v1/artifact-types/{ref}` | Get Artifact Type | публичный |
 | `GET` | `/api/v1/artifacts` | List Artifacts | публичный |
 | `POST` | `/api/v1/artifacts` | Create Artifact | публичный |
 | `GET` | `/api/v1/artifacts/{artifact_id}` | Get Artifact | публичный |
+| `GET` | `/api/v1/artifacts/{artifact_id}/content` | Stream the stored content of an artifact | публичный |
+| `POST` | `/api/v1/artifacts/{artifact_id}:purge-content` | Remove the stored bytes of an artifact (admin); the record stays | публичный |
+| `POST` | `/api/v1/authz:check` | Whether the caller may perform each action on its resource, as the endpoint decides | публичный |
 | `POST` | `/api/v1/bootstrap` | Create the first tenant, admin principal, admin API key and, optionally, the admin's IAM binding | публичный |
+| `GET` | `/api/v1/calendars` | List Calendars | публичный |
+| `POST` | `/api/v1/calendars` | Publish a calendar: a new version only when its canonical hash differs | публичный |
+| `POST` | `/api/v1/calendars/{key}:retire` | Retire a calendar no process needs any more | публичный |
+| `GET` | `/api/v1/calendars/{ref}` | A calendar by key (latest version) or key@version | публичный |
 | `GET` | `/api/v1/capabilities` | List Capabilities | публичный |
 | `POST` | `/api/v1/capabilities` | Create Capability | публичный |
 | `GET` | `/api/v1/capabilities/{capability_id}` | Get Capability | публичный |
@@ -59,14 +82,24 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/goals/{goal_id}/work` | Work items that serve this goal, newest first | публичный |
 | `GET` | `/api/v1/harness/context` | Get Harness Context | публичный |
 | `POST` | `/api/v1/iam-bindings/{binding_id}:revoke` | Close entry for a federated identity without waiting for its token to expire | публичный |
+| `POST` | `/api/v1/knowledge/documents` | Submit Document | публичный |
+| `POST` | `/api/v1/knowledge/entities:query` | Query Entities | публичный |
 | `POST` | `/api/v1/knowledge/packs` | Register Pack | публичный |
+| `GET` | `/api/v1/knowledge/packs/{ref}` | Get Pack | публичный |
 | `POST` | `/api/v1/knowledge/snapshots` | Submit Snapshot | публичный |
+| `POST` | `/api/v1/knowledge/snapshots:preview` | Preview Snapshot | публичный |
+| `GET` | `/api/v1/me/attention` | What needs the calling principal now, highest score first | публичный |
+| `POST` | `/api/v1/me/attention/{item_key}:feedback` | Record whether an item of the caller's attention list was worth showing | публичный |
 | `POST` | `/api/v1/observations` | Record Observation | публичный |
 | `GET` | `/api/v1/operations/context-adapter` | Context Adapter Status | публичный |
 | `POST` | `/api/v1/operations/context-adapter/{tenant_id}:rebuild` | Rebuild Context Adapter | публичный |
 | `POST` | `/api/v1/operations/context-adapter/{tenant_id}:redrive` | Redrive Context Adapter | публичный |
 | `POST` | `/api/v1/operations/journal:archive` | Archive Journal | публичный |
 | `POST` | `/api/v1/operations/journal:prune` | Prune Journal | публичный |
+| `POST` | `/api/v1/packages:apply` | Apply exactly the plan with this hash; the catalog changed since — 409 plan_stale | публичный |
+| `POST` | `/api/v1/packages:plan` | Plan applying a package: structural and behavioural diff, open instances, hash | публичный |
+| `POST` | `/api/v1/packages:record` | Link the objects an installer applied through their routes to their package | публичный |
+| `POST` | `/api/v1/packages:test` | Check a package and run the tests of its processes, rules and task types; nothing is written | публичный |
 | `GET` | `/api/v1/principals` | List Principals | публичный |
 | `POST` | `/api/v1/principals` | Create Principal | публичный |
 | `GET` | `/api/v1/principals/{principal_id}` | Get Principal | публичный |
@@ -82,6 +115,21 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/principals/{principal_id}/skills` | List Skills | публичный |
 | `POST` | `/api/v1/principals/{principal_id}/skills` | Assign Skill | публичный |
 | `POST` | `/api/v1/principals/{principal_id}/skills/{skill_id}:revoke` | Revoke Skill | публичный |
+| `POST` | `/api/v1/principals/{principal_id}:disable` | Disable a human or agent: revoke its bindings, close its sessions, free its claims | публичный |
+| `POST` | `/api/v1/principals/{principal_id}:enable` | Enable a disabled human or agent; IAM bindings revoked by :disable stay revoked | публичный |
+| `GET` | `/api/v1/process-definitions` | List Process Definitions | публичный |
+| `POST` | `/api/v1/process-definitions` | Publish a process version: immutable, the same version with other content is 409 | публичный |
+| `GET` | `/api/v1/process-definitions/{key}/versions` | Versions of a process, newest first, without their spec (ProcessVersionOut) | публичный |
+| `POST` | `/api/v1/process-definitions/{key}:replay` | Feed the journals of real instances to a candidate version; nothing is written | публичный |
+| `POST` | `/api/v1/process-definitions/{key}:retire` | Retire a process — no new instances, open ones run to the end | публичный |
+| `GET` | `/api/v1/process-definitions/{ref}` | A process by key (latest version) or key@version | публичный |
+| `GET` | `/api/v1/process-instances` | List Process Instances | публичный |
+| `POST` | `/api/v1/process-instances` | Start an instance without a trigger event; a key that has one is 409 | публичный |
+| `GET` | `/api/v1/process-instances/{instance_id}` | State of an instance: data, stages, open elements, timers | публичный |
+| `GET` | `/api/v1/process-instances/{instance_id}/journal` | Decision journal of an instance (ProcessJournalEntryOut), oldest first | публичный |
+| `POST` | `/api/v1/process-instances/{instance_id}:cancel` | Cancel an instance, compensating completed steps first by default | публичный |
+| `POST` | `/api/v1/process-instances/{instance_id}:resume` | Resume a suspended instance; frozen timers get their remaining time back | публичный |
+| `POST` | `/api/v1/process-instances/{instance_id}:suspend` | Suspend an instance; its timers freeze | публичный |
 | `GET` | `/api/v1/project-templates` | List Project Templates | публичный |
 | `POST` | `/api/v1/project-templates` | Create the next immutable version of a project template | публичный |
 | `GET` | `/api/v1/project-templates/{template_id}` | Get Project Template | публичный |
@@ -103,6 +151,7 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/roles/{role_id}` | Get Role | публичный |
 | `PATCH` | `/api/v1/roles/{role_id}` | Update Role | публичный |
 | `GET` | `/api/v1/roles/{role_id}/principals` | List Role Holders | публичный |
+| `GET` | `/api/v1/rule-evaluations/{evaluation_id}` | One evaluation by id: what origin.ref = rule_evaluation:<id> points to | публичный |
 | `GET` | `/api/v1/rules` | List Rules | публичный |
 | `POST` | `/api/v1/rules` | Write a rule that derives work from observed facts | публичный |
 | `GET` | `/api/v1/rules/{rule_id}` | Get Rule | публичный |
@@ -124,10 +173,6 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/runs/{run_id}/control-messages` | List durable Run control messages in Run-local sequence order | публичный |
 | `POST` | `/api/v1/runs/{run_id}/control-messages` | Append one durable Active Turn Control message | публичный |
 | `POST` | `/api/v1/runs/{run_id}/control-messages/{message_id}:acknowledge` | Acknowledge the oldest accepted control message at a safe boundary | публичный |
-| `GET` | `/api/v1/runs/{run_id}/harness-manifest` | Effective Harness Manifest of a run (frozen base, provenance, captured state) | публичный |
-| `POST` | `/api/v1/runs/{run_id}/harness-manifest/ephemeral` | Record an ephemeral steering/warning marker (never changes the frozen base) | публичный |
-| `POST` | `/api/v1/runs/{run_id}/harness-manifest:compile` | Recompile the manifest; a new version appears only if the frozen base changed | публичный |
-| `GET` | `/api/v1/runs/{run_id}/harness-manifests` | Manifest version history of a run (newest first) | публичный |
 | `POST` | `/api/v1/runs/{run_id}:cancel` | Cancel Run | публичный |
 | `POST` | `/api/v1/runs/{run_id}:fail` | Fail Run | публичный |
 | `POST` | `/api/v1/runs/{run_id}:handoff` | Checkpoint, suspend and release a run for a new human-operated harness | публичный |
@@ -154,6 +199,7 @@ _Раздел генерируется из кода — не правьте е�
 | `POST` | `/api/v1/task-types` | Create the next immutable version of a work item type | публичный |
 | `GET` | `/api/v1/task-types/{type_id}` | Get Task Type | публичный |
 | `POST` | `/api/v1/task-types/{type_id}:deprecate` | Deprecate Task Type | публичный |
+| `POST` | `/api/v1/task-types/{type_id}:migrate-tasks` | Move the open tasks of this version to another version of its key (ADR-0048) | публичный |
 | `GET` | `/api/v1/tasks` | List Tasks | публичный |
 | `POST` | `/api/v1/tasks` | Create Task | публичный |
 | `GET` | `/api/v1/tasks/{task_ref}` | Get Task | публичный |
@@ -172,6 +218,7 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/tasks/{task_ref}/verifications` | Attempts of the verification stage, newest first (CP-ADR-0067) | публичный |
 | `POST` | `/api/v1/tasks/{task_ref}:claim` | Atomically claim a task (lease + fencing token) | публичный |
 | `POST` | `/api/v1/tasks/{task_ref}:complete` | Complete Task | публичный |
+| `POST` | `/api/v1/tasks/{task_ref}:migrate-type` | Move an open task to another version of its type (ADR-0048) | публичный |
 | `POST` | `/api/v1/tasks/{task_ref}:start-run` | Start an execution attempt under a live claim | публичный |
 | `GET` | `/api/v1/tools` | Tools this principal may use right now (bounded projection) | публичный |
 | `GET` | `/api/v1/tools/{tool_ref}` | Full sanitized projection of one tool | публичный |
@@ -186,10 +233,12 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/workspaces/tree` | Get Workspace Tree | публичный |
 | `GET` | `/api/v1/workspaces/{workspace_id}` | Get Workspace | публичный |
 | `PATCH` | `/api/v1/workspaces/{workspace_id}` | Update Workspace | публичный |
+| `GET` | `/api/v1/workspaces/{workspace_id}/knowledge-packs` | Get Workspace Packs | публичный |
 | `PUT` | `/api/v1/workspaces/{workspace_id}/knowledge-packs` | Set Workspace Packs | публичный |
 | `GET` | `/api/v1/workspaces/{workspace_id}/members` | List Members | публичный |
 | `POST` | `/api/v1/workspaces/{workspace_id}/members` | Add Member | публичный |
 | `POST` | `/api/v1/workspaces/{workspace_id}/members/{principal_id}:remove` | Remove Member | публичный |
+| `GET` | `/api/v1/workspaces/{workspace_id}/participants` | List Participants | публичный |
 | `POST` | `/api/v1/workspaces/{workspace_id}:archive` | Archive Workspace | публичный |
 | `POST` | `/api/v1/workspaces/{workspace_id}:move` | Move Workspace | публичный |
 | `GET` | `/health/live` | Health Live | публичный |
@@ -202,7 +251,7 @@ _Раздел генерируется из кода — не правьте е�
 <!-- generated:api-iam-service -->
 _Раздел генерируется из кода — не правьте его руками._
 
-Версия API `0.1.0`, операций: 52.
+Версия API `0.1.0`, операций: 59.
 
 | Метод | Путь | Описание | Периметр |
 |---|---|---|---|
@@ -212,6 +261,9 @@ _Раздел генерируется из кода — не правьте е�
 | `POST` | `/api/v1/platform-access-tokens:introspect` | Introspect Platform Access Token | `/iam/api/v1/platform-access-tokens:introspect` |
 | `POST` | `/api/v1/platform-access-tokens:revoke-self` | Revoke Presented Platform Access Token | `/iam/api/v1/platform-access-tokens:revoke-self` |
 | `POST` | `/api/v1/tenants` | Create Tenant | только внутри сети |
+| `POST` | `/api/v1/tenants/{tenant_id}/agents` | Create Agent | только внутри сети |
+| `POST` | `/api/v1/tenants/{tenant_id}/agents/{agent_id}/platform-access-tokens` | Issue Agent Platform Access Token | только внутри сети |
+| `POST` | `/api/v1/tenants/{tenant_id}/agents/{agent_id}/platform-access-tokens/{credential_id}:revoke` | Revoke Agent Platform Access Token | только внутри сети |
 | `GET` | `/api/v1/tenants/{tenant_id}/audiences` | List Audiences | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/audiences` | Create Audience | только внутри сети |
 | `PATCH` | `/api/v1/tenants/{tenant_id}/audiences/{key}` | Update Audience | только внутри сети |
@@ -222,6 +274,7 @@ _Раздел генерируется из кода — не правьте е�
 | `POST` | `/api/v1/tenants/{tenant_id}/channel-links:confirm` | Confirm Channel Link | только внутри сети |
 | `GET` | `/api/v1/tenants/{tenant_id}/channel-providers` | List Channel Providers | только внутри сети |
 | `PUT` | `/api/v1/tenants/{tenant_id}/channel-providers/{channel}` | Configure Channel Provider | только внутри сети |
+| `GET` | `/api/v1/tenants/{tenant_id}/external-identities` | Find External Identity | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/federation:authenticate` | Authenticate Federated Identity | `/iam/api/v1/tenants/{tenant_id}/federation:authenticate` |
 | `POST` | `/api/v1/tenants/{tenant_id}/federation:exchange` | Exchange Federated Identity | `/iam/api/v1/tenants/{tenant_id}/federation:exchange` |
 | `POST` | `/api/v1/tenants/{tenant_id}/groups` | Create Group | только внутри сети |
@@ -231,12 +284,15 @@ _Раздел генерируется из кода — не правьте е�
 | `GET` | `/api/v1/tenants/{tenant_id}/platform-access-tokens` | List Platform Access Tokens | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/platform-access-tokens/{credential_id}:revoke` | Revoke Platform Access Token | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/platform-access-tokens/{credential_id}:rotate` | Rotate Platform Access Token | только внутри сети |
+| `GET` | `/api/v1/tenants/{tenant_id}/principals` | List Principals | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/principals` | Create Principal | только внутри сети |
 | `GET` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}` | Get Principal | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}/authentication-contexts` | Create Authentication Context | только внутри сети |
+| `GET` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}/external-identities` | List Principal External Identities | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}/external-identities` | Link External Identity | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}/platform-access-tokens` | Issue Platform Access Token | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}:disable` | Disable Principal | только внутри сети |
+| `POST` | `/api/v1/tenants/{tenant_id}/principals/{principal_id}:enable` | Enable Principal | только внутри сети |
 | `GET` | `/api/v1/tenants/{tenant_id}/provisioning-sources` | List Provisioning Sources | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/provisioning-sources` | Register Provisioning Source | только внутри сети |
 | `POST` | `/api/v1/tenants/{tenant_id}/service-accounts` | Create Service Account | только внутри сети |
@@ -265,7 +321,7 @@ _Раздел генерируется из кода — не правьте е�
 <!-- generated:api-memory-service -->
 _Раздел генерируется из кода — не правьте его руками._
 
-Версия API `0.1.0`, операций: 36.
+Версия API `0.1.0`, операций: 37.
 
 | Метод | Путь | Описание | Периметр |
 |---|---|---|---|
@@ -288,6 +344,7 @@ _Раздел генерируется из кода — не правьте е�
 | `POST` | `/api/memory/context` | Memory Context | только внутри сети |
 | `GET` | `/api/memory/context/trace/{trace_id}` | Memory Context Trace | только внутри сети |
 | `POST` | `/api/memory/context/typed` | Memory Context Typed | только внутри сети |
+| `POST` | `/api/memory/entities:query` | Memory Entities Query | только внутри сети |
 | `GET` | `/api/memory/namespaces/{namespace}/kinds` | Memory Namespace Kinds | только внутри сети |
 | `PUT` | `/api/memory/namespaces/{namespace}/kinds` | Memory Namespace Kinds Put | только внутри сети |
 | `GET` | `/api/memory/observations` | Memory Observations List | только внутри сети |

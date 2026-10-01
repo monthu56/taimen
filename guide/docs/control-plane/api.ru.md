@@ -145,9 +145,8 @@ WebSocket: `WS /api/v1/events/ws?after=<cursor>`, право `events.read`. Ко
 Одноразовые секреты не сохраняются: повтор выпуска API-ключа вернёт
 `key: null`. Для двух команд ключ обязателен: `POST /runs/{id}/control-messages`
 и `POST /runs/{id}/child-handles` (без него `422 idempotency_key_required`).
-Для `:handoff`, `harness-manifest:compile` и `:revoke` дочернего handle ключ
-настоятельно рекомендуется: повтор без него после неоднозначного ответа
-становится новой командой.
+Для `:handoff` и `:revoke` дочернего handle ключ настоятельно рекомендуется:
+повтор без него после неоднозначного ответа становится новой командой.
 
 !!! tip "Правило клиента"
     Один логический вызов — один ключ на все транспортные повторы. Повтор
@@ -273,7 +272,7 @@ WebSocket: `WS /api/v1/events/ws?after=<cursor>`, право `events.read`. Ко
 | GET | `/tasks/{ref}/transitions` | `tasks.read` | куда можно перейти из текущего статуса (`route`: `update` или `complete`) |
 | POST | `/tasks/{ref}:claim` | `tasks.claim` | атомарный claim `{sessionId, ttlSeconds?, intent?}` → fencing token |
 | POST | `/tasks/{ref}:complete` | `tasks.write` | завершить (`If-Match`; при живом claim — `claimId` и `fencingToken`) |
-| POST | `/tasks/{ref}:start-run` | `tasks.claim` | прогон под живым claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` |
+| POST | `/tasks/{ref}:start-run` | `tasks.claim` | прогон под живым claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?, agentRevisionId?}` |
 | POST | `/tasks/{ref}/relations` | `tasks.write` | связь `{toTask, type}`: `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`; циклы — `422` |
 | GET | `/tasks/{ref}/relations` | `tasks.read` | связи в обе стороны |
 | DELETE | `/tasks/{ref}/relations/{relationId}` | `tasks.write` | удалить связь |
@@ -355,10 +354,6 @@ curl -s -X POST https://platform.example.com/api/v1/tasks \
 | POST | `/runs/{id}/actions` | `tasks.claim`, владелец живого claim | действие `{action, status, skill?, externalReference?, metadata}`; бюджет → `409 budget_exceeded` |
 | POST | `/runs/{id}/actions/{actionId}:finish` | `tasks.claim` | завершить `started`-действие |
 | GET | `/runs/{id}/actions` | `tasks.read` | журнал действий по `seq` |
-| GET | `/runs/{id}/harness-manifest` | `tasks.read` | манифест (`?version=`) |
-| GET | `/runs/{id}/harness-manifests` | `tasks.read` | история версий |
-| POST | `/runs/{id}/harness-manifest:compile` | `tasks.claim`, владелец живого claim | пересборка: `200` без изменений, `201` новая версия |
-| POST | `/runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | пометка `{kind, summary, data}` |
 | POST | `/runs/{id}/control-messages` | `tasks.write`; `force_cancel` — `claims.manage` | control-сообщение (`Idempotency-Key`, `expectedRunVersion` обязательны) |
 | GET | `/runs/{id}/control-messages` | `tasks.read` | сообщения, курсор `rc1_…` |
 | POST | `/runs/{id}/control-messages/{messageId}:acknowledge` | `tasks.claim`, держатель живого claim | подтвердить `applied`, `rejected` или `superseded` |
@@ -366,6 +361,14 @@ curl -s -X POST https://platform.example.com/api/v1/tasks \
 | GET | `/runs/{id}/child-handles` | `tasks.read` | handles прогона (`?active=true`, курсор `cd1_…`) |
 | GET | `/child-handles/{idOrToken}` | `tasks.read` | статус и результат по id или `ch1_…` |
 | POST | `/child-handles/{id}:revoke` | держатель родительского прогона или `claims.manage` | отозвать `{reason, cancelChild}` |
+
+Прогон называет ревизию агента, по которой идёт (CP-ADR-0073): исполнитель,
+чей principal привязан к агенту, передаёт в `:start-run` поле `agentRevisionId`
+(без него — `422 agent_revision_required`, ревизия чужого агента —
+`422 agent_revision_mismatch`), сервер записывает его на run и в событие
+`run.started`. Свою текущую ревизию исполнитель читает через `GET /agents/me`.
+Отдельного снимка конфигурации на каждый прогон нет (см.
+[Ревизия агента на прогоне](harness-protocol.md#agent-revision)).
 
 См. [Исполнение — claims и runs](execution.md) и [Харнесс-протокол](harness-protocol.md).
 

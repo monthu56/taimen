@@ -93,7 +93,7 @@ An event whose payload contains `workspaceId` reaches only the rules of that
 workspace and tenant-level rules; an event without a workspace reaches all rules of the
 tenant.
 
-## Condition and template language
+## Condition and template language { #language }
 
 An **expression** is `true`, `false`, or an object with one operator: `and` / `or`
 (1…50 operands), `not`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `exists`.
@@ -194,13 +194,20 @@ all tasks of the evaluation are created, by the regular relation command with it
 `task.relation_added` events. That is why a repeated evaluation of the same fact duplicates neither
 tasks nor relations.
 
-### Assignment by agent reference
+### Assignment: a principal, an agent, or a role { #assignee }
 
 `fields.assignee` of `ensure_work` and `request_decision` accepts a principal
-UUID or a reference **`agent:<key>`** to an agent in the core registry. The reference
-is resolved after the template is rendered; an unknown, retired, or not yet
-identity-bound agent is an action error `unknown_agent`, and the action
-is rolled back entirely.
+UUID, a reference **`agent:<key>`** to an agent in the core registry, or a role
+**`role:<slug>`**. The reference is resolved after the template is rendered;
+an unknown, retired, or not yet identity-bound agent is an action error
+`unknown_agent`, and the action is rolled back entirely.
+
+The form **`role:<slug>`** assigns the work to a role: the task is created
+without an assignee, with the role as a requirement, and any holder of the
+role in the work's workspace or above can take it. If there is no role with
+that slug there, it is an action error `unknown_role` (`action.fields.assignee:
+no role '…' in the workspace of the work or above it`), and the action is
+rolled back entirely; an empty slug is `invalid_rule_field`.
 
 ### Refusal of a single element
 
@@ -349,6 +356,7 @@ Worker settings (core environment variables):
 | `422 invalid_rule_action` on `taskType` | A templated `taskType` without `taskTypes` or a literal outside the list | Declare `taskTypes` |
 | Evaluation `failed: work_items_refused` | All elements were refused: `details.refused` names the codes | Look at the evaluation's `work[].refused`; most often — wrong `dependsOn` keys |
 | Evaluation `failed: unknown_agent` | `fields.assignee` rendered to an unknown or unbound agent | Check the agent key and its actual state |
+| Evaluation `failed: unknown_role` | `fields.assignee: role:<slug>` names a role that does not exist in the work's workspace or above | Create the role (in a package, a `Role`) or fix the slug |
 | The rule does not react to old events | A rule sees only events after it was enabled | Expected |
 
 ## See also

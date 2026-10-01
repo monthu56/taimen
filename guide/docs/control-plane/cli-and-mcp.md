@@ -382,7 +382,6 @@ API, the SDK, and [catalog packages](catalog-packages.md) for that.
 | `cp_start_run` | M | `max_duration_seconds`, `max_actions` | start a run under the current claim |
 | `cp_get_run` | R | `run_id` | run (the current one by default) |
 | `cp_get_run_context` | R | `run_id` | Run Context: the task, claim, requirements, artifacts, checkpoints of past attempts, approvals, skills |
-| `cp_harness_manifest` | R | `run_id`, `version` | the run's Effective Harness Manifest |
 | `cp_checkpoint` | M | **`kind`**, **`data`** | durable state checkpoint |
 | `cp_record_action` | M | **`action`**, `status`, `skill`, `external_reference` | an entry in the run's action log |
 | `cp_complete_run` | M | `output`, `complete_task` | finish the run successfully and, by default, the task |

@@ -1,11 +1,12 @@
-# Тесты пакета
+# Сценарии и план ядра
 
-Пакет процессов проверяется без стенда: ядро находит ошибки описания,
-прогоняет тесты сценариев в песочнице с виртуальным временем и заглушками,
-сравнивает новую версию с журналами живых экземпляров и показывает план
-применения. Применяется ровно показанный план — по его хэшу. Статья для
-авторов пакетов и администраторов инсталляции. Обоснование — TAI-ADR-0054
-п.8, CP-ADR-0074 §10–11.
+Как ядро проверяет пакет с процессами: находки проверки, формат сценариев
+`tests/*.test.yaml` (процесс, правило, тип задачи), заглушки, покрытие, replay
+новой версии по журналам живых экземпляров, пробный прогон и план ядра. Статья
+для авторов пакетов и администраторов инсталляции; пирамида тестов одной
+командой — в [Тестах пакета](../packages/testing.md), установка — в [Установке и
+выпуске](../packages/install-and-release.md). Обоснование — TAI-ADR-0054 п.8,
+CP-ADR-0074 §10–11.
 
 ```mermaid
 flowchart LR
@@ -21,17 +22,19 @@ flowchart LR
 Две ступени:
 
 1. **Форма и ссылки — локально**, без стенда:
-   `python3 tools/cp_packages.py check --package packages/<пакет>` сверяет
-   файлы со схемой `packages/schema/v1` и ссылки между объектами пакета.
-2. **Язык — в ядре**: с `--server` те же файлы уходят в
-   `POST /api/v1/packages:test?checkOnly=true`. Ядро проверяет типы всех
+   `package-sdk check --package <пакет>` сверяет файлы со схемой
+   `package-sdk/schema/v1`, ссылки между объектами пакета и прогоняет
+   доменные валидаторы ядра (типы задач, правила, скиллы, агенты).
+2. **Язык — кодом ядра**: перед сценариями `package-sdk test` (в песочнице)
+   и по `check --server` — запросом
+   `POST /api/v1/packages:test?checkOnly=true` к ядру стенда. Ядро проверяет типы всех
    выражений, неизвестные поля данных, входы и выходы шагов против схемы
    данных, входы скиллов по их схемам, достижимость шагов и стадий, тупики,
    ссылки на типы задач, скиллы, календари и агента-личность, перекрытия и
    пробелы таблиц решений, а также регламенты `governedBy` через базу знаний.
 
 ```bash
-python3 tools/cp_packages.py check --package packages/<пакет> \
+package-sdk check --package packages/<пакет> \
     --server https://platform.example.com --json
 ```
 
@@ -52,6 +55,7 @@ python3 tools/cp_packages.py check --package packages/<пакет> \
 | ссылки | `unknown_skill`, `unknown_task_type`, `unknown_agent`, `unknown_calendar`, `unknown_decision_table`, `skill_input_missing` |
 | структура | `duplicate_element_id`, `element_kind_changed`, `unreachable_step`, `unreachable_stage`, `dead_end` |
 | таблицы решений | `invalid_table_cell`, `table_overlap`; предупреждения `table_gap`, `table_rule_unreachable` |
+| сроки | `sla_calendar_missing`, `sla_calendar_without_hours` (см. [Сроки и SLA](index.md#sla)) |
 | предупреждения | `process_owner_missing`, `element_removed`, `unwritten_data_field`, `unreachable_milestone`, `governed_by_unknown_document`, `governed_by_unchecked` |
 
 Ошибка блокирует тесты и применение; предупреждения — нет.
@@ -59,11 +63,21 @@ python3 tools/cp_packages.py check --package packages/<пакет> \
 ## Формат теста
 
 Тест — файл `tests/<имя>.test.yaml` пакета по схеме
-`packages/schema/v1/test.schema.json`. Один файл — один сценарий одного
-процесса.
+`package-sdk/schema/v1/test.schema.json`. Один файл — один сценарий одного
+объекта пакета. Что проверяется, задаёт поле `subject`:
+
+| `subject` | Объект | Как исполняется | Формат |
+|---|---|---|---|
+| `process` (по умолчанию, поле можно опустить) | процесс `process: <ключ>` | движок процессов ядра в памяти: виртуальное время, заглушки | ниже на этой странице |
+| `rule` | правило вывода работы `rule: <ключ>` | прикладной код ядра в транзакции, которая откатывается; вход — `given.observation` или `given.event`, шаги — только `expect` | [Правила в пакете](../packages/rules.md#tests) |
+| `taskType` | тип задачи `taskType: <ключ>` | тот же прикладной код: задача типа, решение гейта, завершение, приёмка; шаги `approve`, `verify`, `complete`, `expect` | [Работа](../packages/work.md#tests) |
+
+Сценариям правил и типов задач в песочнице нужна пустая база PostgreSQL
+(см. [Тесты пакета](../packages/testing.md#sandbox)); сценариям процессов — нет.
+Дальше на странице — формат сценария процесса.
 
 ```yaml
-# yaml-language-server: $schema=../../schema/v1/test.schema.json
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<тег>/schema/v1/test.schema.json
 process: supplier-invoice
 name: загрузивший счёт не согласует его оплату
 given:
@@ -94,12 +108,15 @@ steps:
 coverage: {minimum: 60}
 ```
 
+Строку `$schema` пишет `package-sdk init`: адрес схемы того выпуска SDK, с тега которого он поставлен (в рабочей копии без тега — относительный путь к схеме установленного SDK).
+
 ### `given` — начальное состояние
 
 | Поле | Что задаёт |
 |---|---|
 | `clock` | начальное виртуальное время; без него — `2026-01-05T09:00:00Z`, чтобы тест всегда давал один ответ |
 | `data` | начальные данные: явный старт экземпляра с ключом `test` без события старта |
+| `stage` | начать с этой открытой стадии |
 | `principals` | роль → вымышленные principal'ы теста: кому назначаются задачи роли и кто держит роль при голосовании |
 | `calendar` | ключ календаря вместо календаря процесса |
 | `fromInstance` | пробный прогон: состояние копируется из живого экземпляра (см. [ниже](#dry-run)) |
@@ -143,7 +160,7 @@ mocks:
 | `emit: {event или observation, source?, payload}` | подаёт событие так же, как живой цикл: старт или корреляция открытых экземпляров |
 | `advance: P3D` | сдвигает виртуальное время; ожидающие таймеры срабатывают по порядку, каждый в свой момент |
 | `advance: until:<id>` | двигает время до срабатывания таймера с этим id (или таймера этого элемента) |
-| `complete: {step, by, output, cancel?}` | завершает задачу шага от имени исполнителя или держателя роли; `output` сверяется с формой шага и `fieldSchema` типа задачи; `cancel: true` — отмена |
+| `complete: {step, by, output, cancel?}` | завершает задачу шага от имени исполнителя или держателя роли; `by` становится исполнителем задачи — это `task.assigneeId` в `output.as` шага; `output` сверяется с формой шага и `fieldSchema` типа задачи; `cancel: true` — отмена. Задача закрывается напрямую, мимо гейта её типа: исходы `approvalSchema` проверяет сценарий типа задачи |
 | `approve: {step, by, decision, expectRefused?}` | голос в согласовании; `expectRefused` — ожидаемый код отказа ядра: `separation_of_duties_violation`, `not_eligible` |
 | `expect: {…}` | ожидания (ниже) |
 
@@ -156,7 +173,8 @@ mocks:
 | `tasks` | задачи: `step`, `status`, `assignee` (исполнитель или `role:<slug>`), `due` |
 | `timers` | таймеры: `id`, `at`, `provisional` |
 | `data` | путь в данных (`a.b` или `/a/b`) → значение |
-| `events` | типы событий `process.*` с прошлого `expect` |
+| `sla` | состояние срока: id шага → состояние его открытой попытки, ключ `process` — срок процесса (`spec.due`); значения `ok`, `warning`, `breached`, `paused` (см. [ниже](#sla)) |
+| `events` | типы событий `process.*`, которые были с прошлого `expect` (лишние не мешают), в том числе события шагов `process.step_*` и сроков `process.sla_*` |
 | `memory` | `recalled` — шаги `recall`, `remembered` — записи `remember` (частичное совпадение) |
 | `status`, `outcome`, `error` | статус экземпляра, исход, тип ошибки |
 | `noSideEffects: true` | прогон не сделал ни одной записи в базу |
@@ -164,6 +182,49 @@ mocks:
 Невыполнимый шаг (задачи нет, голос неожиданно отвергнут) останавливает тест;
 несбывшееся ожидание — провал шага, но тест идёт дальше и показывает
 `expected` и `actual`.
+
+### Сроки в тестах { #sla }
+
+Сроки SLA тест считает тем же вычислением, что живой прогон: от часов теста
+(`given.clock`, `advance`) и по календарю из пакета (или `given.calendar`).
+Поэтому выходные, праздники, сокращённые дни и приостановка в тесте
+учитываются так же, как на стенде.
+
+Шаг `review` процесса объявляет `due: {workdays: 2, warnBefore: {workhours: 4}}`,
+календарь — рабочие часы 09:00–18:00:
+
+```yaml
+given:
+  clock: "2026-10-02T09:00:00+03:00"   # пятница
+steps:
+  - emit: {observation: request.received, payload: {data: {…}}}
+  - expect:
+      sla: {review: ok}                # срок — вторник 09:00, порог — понедельник 14:00
+      events: [process.started, process.step_entered]
+  - advance: P3D                       # понедельник 09:00: выходные не считаются
+  - expect:
+      sla: {review: ok}
+  - advance: PT6H                      # понедельник 15:00
+  - expect:
+      sla: {review: warning}
+      events: [process.sla_warning]
+  - advance: P1D                       # вторник 15:00
+  - expect:
+      sla: {review: breached}
+      events: [process.sla_breached]
+  - complete: {step: review, by: 1a000000-0000-4000-8000-000000000001, output: {verdict: ok}}
+  - expect:
+      events: [process.step_exited]  # step_exited с breached: true
+```
+
+- `expect.sla` берёт состояние из проекции экземпляра (см. [Состояние срока
+  в экземпляре](index.md#sla-state)). Шаг без срока в `expect.sla` не пишут:
+  его состояние `none`.
+- Несовпадение называет шаг, ожидаемое и фактическое состояние.
+- `expect.events` проверяет, что каждое перечисленное событие было с
+  прошлого `expect`; лишние события не мешают. Поэтому события шагов
+  прежние тесты не ломают, а новые могут ждать `process.step_entered` и
+  `process.step_exited` у каждого ожидающего шага.
 
 ### Покрытие
 
@@ -182,12 +243,27 @@ mocks:
 
 ## Как запускать
 
-=== "Ядро (`cp_packages test`)"
+=== "Песочница (`package-sdk test`)"
+
+    ```bash
+    package-sdk test <пакет> [--test <имя или файл>] [--database-url <адрес>] [--json]
+    ```
+
+    Код ядра той версии, что стоит рядом с инструментом (дополнение
+    `sandbox`), в процессе, без стенда. Каталог — только объекты пакета и его
+    `requires`; `governedBy` с базой знаний не сверяется; переменные `${…}`
+    берутся из `--env` (по умолчанию `.env`) и окружения. Сценарии —
+    последняя ступень пирамиды: перед ними идут проверка, контракты скиллов и
+    тесты кода интеграции (см. [Тесты пакета](../packages/testing.md)). Только
+    ступень сценариев без остальных — `package-sdk sandbox <пакет>`; без
+    аргументов — все пакеты с тестами.
+
+=== "Ядро стенда (`package-sdk test --server`)"
 
     ```bash
     CP_TOKEN=<access token audience control-plane> \
-    python3 tools/cp_packages.py test --package packages/<пакет> \
-        --server https://platform.example.com [--test tests/<имя>.test.yaml] [--workspace <workspace-id>]
+    package-sdk test <пакет> \
+        --server https://platform.example.com [--test <имя или файл>] [--workspace <workspace-id>]
     ```
 
     Пакет уходит в `POST /api/v1/packages:test` (право `packages.test`).
@@ -196,24 +272,12 @@ mocks:
     его процессам до применения. `--workspace` — чьи роли, календари и
     экземпляры читает прогон (нужно `processes.read` на него).
 
-=== "Песочница локально (`package_sandbox.py`)"
-
-    ```bash
-    PYTHONPATH=control-plane/src:control-plane/client/src \
-    python3 tools/package_sandbox.py <пакет> [--test tests/<имя>.test.yaml] [--json]
-    ```
-
-    Тот же код ядра (движок, проверка, песочница), но в процессе, без стенда и
-    без базы. Каталог — только объекты пакета и его `requires`; `governedBy` с
-    базой знаний не сверяется; переменные `${…}` берутся из `--env` (по
-    умолчанию `.env`) и окружения. Без аргументов — все пакеты с тестами
-    (так тесты пакетов идут в CI). Код выхода `0` — все тесты зелёные и
-    находок-ошибок нет.
-
 === "Из Claude Code"
 
-    Инструмент MCP `cp_pkg_test(path, tests?)` с путём каталога пакета —
-    тот же `POST /packages:test`.
+    Инструмент `pkg_test(path | install, tests?, server?, workspace_id?, env_file?)`
+    MCP-сервера `package-sdk mcp` — та же пирамида, что `package-sdk test`,
+    ответ — её отчёт документом. См. [Автор пакетов в Claude
+    Code](../packages/author-plugin.md).
 
 Вывод:
 
@@ -279,14 +343,16 @@ steps:
 
 ## План и применение { #plan }
 
-План строит ядро: `POST /api/v1/packages:plan` (право `packages.plan`).
-Процессы и календари применяются **только планом ядра**; остальные виды
-пакета ставит обычная установка `cp_packages apply --install`.
+План пакета с процессами или календарями строит ядро:
+`POST /api/v1/packages:plan` (право `packages.plan`). У такого пакета ядро само
+планирует и ставит типы задач, агентов, календари, процессы и правила вывода
+работы; этот ответ — секция `core` единого плана установки, который строит
+`package-sdk plan` (см. [Установку и выпуск](../packages/install-and-release.md#plan)).
 
 ```bash
-python3 tools/cp_packages.py plan --install deploy/<окружение>/packages.yaml \
+package-sdk plan --install installation.yaml \
     --server https://platform.example.com --out plan.json [--workspace <workspace-id>] [--replay-limit 50]
-python3 tools/cp_packages.py apply --plan plan.json
+package-sdk apply --plan plan.json --server https://platform.example.com
 ```
 
 Пример вывода (сокращён):
@@ -305,19 +371,30 @@ python3 tools/cp_packages.py apply --plan plan.json
 | `changes` | структурный diff по объектам: `create` (`+`), `update` (`~`), `rename` (`→`), `unchanged`; у поля — было, стало и владелец: `package` или `console` |
 | `processes[].behaviour` | replay новой версии на `replayLimit` недавних экземплярах: сколько решили бы иначе |
 | `processes[].instances` | судьба открытых экземпляров по версиям: `pin`, `migrate`, `unaffected`; `migrationRequired` |
+| `deadlines`, `deadlinesTotal` | экземпляры, у которых миграция меняет, добавляет или снимает срок, и те, у кого срок по новому правилу уже прошёл: `instanceId`, `element`, `previousDueAt`, `dueAt`, `breached`; список с потолком, полное число — `deadlinesTotal` |
 | `regulationCoverage` | разделы регламентов и элементы, которые их исполняют; непокрытые разделы |
 | `problems` | находки проверки |
 | `planHash`, `catalogEtag` | хэш плана и отпечаток каталога, на котором он построен |
 
 - **Поле, которое правил человек в консоли** после последнего применения, —
   владелец `console`. Пакет его не перетирает: публикуемая версия берёт
-  значение из консоли. Перетереть — план с `overwriteConsole: true` (флаг
-  входит в хэш плана).
+  значение из консоли. Перетереть — план с `overwriteConsole: true`
+  (`package-sdk plan --overwrite-console`; флаг входит в хэш плана, см.
+  [Правки консоли](../packages/install-and-release.md#overwrite-console)).
 - **Применение — ровно показанный план.** `POST /packages:apply {package,
   planHash}` строит план заново под блокировкой и сравнивает хэши: стенд,
   открытые экземпляры или файлы изменились после показа — `409 plan_stale`,
-  нужен новый план. Файл плана, изменённый после построения, `cp_packages`
+  нужен новый план. Файл плана, изменённый после построения, `package-sdk`
   не применяет.
+- **Сроки при миграции** план считает на копии состояния тем же шагом, что
+  применение, и ничего не пишет в базу: раздел `deadlines` совпадает с тем,
+  что сделает применение (см. [Версии и миграции](index.md#versions)).
+  В выводе `plan` раздел печатается под процессом: строка `сроки: экземпляров N`
+  и по строке на экземпляр — `<instance-id>, шаг <id>: было → стало` (у срока
+  всего дела — `всё дело`, снятый срок — `снят`, с пометкой «уже просрочен»).
+  Ядро отдаёт список с потолком, а полное число — в `deadlinesTotal`; при
+  усечении заголовок говорит «показано N из M». С `--json` раздел приходит как
+  есть. План без изменений сроков раздела не печатает.
 - **Открытые экземпляры на удалённом элементе** без карты миграции — ошибка
   плана `migration_required`; такой план не сохраняется, а применение
   отказывает `422 migration_required`. Прочие ошибки — `422 invalid_package`.
@@ -340,11 +417,11 @@ python3 tools/cp_packages.py apply --plan plan.json
   План показывает `rename`, объект переносится с историей версий, а старый
   ключ выводится: новых экземпляров не заводит (`409 process_retired`), его
   открытые экземпляры дорабатывают. Команда
-  `tools/pkg.py rename --package <каталог> --kind Process --from <ключ> --to <ключ>`
+  `package-sdk edit rename --package <каталог> --kind Process --from <ключ> --to <ключ>`
   переименует файл и допишет `renames` сама.
 - **Элемент процесса** — карта `migrations` новой версии
   (см. [Процессы](index.md#versions)). Команда
-  `tools/pkg.py rename --file <процесс> --from <id> --to <id>` меняет id,
+  `package-sdk edit rename --file <процесс> --from <id> --to <id>` меняет id,
   ссылки и тесты и дописывает карту.
 
 ## Типичные проблемы
@@ -356,11 +433,14 @@ python3 tools/cp_packages.py apply --plan plan.json
 | `recall` в тесте уходит в таймаут | нет заглушки `mocks.recall` для шага | добавить ответ (можно общий, без `step`) |
 | `status: invalid`, тесты не запускались | находка-ошибка проверки | исправить по `file`, `line`, `hint` |
 | `plan_stale` при применении | после плана изменились каталог, экземпляры или файлы | построить план заново |
-| «ядро не поддерживает проверку процессов … — проверена только схема» | у ядра нет маршрутов пакетов процессов | обновить Control Plane или запускать `package_sandbox.py` |
+| «ядро не поддерживает проверку процессов … — проверена только схема» | у ядра нет маршрутов пакетов процессов | обновить Control Plane или запускать `package-sdk sandbox` |
 
 ## См. также
 
 - [Процессы](index.md)
 - [Выражения](expressions.md)
-- [Схема языка процессов](../reference/process-schema.md#schema-test)
+- [Тесты пакета](../packages/testing.md) — пирамида одной командой
+- [Установка и выпуск](../packages/install-and-release.md)
+- [Автор пакетов в Claude Code](../packages/author-plugin.md)
+- [Схема пакета](../reference/package-schema.md#schema-test)
 - [Пакеты каталога](../control-plane/catalog-packages.md#processes)

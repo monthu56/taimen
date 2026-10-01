@@ -148,7 +148,7 @@ flowchart LR
 ### Переменные пакетов каталога { #package-variables }
 
 Эти переменные не интерполирует `compose.yml`: их читает установщик пакетов
-`tools/cp_packages.py` (из `.env`, флаг `--env`, и окружения процесса) и
+`package-sdk` (из `.env`, флаг `--env`, и окружения процесса) и
 подставляет в `${ИМЯ}` объектов пакета при `plan` и `apply`. Какие переменные
 нужны, объявляет сам пакет; незаданная переменная, которая нужна пакету
 установки, — ошибка установки.
@@ -655,10 +655,11 @@ OpenCode, CLI `control-plane`, MCP-сервер `control-plane-mcp` и библ�
 <!-- generated:env-summary -->
 _Раздел генерируется из кода — не правьте его руками._
 
-Всего переменных: 120 (в `compose.yml` — 110, в `.env.example` — 82). Не описаны в таблицах выше: 0.
+Всего переменных: 151 (в `compose.yml` — 121, в `.env.example` — 113). Не описаны в таблицах выше: 0.
 
 | Переменная | По умолчанию в compose | Сервисы | Профили | `.env.example` | Описана выше |
 |---|---|---|---|---|---|
+| `ACCOUNTING_ROLE_ID` | — | — | — | да | да |
 | `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | caddy | edge | да | да |
 | `CP_AUTHZ_MODE` | `local` | context-adapter, control-plane-api, control-plane-worker | core | да | да |
 | `CP_BOOTSTRAP_TOKEN` | — | control-plane-api | core | да | да |
@@ -688,6 +689,8 @@ _Раздел генерируется из кода — не правьте е�
 | `IAM_POSTGRES_PASSWORD` | — | iam-db, iam-service | core | да | да |
 | `IAM_SIGNING_KEY_FILE` | `./secrets/iam-signing.pem` | (secrets) | — | да | да |
 | `IAM_SIGNING_KEY_ID` | `local-dev` | iam-service | core | да | да |
+| `INVOICE_WORKSPACE_ID` | — | — | — | да | да |
+| `KNOWLEDGE_WORKSPACE_ID` | — | — | — | да | да |
 | `LOG_RENDERER` | — | — | — | да | да |
 | `MEMORY_BUILD_CONTEXT` | `.` | memory-db, memory-service | core | — | да |
 | `MEMORY_CONSOLE_ENABLED` | `false` | memory-service | core | да | да |
@@ -702,6 +705,7 @@ _Раздел генерируется из кода — не правьте е�
 | `MEMORY_POSTGRES_PASSWORD` | — | memory-db, memory-service | core | да | да |
 | `MEMORY_RERANK_ENABLED` | `false` | memory-service | core | да | да |
 | `MINIO_MEM_LIMIT` | `256m` | minio | core | — | да |
+| `NOTIFICATION_SERVICE_URL` | — | — | — | да | да |
 | `NOTIFY_BUILD_CONTEXT` | `.` | notification-service | notify | — | да |
 | `NOTIFY_DB_MEM_LIMIT` | `128m` | notification-db | notify | — | да |
 | `NOTIFY_EMAIL_FROM` | `notifications@localhost` | notification-service | notify | — | да |
@@ -710,17 +714,41 @@ _Раздел генерируется из кода — не правьте е�
 | `NOTIFY_POSTGRES_PASSWORD` | — | notification-db, notification-service | notify | да | да |
 | `NOTIFY_SMTP_HOST` | `localhost` | notification-service | notify | — | да |
 | `NOTIFY_SMTP_PORT` | `587` | notification-service | notify | — | да |
+| `RUNTIME_CONSOLE_CONTROL_PLANE_URL` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_COOKIE_SECRET_FILE` | `./secrets/runtime-console-cookie-secret` | (secrets) | — | да | да |
+| `RUNTIME_CONSOLE_CP_SCOPES` | `control-plane:read control-plane:write control-plane:admin` | console | core | да | да |
+| `RUNTIME_CONSOLE_FLEET_URL` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_IAM_TENANT` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_IAM_URL` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_LAUNCHER_URL` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_LOGO_TEXT` | пусто | console | core | да | да |
+| `RUNTIME_CONSOLE_OIDC_CLIENT_ID` | `runtime-console` | console | core | да | да |
+| `RUNTIME_CONSOLE_OIDC_ISSUER` | `${TAIMEN_PUBLIC_URL` | console | core | да | да |
+| `RUNTIME_CONSOLE_OIDC_SCOPES` | `openid profile email` | console | core | да | да |
+| `RUNTIME_CONSOLE_OIDC_SECRET_FILE` | `./secrets/runtime-console-oidc-secret` | (secrets) | — | да | да |
+| `RUNTIME_CONSOLE_PORT` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_PRODUCT_NAME` | пусто | console | core | да | да |
+| `RUNTIME_CONSOLE_PUBLIC_URL` | — | — | — | да | да |
+| `RUNTIME_CONSOLE_SESSION_TTL_HOURS` | `12` | console | core | да | да |
+| `RUNTIME_CONSOLE_STATIC_DIR` | — | — | — | да | да |
 | `S3_ACCESS_KEY_ID` | — | minio, minio-bootstrap | core | да | да |
 | `S3_SECRET_ACCESS_KEY` | — | minio, minio-bootstrap | core | да | да |
 | `SELFDEV_CONTROL_PLANE_URL` | — | — | — | да | да |
+| `SELFDEV_FLEET_URL` | — | — | — | да | да |
 | `SELFDEV_HUMAN_HARNESS_URL` | — | — | — | да | да |
 | `SELFDEV_IAM_SERVICE_URL` | — | — | — | да | да |
 | `SELFDEV_MEMORY_SERVICE_URL` | — | — | — | да | да |
 | `SELFDEV_NOTIFICATION_SERVICE_URL` | — | — | — | да | да |
+| `SELFDEV_PACKAGE_SDK_URL` | — | — | — | да | да |
+| `SELFDEV_PLATFORM_AUTH_SDK_URL` | — | — | — | да | да |
 | `SELFDEV_REVIEWER_PRINCIPAL` | — | — | — | да | да |
+| `SELFDEV_SKILLS_EXECUTOR` | — | — | — | да | да |
+| `SELFDEV_SKILL_SDK_URL` | — | — | — | да | да |
 | `SELFDEV_SUPERPROJECT_URL` | — | — | — | да | да |
 | `SELFDEV_WORKSPACE_ID` | — | — | — | да | да |
 | `TASK_URL_BASE` | — | — | — | да | да |
+| `TENDERS_COMPANY_INN` | — | — | — | да | да |
+| `TENDERS_WORKSPACE_ID` | — | — | — | да | да |
 | `VOLUME_CADDY_CONFIG` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | да | да |
 | `VOLUME_CADDY_DATA` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | да | да |
 | `VOLUME_CONTROL_PLANE_DB` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | да | да |

@@ -163,5 +163,5 @@ llm = OpenAICompatibleClient(base_url="http://llm.test/v1", api_key="",
 
 - [SDK и интеграции](index.md)
 - [skill-sdk](skill-sdk.md)
-- [Вертикальные пакеты](vertical-packages.md)
+- [Пакеты](../packages/index.md)
 - [Конфигурация памяти](../memory/configuration.md)

@@ -41,16 +41,17 @@ reads their values from `.env`.
 | `--pat-ttl` | `15552000` (180 days) | lifetime of issued PATs, in seconds (no more than `IAM_PAT_MAX_TTL_SECONDS`, 365 days) |
 | `--secrets-dir` | `secrets` | where to write PATs and service account env files |
 | `--packages` | `deploy/packages.yaml` | catalog installation file (`kind: Installation`), step 5b |
+| `--no-packages` | off | skip step 5b: a human installs the packages with a plan (`plan --out` → `apply --plan`) |
 
 ### Dependencies
 
 The script uses only the Python standard library for HTTP, but step 5b
-imports `tools/cp_packages.py`, which needs **PyYAML** and **jsonschema**.
+imports `package-sdk`, which needs **PyYAML** and **jsonschema**.
 With uv installed, `make bootstrap` adds them itself; without uv, the system
 Python must have them. The script checks for both before its first step and
 stops right away if either is missing, so a bootstrap is never left half done
 for this reason.
-`cp_packages` takes the Control Plane domain validators from the
+`package-sdk` takes the Control Plane domain validators from the
 `control-plane/src` submodule; if they cannot be imported, it prints a warning
 and validates only the format schema.
 
@@ -240,9 +241,14 @@ why you must choose the public address **before** bootstrap.
 
 3. The token is written to `secrets/harness-pat` (0600); its prefix and expiry
    go into the state.
-4. A test exchange, `POST /api/v1/platform-access-tokens:exchange`, for a token
-   for the `control-plane` audience with all three scopes. All subsequent steps
-   use this token.
+4. The first exchange, `POST /api/v1/platform-access-tokens:exchange`, for a
+   token for the `control-plane` audience with all three scopes — right away,
+   so that a wrong PAT shows up at this step. All subsequent steps act on
+   behalf of the operator, but the token is taken before each request: an
+   access token lives for minutes, and step 5b takes longer. Bootstrap
+   exchanges the PAT again before the token expires, and after
+   `401 invalid_credentials` exchanges it once more and repeats the request,
+   so a long installation does not fail with 401.
 
 If `secrets/harness-pat` already exists, issuance is skipped and the file is
 used.
@@ -285,11 +291,22 @@ type `task`. Domain types come from their own packages. The default
 installation adds the sample package `packages/example` (the task type
 `request`); list your own packages instead.
 
-`cp_packages.apply` first validates the packages (the format's JSON Schema,
-Control Plane domain validators, closure of references), then brings the
-tenant in line with them in the order `WorkspaceType`, `Capability`, `Role`,
-`Skill`, `ArtifactType`, `TaskType`, `Agent`, `ProjectTemplate`, `WorkRule`,
-`NotificationRule` (details in [Catalog
+The step installs the packages with the same single plan as `package-sdk plan`
+→ `apply --plan`: `install.plan` builds the plan and writes it to
+`deploy/state/<environment>.packages-plan.json`, and `install.apply` applies
+exactly that plan. Running bootstrap itself stands in for a human's
+confirmation here, and the log marks this. An empty plan is not applied: a
+repeated run writes nothing.
+
+The plan first validates the packages (the format's JSON Schema, Control Plane
+domain validators, closure of references, `engines`, installation variables),
+then compares them with the deployment section by section: the catalog, the
+core plan for packages with processes or calendars, ontologies and enabling
+them, notification rules, and retirement. The catalog is brought in line in the
+order `WorkspaceType`, `Capability`, `Role`, `Skill`, `ArtifactType`,
+`TaskType`, `Agent`, `ProjectTemplate`, `WorkRule`; for a package with
+processes or calendars, the core installs task types, agents, calendars,
+processes, and rules with its own plan (details in [Catalog
 packages](../control-plane/catalog-packages.md)):
 
 | Object kind | How it is applied |
@@ -298,13 +315,24 @@ packages](../control-plane/catalog-packages.md)):
 | `WorkspaceType`, `Role` | created or updated with `PATCH` |
 | `Capability` | create only |
 | `Skill` | the contract is immutable and changes by bumping the version; description and config via `PATCH` |
-| `retire` in the installation file | the listed types and templates → `deprecated` |
+| `retire` in the installation file | the listed objects are retired |
 
 `${NAME}` strings in `spec` are substituted from `.env` and the process
-environment. Notification rules (`NotificationRule`) are applied to the
-notification service if `NOTIFICATION_SERVICE_URL` is set; otherwise they are
-skipped with a warning. The result is the `catalog` map in the state. Details:
-[Catalog packages](../control-plane/catalog-packages.md).
+environment. If the installation has notification rules (`NotificationRule`)
+or retires them, the notification service is needed: the address is
+`NOTIFICATION_SERVICE_URL`, and the token is `NOTIFY_TOKEN` or an exchange of
+the operator's PAT for the `notification-service` audience (for such an
+installation, bootstrap issues the operator's PAT with this audience; like the
+core token, the exchanged token is renewed before it expires, `NOTIFY_TOKEN` is
+not). Without
+the address, the plan refuses, and bootstrap stops at step 5b. The step's
+result is the `packages` entry in the state: the installation file, the plan
+path, `planHash`, the number of changes, and the `applied` flag.
+
+The `--no-packages` flag skips the step: on a running deployment, a human
+installs the packages — `package-sdk lock` → `plan --out` → review of the plan
+→ `apply --plan` (see [Installation and
+release](../packages/install-and-release.md#plan)).
 
 ### 5c. Notification service
 
@@ -320,7 +348,12 @@ is not up (it touches only IAM and Control Plane):
 2. `POST /api/v1/agents`: publishes the description in the core.
 3. `PUT /api/v1/agents/{key}/identity`: binds the account's IAM principal; the
    core derives the core principal and the binding with permissions from the
-   description.
+   description. Repeating it with the same account changes nothing.
+4. If the account was reissued and the core still holds the previous one
+   (`409 agent_identity_conflict` at step 3):
+   `POST /api/v1/agents/{key}/identity:replace`. The core principal stays the
+   same, the previous binding is revoked, and the new one gets the permissions
+   of the current revision of the description.
 
 After issuing the file, the script reminds you to recreate the service
 (`docker compose --profile notify up -d notification-service`).
@@ -370,8 +403,10 @@ How to use it is described in [First task](first-task.md).
 | `POST /api/v1/bootstrap: HTTP 403 … bootstrap_disabled` | `CP_BOOTSTRAP_TOKEN` is empty | set a value and recreate `control-plane-api` |
 | `PyYAML and jsonschema required by step 5b (catalog from packages)` (or only one of them) | uv is not installed, and the system Python lacks the dependencies; the script stops before its first step | install uv or `pip install pyyaml jsonschema`; when calling the script directly, use `uv run --no-project --with pyyaml --with jsonschema python3 deploy/bootstrap.py …` |
 | `… refers to IAM tenant …, which does not exist in IAM (volumes reset?)` | volumes were reset, but the state file remains | `make reset-state` and rerun bootstrap |
-| `step 5b stopped: пакеты не прошли проверку: …` (`tools/cp_packages.py` prints the reason in Russian: "packages failed validation") | an error in a package's YAML | `make packages-check`, fix the package |
+| `step 5b stopped: пакеты не прошли проверку: …` (`package-sdk` prints the reason in Russian: "packages failed validation") | an error in a package's YAML | `make packages-check`, fix the package |
 | `platform-access-tokens:exchange: HTTP 500` | IAM cannot read the signing key | on Linux, `chown 10001:10001 secrets/iam-signing.pem`, then restart `iam-service` |
+| `токен audience notification-service не получен` (the token for the notification-service audience was not obtained) | the installation has notification rules, but the operator's PAT was issued without the `notification-service` audience (for example, before the rules appeared) | set `NOTIFY_TOKEN`, or delete `secrets/harness-pat` and run bootstrap again: step 4 issues a PAT with this audience |
+| `5b. установка пакетов остановлена: стенд ответил HTTP 401` (step 5b stopped: the stand answered HTTP 401) | the operator's PAT is revoked or expired: bootstrap renews an expired access token itself | reissue the PAT (see above) |
 
 ## See also
 

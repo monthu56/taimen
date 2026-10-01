@@ -147,9 +147,9 @@ Any mutation (a POST command or PATCH) accepts an `Idempotency-Key` header of
 One-time secrets are not stored: repeating an API key issuance returns
 `key: null`. Two commands require the key: `POST /runs/{id}/control-messages`
 and `POST /runs/{id}/child-handles` (without it, `422 idempotency_key_required`).
-For `:handoff`, `harness-manifest:compile`, and `:revoke` of a child handle the
-key is strongly recommended: a repeat without it after an ambiguous response
-becomes a new command.
+For `:handoff` and `:revoke` of a child handle the key is strongly
+recommended: a repeat without it after an ambiguous response becomes a new
+command.
 
 !!! tip "Client rule"
     One logical call, one key for all transport retries. A retried HTTP request
@@ -275,7 +275,7 @@ See [Task types and statuses](task-types.md) and [Catalog packages](catalog-pack
 | GET | `/tasks/{ref}/transitions` | `tasks.read` | where the task can move from the current status (`route`: `update` or `complete`) |
 | POST | `/tasks/{ref}:claim` | `tasks.claim` | atomic claim `{sessionId, ttlSeconds?, intent?}` → fencing token |
 | POST | `/tasks/{ref}:complete` | `tasks.write` | complete (`If-Match`; with a live claim — `claimId` and `fencingToken`) |
-| POST | `/tasks/{ref}:start-run` | `tasks.claim` | run under a live claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` |
+| POST | `/tasks/{ref}:start-run` | `tasks.claim` | run under a live claim `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?, agentRevisionId?}` |
 | POST | `/tasks/{ref}/relations` | `tasks.write` | relation `{toTask, type}`: `parent`, `blocks`, `depends_on`, `spawned_by`, `related_to`; cycles — `422` |
 | GET | `/tasks/{ref}/relations` | `tasks.read` | relations in both directions |
 | DELETE | `/tasks/{ref}/relations/{relationId}` | `tasks.write` | delete a relation |
@@ -357,10 +357,6 @@ or `harness`), `acceptance[]`, `evidence[]`. Semantics are covered in
 | POST | `/runs/{id}/actions` | `tasks.claim`, owner of the live claim | action `{action, status, skill?, externalReference?, metadata}`; budget → `409 budget_exceeded` |
 | POST | `/runs/{id}/actions/{actionId}:finish` | `tasks.claim` | finish a `started` action |
 | GET | `/runs/{id}/actions` | `tasks.read` | action log by `seq` |
-| GET | `/runs/{id}/harness-manifest` | `tasks.read` | manifest (`?version=`) |
-| GET | `/runs/{id}/harness-manifests` | `tasks.read` | version history |
-| POST | `/runs/{id}/harness-manifest:compile` | `tasks.claim`, owner of the live claim | recompile: `200` unchanged, `201` new version |
-| POST | `/runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | note `{kind, summary, data}` |
 | POST | `/runs/{id}/control-messages` | `tasks.write`; `force_cancel` — `claims.manage` | control message (`Idempotency-Key` and `expectedRunVersion` are required) |
 | GET | `/runs/{id}/control-messages` | `tasks.read` | messages, cursor `rc1_…` |
 | POST | `/runs/{id}/control-messages/{messageId}:acknowledge` | `tasks.claim`, holder of the live claim | acknowledge `applied`, `rejected`, or `superseded` |
@@ -368,6 +364,14 @@ or `harness`), `acceptance[]`, `evidence[]`. Semantics are covered in
 | GET | `/runs/{id}/child-handles` | `tasks.read` | handles of the run (`?active=true`, cursor `cd1_…`) |
 | GET | `/child-handles/{idOrToken}` | `tasks.read` | status and result by id or `ch1_…` |
 | POST | `/child-handles/{id}:revoke` | holder of the parent run or `claims.manage` | revoke `{reason, cancelChild}` |
+
+A run names the agent revision it goes by (CP-ADR-0073): an executor whose
+principal is linked to an agent passes `agentRevisionId` in `:start-run`
+(without it — `422 agent_revision_required`; a revision of another agent —
+`422 agent_revision_mismatch`), and the server records it on the run and in the
+`run.started` event. The executor reads its current revision through
+`GET /agents/me`. There is no separate configuration snapshot per run (see
+[Agent revision on a run](harness-protocol.md#agent-revision)).
 
 See [Execution — claims and runs](execution.md) and [Harness protocol](harness-protocol.md).
 

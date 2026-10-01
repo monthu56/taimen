@@ -151,7 +151,7 @@ missing from `.env`.
 ### Catalog package variables { #package-variables }
 
 `compose.yml` does not interpolate these variables: the package installer
-`tools/cp_packages.py` reads them (from `.env`, the `--env` flag, and the
+`package-sdk` reads them (from `.env`, the `--env` flag, and the
 process environment) and substitutes them into `${NAME}` in package objects
 during `plan` and `apply`. The package itself declares which variables it
 needs; an unset variable that a package in the installation needs is an
@@ -661,10 +661,11 @@ add a description.
 <!-- generated:env-summary -->
 _This section is generated from code; do not edit it by hand._
 
-Total variables: 120 (in `compose.yml`: 110, in `.env.example`: 82). Not described in the tables above: 0.
+Total variables: 151 (in `compose.yml`: 121, in `.env.example`: 113). Not described in the tables above: 0.
 
 | Variable | Compose default | Services | Profiles | `.env.example` | Described above |
 |---|---|---|---|---|---|
+| `ACCOUNTING_ROLE_ID` | — | — | — | yes | yes |
 | `CADDYFILE` | `./deploy/caddy/Caddyfile.local` | caddy | edge | yes | yes |
 | `CP_AUTHZ_MODE` | `local` | context-adapter, control-plane-api, control-plane-worker | core | yes | yes |
 | `CP_BOOTSTRAP_TOKEN` | — | control-plane-api | core | yes | yes |
@@ -694,6 +695,8 @@ Total variables: 120 (in `compose.yml`: 110, in `.env.example`: 82). Not describ
 | `IAM_POSTGRES_PASSWORD` | — | iam-db, iam-service | core | yes | yes |
 | `IAM_SIGNING_KEY_FILE` | `./secrets/iam-signing.pem` | (secrets) | — | yes | yes |
 | `IAM_SIGNING_KEY_ID` | `local-dev` | iam-service | core | yes | yes |
+| `INVOICE_WORKSPACE_ID` | — | — | — | yes | yes |
+| `KNOWLEDGE_WORKSPACE_ID` | — | — | — | yes | yes |
 | `LOG_RENDERER` | — | — | — | yes | yes |
 | `MEMORY_BUILD_CONTEXT` | `.` | memory-db, memory-service | core | — | yes |
 | `MEMORY_CONSOLE_ENABLED` | `false` | memory-service | core | yes | yes |
@@ -708,6 +711,7 @@ Total variables: 120 (in `compose.yml`: 110, in `.env.example`: 82). Not describ
 | `MEMORY_POSTGRES_PASSWORD` | — | memory-db, memory-service | core | yes | yes |
 | `MEMORY_RERANK_ENABLED` | `false` | memory-service | core | yes | yes |
 | `MINIO_MEM_LIMIT` | `256m` | minio | core | — | yes |
+| `NOTIFICATION_SERVICE_URL` | — | — | — | yes | yes |
 | `NOTIFY_BUILD_CONTEXT` | `.` | notification-service | notify | — | yes |
 | `NOTIFY_DB_MEM_LIMIT` | `128m` | notification-db | notify | — | yes |
 | `NOTIFY_EMAIL_FROM` | `notifications@localhost` | notification-service | notify | — | yes |
@@ -716,17 +720,41 @@ Total variables: 120 (in `compose.yml`: 110, in `.env.example`: 82). Not describ
 | `NOTIFY_POSTGRES_PASSWORD` | — | notification-db, notification-service | notify | yes | yes |
 | `NOTIFY_SMTP_HOST` | `localhost` | notification-service | notify | — | yes |
 | `NOTIFY_SMTP_PORT` | `587` | notification-service | notify | — | yes |
+| `RUNTIME_CONSOLE_CONTROL_PLANE_URL` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_COOKIE_SECRET_FILE` | `./secrets/runtime-console-cookie-secret` | (secrets) | — | yes | yes |
+| `RUNTIME_CONSOLE_CP_SCOPES` | `control-plane:read control-plane:write control-plane:admin` | console | core | yes | yes |
+| `RUNTIME_CONSOLE_FLEET_URL` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_IAM_TENANT` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_IAM_URL` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_LAUNCHER_URL` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_LOGO_TEXT` | empty | console | core | yes | yes |
+| `RUNTIME_CONSOLE_OIDC_CLIENT_ID` | `runtime-console` | console | core | yes | yes |
+| `RUNTIME_CONSOLE_OIDC_ISSUER` | `${TAIMEN_PUBLIC_URL` | console | core | yes | yes |
+| `RUNTIME_CONSOLE_OIDC_SCOPES` | `openid profile email` | console | core | yes | yes |
+| `RUNTIME_CONSOLE_OIDC_SECRET_FILE` | `./secrets/runtime-console-oidc-secret` | (secrets) | — | yes | yes |
+| `RUNTIME_CONSOLE_PORT` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_PRODUCT_NAME` | empty | console | core | yes | yes |
+| `RUNTIME_CONSOLE_PUBLIC_URL` | — | — | — | yes | yes |
+| `RUNTIME_CONSOLE_SESSION_TTL_HOURS` | `12` | console | core | yes | yes |
+| `RUNTIME_CONSOLE_STATIC_DIR` | — | — | — | yes | yes |
 | `S3_ACCESS_KEY_ID` | — | minio, minio-bootstrap | core | yes | yes |
 | `S3_SECRET_ACCESS_KEY` | — | minio, minio-bootstrap | core | yes | yes |
 | `SELFDEV_CONTROL_PLANE_URL` | — | — | — | yes | yes |
+| `SELFDEV_FLEET_URL` | — | — | — | yes | yes |
 | `SELFDEV_HUMAN_HARNESS_URL` | — | — | — | yes | yes |
 | `SELFDEV_IAM_SERVICE_URL` | — | — | — | yes | yes |
 | `SELFDEV_MEMORY_SERVICE_URL` | — | — | — | yes | yes |
 | `SELFDEV_NOTIFICATION_SERVICE_URL` | — | — | — | yes | yes |
+| `SELFDEV_PACKAGE_SDK_URL` | — | — | — | yes | yes |
+| `SELFDEV_PLATFORM_AUTH_SDK_URL` | — | — | — | yes | yes |
 | `SELFDEV_REVIEWER_PRINCIPAL` | — | — | — | yes | yes |
+| `SELFDEV_SKILLS_EXECUTOR` | — | — | — | yes | yes |
+| `SELFDEV_SKILL_SDK_URL` | — | — | — | yes | yes |
 | `SELFDEV_SUPERPROJECT_URL` | — | — | — | yes | yes |
 | `SELFDEV_WORKSPACE_ID` | — | — | — | yes | yes |
 | `TASK_URL_BASE` | — | — | — | yes | yes |
+| `TENDERS_COMPANY_INN` | — | — | — | yes | yes |
+| `TENDERS_WORKSPACE_ID` | — | — | — | yes | yes |
 | `VOLUME_CADDY_CONFIG` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | yes | yes |
 | `VOLUME_CADDY_DATA` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | yes | yes |
 | `VOLUME_CONTROL_PLANE_DB` | `${COMPOSE_PROJECT_NAME:-taimen` | (volumes) | — | yes | yes |

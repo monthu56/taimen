@@ -54,8 +54,8 @@ sequenceDiagram
     H->>CP: GET /work/available
     H->>CP: POST /tasks/{ref}:claim {sessionId}
     CP-->>H: Claim {fencingToken, expiresAt}
-    H->>CP: POST /tasks/{ref}:start-run {claimId, fencingToken}
-    CP-->>H: Run (+ manifest v1)
+    H->>CP: POST /tasks/{ref}:start-run {claimId, fencingToken, agentRevisionId?}
+    CP-->>H: Run
     H->>CP: POST /context {task, runId}
     loop work
         H->>CP: POST /runs/{id}/checkpoints | /actions | POST /artifacts
@@ -268,9 +268,10 @@ claim → start-run → (checkpoints | actions | artifacts)* → succeed | fail 
    (permission `tasks.claim`) returns a claim with a `fencingToken` (the new
    claim epoch of the task) and an `expiresAt` lease.
 2. `POST /tasks/{ref}:start-run` with the body
-   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` creates
-   a run bound to this epoch. Manifest version 1 is compiled in the same
-   transaction.
+   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?, agentRevisionId?}`
+   creates a run bound to this epoch. An executor whose principal is linked to
+   an agent names in `agentRevisionId` the revision it works by (see
+   [Agent revision on a run](#agent-revision)).
 3. `GET /runs/{id}/context` returns the operational context: the task,
    workspace, claim, requirements, relations, recent artifacts, pending
    approvals, **checkpoints of all past runs of the task**, executable skills,
@@ -386,42 +387,30 @@ hint for continuing.
 - A summary and evidence with credential-like values or full local paths are
   rejected.
 
-## Effective Harness Manifest
+## Agent revision on a run {#agent-revision}
 
-Together with the run, the server compiles its manifest: an immutable snapshot
-of the effective runtime configuration (CP-ADR-0043). Version 1 appears in the
-`start-run` transaction; the harness does not need to do anything for this.
+The executor's configuration — model, instructions, work selection, working
+copy — is fixed by the revision of its agent: an immutable snapshot of the
+description in the Control Plane agent registry (CP-ADR-0073). A run names the
+revision it went by: the server records `agentRevisionId` on the run and returns
+it in the `start-run` response and in the `run.started` event. There is no
+separate configuration snapshot per run.
 
-| Part | What it contains | Hashed |
+| Who starts the run | `agentRevisionId` in `start-run` | Refusal |
 |---|---|---|
-| `base` | sections `identity`, `run`, `workerProfile`, `projectPolicy`, `toolPolicy`, `executionBackend`, `model`, `budgets`, `redaction` | yes (`baseHash`) |
-| `provenance` | where each section comes from and why each tool is visible | yes |
-| `captured` | operational cursor, task version, claim epoch, a **reference** to the Memory Context Pack (without its content) | no |
-| `ephemeral` | append-only notes `steering`, `warning`, `budget_warning`, `note` | no |
+| a principal linked to an agent | required: a revision of its own agent | no field — `422 agent_revision_required`; a revision of another agent — `422 agent_revision_mismatch` |
+| a principal without an agent (a person, an executor in env mode) | not passed | a passed field — `422 agent_revision_mismatch` |
 
-Who is responsible for what:
+A revision of its own agent that is not the current one is accepted: the
+executor learns about a new revision between runs, and publishing a revision
+while a run starts must not break work. The revision the run actually goes by
+is recorded. The revision is checked before the task is locked and before the
+claim is checked.
 
-| Sections | Source |
-|---|---|
-| `identity`, `run`, `projectPolicy`, `toolPolicy`, `budgets` | computed by the server; an attempt to pass them returns `422 server_authoritative_section` |
-| `workerProfile`, `executionBackend`, `model`, `redaction` | **declared** by the harness; the server records them marked `harness_declared` but makes no decisions based on them |
-
-Endpoints:
-
-| Method and path | Permission | Purpose |
-|---|---|---|
-| `GET /runs/{id}/harness-manifest[?version=N]` | `tasks.read` | manifest (the active version by default) |
-| `GET /runs/{id}/harness-manifests` | `tasks.read` | version history, newest first |
-| `POST /runs/{id}/harness-manifest:compile` | `tasks.claim`, owner of the live claim | recompile; `200` — base unchanged, `201` — new version |
-| `POST /runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | note `{kind, summary, data}`, does not change base |
-
-Compilation reasons: `run_started`, `recompile`, `provider_fallback`. A change
-of model provider must come with `reason=provider_fallback` and an incremented
-`model.attempt`, otherwise `422 invalid_fallback_attempt`. Declarations must
-not contain secrets, fields that look like a prompt or transcript, or absolute
-local paths: the server responds `422 secret_material_rejected` or
-`422 unsafe_manifest_payload`. Manifest rows are protected from UPDATE and
-DELETE by a database trigger.
+The executor learns its agent and the current revision through
+`GET /agents/me`; how the executor daemon chooses its mode and what it takes
+from the revision is described in
+[Executor configuration](../runner/configuration.md).
 
 ## Tools and skills {#tools-and-skills}
 

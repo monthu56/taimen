@@ -2,8 +2,8 @@
 # Reference
 
 Summary tables for the whole delivery: environment variables, services and
-ports, permissions and scopes, machine error codes, `make` targets, and the
-glossary. The section is built for keyword search (`Ctrl+K`) and for reading
+ports, permissions and scopes, machine error codes, `make` targets, the package
+schema and commands, and the glossary. The section is built for keyword search (`Ctrl+K`) and for reading
 "by row": every table row is checked against the component code,
 `compose.yml`, `.env.example`, `Makefile`, or `deploy/`.
 
@@ -16,6 +16,8 @@ glossary. The section is built for keyword search (`Ctrl+K`) and for reading
 | Which permission you need to claim a task; what the `control-plane:write` scope grants; which permissions an agent gets after `make bootstrap` | [Permissions and scopes](permissions.md) |
 | What `stale_claim`, `scope_not_allowed`, `iam_credential_ambiguous` mean and what to do about them | [Error codes](errors.md) |
 | How to bring up the stack with a different set of profiles, run the tests of a single component | [Make targets](make.md) |
+| Which fields a task type, an agent, or a process has in a package, what type a kind's key has, what `packages.lock` contains | [Package schema](package-schema.md) |
+| Which arguments `package-sdk plan` takes, what `package-sdk edit set` does | [package-sdk commands](package-sdk-cli.md) |
 | How a claim differs from a run, and an audience from a scope | [Glossary](glossary.md) |
 
 ## Section conventions

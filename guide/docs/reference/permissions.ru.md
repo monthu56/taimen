@@ -70,7 +70,7 @@ flowchart LR
 | `processes.write` | Публикация версии процесса (на workspace процесса). |
 | `processes.operate` | Явный старт экземпляра, `:suspend`, `:resume`, `:cancel` (на workspace экземпляра). |
 | `packages.test` | Проверка и тесты пакета в песочнице ядра, replay процесса (`/packages:test`, `:replay`). |
-| `packages.plan` | План и применение пакета (`/packages:plan`, `/packages:apply`); применение требует ещё права видов. |
+| `packages.plan` | План и применение пакета (`/packages:plan`, `/packages:apply`) и запись связи объектов с пакетом (`/packages:record`); применение и запись требуют ещё права видов. |
 | `calendars.write` | Публикация производственного календаря. |
 | `goals.read` | Чтение целей (Goals). |
 | `goals.write` | Создание и изменение целей. |

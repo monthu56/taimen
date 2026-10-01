@@ -19,7 +19,7 @@ configured through the environment (see [Configuration](configuration.md)).
 
 ```mermaid
 flowchart LR
-    Y["agents/*.yaml"] ==>|cp_packages apply| CP["Control Plane<br/>revisions"]
+    Y["agents/*.yaml"] ==>|package-sdk apply| CP["Control Plane<br/>revisions"]
     D["control-plane-agent<br/>started manually"] ==>|GET /agents/me, work| CP
 ```
 

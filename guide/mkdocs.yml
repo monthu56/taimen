@@ -90,10 +90,26 @@ plugins:
             Authorization and permissions: Авторизация и права
             CLI and MCP server: CLI и MCP-сервер
             Configuration: Конфигурация
+            Packages: Пакеты
+            A package in 10 minutes: Пакет за 10 минут
+            Package anatomy: Анатомия пакета
+            'Work: task types and roles': 'Работа: типы задач и роли'
+            Rules in a package: Правила в пакете
+            Processes in a package: Процессы в пакете
+            Package agents: Агенты пакета
+            Package skills: Скиллы пакета
+            Integrations: Интеграции
+            Knowledge and ontology: Знания и онтология
+            Package notifications: Уведомления пакета
+            Package tests: Тесты пакета
+            Installation and release: Установка и выпуск
+            Package author in Claude Code: Автор пакетов в Claude Code
+            'Example: customer claims': 'Пример: претензии клиентов'
+            Readiness checklist: Чек-лист готовности
             Processes: Процессы
             Processes and the knowledge base: Процессы и база знаний
             Expressions: Выражения
-            Package tests: Тесты пакета
+            Scenarios and the core plan: Сценарии и план ядра
             Tenants and principals: Tenants и principals
             Credentials and PATs: Credentials и PAT
             Tokens, audiences, scopes: Токены, audiences, scopes
@@ -111,11 +127,12 @@ plugins:
             Execution workspaces: Рабочие копии
             Run trace: Трасса прогонов
             Operator guide: Работа оператора
+            Console: Консоль
+            Assistant: Ассистент
             MCP plugin for Claude Code: MCP-плагин для Claude Code
             Everyday workflows: Повседневные сценарии
             SDKs and integrations: SDK и интеграции
             Service clients: Клиенты сервисов
-            Vertical packages: Вертикальные пакеты
             Operations: Эксплуатация
             Production deployment: Промышленное развёртывание
             Edge and TLS: Периметр и TLS
@@ -136,7 +153,8 @@ plugins:
             Core service APIs: API сервисов ядра
             Services and ports: Сервисы и порты
             Permissions and scopes: Права и scopes
-            Process language schema: Схема языка процессов
+            Package schema: Схема пакета
+            package-sdk commands: Команды package-sdk
             Error codes: Коды ошибок
             Make targets: Цели make
             Glossary: Глоссарий
@@ -212,11 +230,28 @@ nav:
       - CLI and MCP server: control-plane/cli-and-mcp.md
       - API: control-plane/api.md
       - Configuration: control-plane/configuration.md
+  - Packages:
+      - packages/index.md
+      - A package in 10 minutes: packages/quickstart.md
+      - Package anatomy: packages/anatomy.md
+      - 'Work: task types and roles': packages/work.md
+      - Rules in a package: packages/rules.md
+      - Processes in a package: packages/processes.md
+      - Package agents: packages/agents.md
+      - Package skills: packages/skills.md
+      - Integrations: packages/integrations.md
+      - Knowledge and ontology: packages/knowledge.md
+      - Package notifications: packages/notifications.md
+      - Package tests: packages/testing.md
+      - Installation and release: packages/install-and-release.md
+      - Package author in Claude Code: packages/author-plugin.md
+      - 'Example: customer claims': packages/tutorial.md
+      - Readiness checklist: packages/checklist.md
   - Processes:
       - processes/index.md
       - Processes and the knowledge base: processes/knowledge.md
       - Expressions: processes/expressions.md
-      - Package tests: processes/package-tests.md
+      - Scenarios and the core plan: processes/package-tests.md
   - IAM:
       - iam/index.md
       - Tenants and principals: iam/principals.md
@@ -247,6 +282,8 @@ nav:
       - Configuration: runner/configuration.md
   - Operator guide:
       - operator/index.md
+      - Console: operator/console.md
+      - Assistant: operator/assistant.md
       - MCP plugin for Claude Code: operator/mcp-plugin.md
       - Everyday workflows: operator/workflows.md
   - SDKs and integrations:
@@ -255,7 +292,6 @@ nav:
       - Service clients: sdk/clients.md
       - skill-sdk: sdk/skill-sdk.md
       - platform-llm: sdk/platform-llm.md
-      - Vertical packages: sdk/vertical-packages.md
   - Operations:
       - operations/index.md
       - Production deployment: operations/deployment.md
@@ -279,7 +315,8 @@ nav:
       - Core service APIs: reference/api.md
       - Services and ports: reference/services-and-ports.md
       - Permissions and scopes: reference/permissions.md
-      - Process language schema: reference/process-schema.md
+      - Package schema: reference/package-schema.md
+      - package-sdk commands: reference/package-sdk-cli.md
       - Error codes: reference/errors.md
       - Make targets: reference/make.md
       - Glossary: reference/glossary.md

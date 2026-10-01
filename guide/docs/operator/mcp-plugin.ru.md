@@ -222,7 +222,7 @@ Read-only (вызываются свободно):
 | `cp_list_task_types`, `cp_get_task_type` | реестр типов: статусы, переходы, схема полей, исходы approval |
 | `cp_list_goals`, `cp_get_goal` | цели и их работа |
 | `cp_list_comments` | обсуждение задачи |
-| `cp_get_run`, `cp_get_run_context`, `cp_harness_manifest` | run, его контекст и снимок конфигурации |
+| `cp_get_run`, `cp_get_run_context` | run и его контекст |
 | `cp_list_artifacts`, `cp_list_approvals`, `cp_list_events` | артефакты, approvals, журнал событий |
 | `cp_list_projects`, `cp_get_project`, `cp_project_config`, `cp_workspace_tree` | проекты и дерево Workspace |
 | `cp_search_tools`, `cp_describe_tool`, `cp_describe_skill` | каталог инструментов и скиллов |

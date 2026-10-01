@@ -18,7 +18,7 @@ Plane хранит неизменяемые ревизии описания и �
 
 ```mermaid
 flowchart LR
-    Y["agents/*.yaml"] ==>|cp_packages apply| CP["Control Plane<br/>ревизии"]
+    Y["agents/*.yaml"] ==>|package-sdk apply| CP["Control Plane<br/>ревизии"]
     D["control-plane-agent<br/>запущен вручную"] ==>|GET /agents/me, работа| CP
 ```
 

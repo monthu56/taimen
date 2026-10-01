@@ -245,7 +245,7 @@ WebSocket — не источник истины, а сигнал «просни
 | `session.opened`, `session.closed`, `session.expired` | session | — |
 | `claim.released` | claim | `taskId`, `reason`, `taskStatus` (и `taskSystemStatusCategory` при закрытии сессии) |
 | `claim.expired` | claim | `taskId`, `reason` (`expired`, `session_inactive`) |
-| `run.started` | run | `taskId`, `claimId`, `attempt`, `fencingToken` |
+| `run.started` (v2) | run | `taskId`, `claimId`, `attempt`, `fencingToken`; v2 — `agentRevisionId` (ревизия агента, по которой идёт прогон; `null` у исполнителя без агента) |
 | `run.succeeded` | run | `taskId`, `attempt`, `taskCompleted` |
 | `run.failed` | run | `taskId`, `reason` (в том числе `superseded`), `attempt` |
 | `run.cancelled` | run | `taskId`, `reason`, `attempt` |
@@ -254,7 +254,7 @@ WebSocket — не источник истины, а сигнал «просни
 | `run.handoff_prepared` | run | `taskId`, `claimId`, `checkpointId`, `fencingToken`, `reason` |
 | `run.cancel_requested` | run | `taskId`, `attempt` |
 | `run.control_message.accepted`, `.applied`, `.rejected`, `.superseded` | run | `controlMessageId`, `seq`, `operation`, `status`, `causalPosition`, `safeBoundary` |
-| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | Версия манифеста исполнения |
+| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | Больше не пишутся (CP-ADR-0073): остаются в каталоге для событий, уже лежащих в журнале |
 | `run.child.launched`, `.started`, `.resolved`, `.revoked`, `.cancel_requested` | run | ids, `correlationId`, исход, хэш результата |
 
 ### Approvals, артефакты, наблюдения
@@ -269,6 +269,29 @@ WebSocket — не источник истины, а сигнал «просни
 | `observation.recorded` | observation | Явное «запомнить» (см. [Контекст задачи и память](context.md)) |
 | `knowledge.snapshot_reconciled`, `knowledge.pack_registered`, `knowledge.packs_configured` | — | Счётчики без содержимого |
 | `skill.invocation_requested`, `_claimed`, `_retry_scheduled`, `_succeeded`, `_failed`, `_cancelled` | skill_invocation | ids, skill и версия, попытка, код ошибки — без входов и выходов |
+
+### Процессы
+
+Поток событий экземпляра — `process_instance`, чтение — `events.read` на
+workspace процесса. Данных экземпляра события не несут. Общие поля payload
+событий экземпляра: `instanceId`, `definitionKey`, `version`, `instanceKey`,
+`workspaceId`.
+
+| Тип | Ключевые поля payload сверх общих |
+|---|---|
+| `process.started`, `.correlated`, `.data_changed`, `.completed`, `.cancelled`, `.failed`, `.suspended`, `.resumed`, `.migrated` | Жизненный цикл экземпляра (см. [Процессы](../processes/index.md#outcomes)) |
+| `process.stage_entered`, `process.stage_exited` | Стадия |
+| `process.step_entered` | `element`, `stage`, `stepKind`, `waitsFor`, `attempt`, `activityId`, `enteredAt`, `taskId`, `approvalIds`, `skillInvocationId`, `childInstanceId`, `due`, `warnAt`, `provisional` |
+| `process.step_exited` | `element`, `stage`, `stepKind`, `attempt`, `activityId`, `enteredAt`, `exitedAt`, `outcome`, `durationSeconds`, `due`, `breached`, `overdueSeconds` |
+| `process.sla_warning` | `scope`, `element`, `attempt`, `activityId`, `dueAt`, `warnAt`, `provisional`, `owner`, `assignee` |
+| `process.sla_breached` | `scope`, `element`, `attempt`, `activityId`, `dueAt`, `detectedAt`, `overdueSeconds`, `detectedBy`, `provisional`, `owner`, `assignee` |
+| `process.sla_failed` | `scope`, `element`, `attempt`, `activityId`, `error`, `owner` |
+| `process.timer_fired`, `process.timer_rescheduled` | Таймер; у сдвига — `previousDueAt`, `dueAt`, `cause` (`data_changed`, `calendar_changed`, `resumed`, `migrated`) |
+| `process.escalated`, `process.compensated`, `process.milestone_reached`, `process.milestone_lost`, `process.recall_completed`, `process.recall_timed_out` | См. [Процессы](../processes/index.md#process-events) |
+| `process.definition_published`, `calendar.published` | Новая версия процесса или календаря |
+
+События шагов и их исходы — в разделе [События шагов](../processes/index.md#step-events),
+сроки и адресаты `owner`, `assignee` — в [Сроках и SLA](../processes/index.md#sla).
 
 ### Организация и конфигурация
 

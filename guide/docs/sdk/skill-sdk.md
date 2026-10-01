@@ -11,7 +11,9 @@ CP-ADR-0056.
 !!! note "Status"
     Version `0.1.x`, license Apache-2.0. The package is connected as a path dependency in a
     neighbouring folder, like the other platform libraries
-    (see [SDK and integrations](index.md#connect)).
+    (see [SDK and integrations](index.md#connect)). How skills live in a catalog package
+    (who calls them, where they are hosted, how an external write is approved) is described
+    in [Package skills](../packages/skills.md).
 
 ## What a skill is
 
@@ -22,8 +24,8 @@ checks input and output against the schemas, and publishes the result in the tas
 
 ```mermaid
 flowchart LR
-    Code["@skill in code"] -->|"skill-sdk export"| Y["packages/package/skills/*.yaml"]
-    Y -->|"make bootstrap (catalog packages)"| CP[Control Plane: Skill name@version]
+    Code["@skill in code"] -->|"skill-sdk export"| Y["package/skills/*.yaml"]
+    Y -->|"package installation: plan and apply"| CP[Control Plane: Skill name@version]
     CP -->|task with execution.skill| R[Executor]
     R -->|local / http / mcp| H[Skill hosting: skill-sdk]
     H --> Code
@@ -101,7 +103,7 @@ At **import** time the SDK rejects what the core would reject: unknown values of
 with `maxAttempts > 1` (retrying an external write without idempotency is a second external
 effect).
 
-### Outcome versus failure
+### Outcome versus failure { #outcome-vs-failure }
 
 | Situation | How to express it |
 |---|---|
@@ -125,29 +127,90 @@ The function can be synchronous or `async`; the second argument is the context.
 | `ctx.check_deadline()` | raises a retryable `SkillError("timeout")` if the time is up |
 | `ctx.log` | a logger with the call id |
 | `ctx.config(name, default=None)` | a hosting parameter (from the process environment) |
-| `ctx.secret(name)` | a hosting secret; no value — a retryable `config_missing` (another host may have it) |
-| `ctx.llm` | a [platform-llm](platform-llm.md) client configured by the installation; tokens are counted into the cost automatically |
+| `ctx.secret(name)` | a hosting secret: the process environment, then the node's secret file (see [below](#secrets)); found in neither — a retryable `config_missing` (another host may have it) |
+| `ctx.llm` | an LLM client configured by the installation (see [below](#llm)); tokens are counted into the cost automatically |
+| `ctx.artifacts` | artifact content through the core (see [below](#core-access)) |
+| `ctx.knowledge` | the knowledge base through the core (see [below](#core-access)) |
 | `ctx.add_cost(unit, amount)` | account for your own consumption (API requests, pages, and so on) |
 | `ctx.caller` | the verified caller context (`TrustedAuthContext`) for `http`/`mcp-http` |
 
 There is **intentionally no** Control Plane client in the context: a skill does not create or
-move tasks — approval outcomes and core rules do that.
+move tasks — approval outcomes and core rules do that. A skill's access to the core is narrow:
+artifact content and the knowledge base.
 
-The default LLM is an `OpenAICompatibleClient` built from these variables:
+### Secrets { #secrets }
 
-| Variable | Meaning |
-|---|---|
-| `SKILL_LLM_BASE_URL` | base of the OpenAI-compatible API |
-| `SKILL_LLM_API_KEY` | key |
-| `SKILL_LLM_MODELS` | comma-separated models — the rotation order |
+`ctx.secret(name)` looks up the value in two places, in order:
 
-For another provider, use `skill_sdk.configure_llm(factory)`.
+1. **The environment variable** `name` of the hosting process: this is how hosting outside
+   a placement node (your own `http` or `mcp` service) receives secrets.
+2. **The node's secret file** `$SKILL_SDK_SECRETS_DIR/<name>` (`/run/secrets/<name>` by
+   default): this is how the node passes the names from `placement.secrets` of the agent
+   description. The file name equals the secret name without case conversion; the file is
+   looked up only if the name matches the pattern `[a-z0-9][a-z0-9-]{0,62}`.
+
+The file reading rule is the same for all platform SDKs; the canonical implementation is the
+`skill_sdk.secrets` module (`read_secret`, `read_secret_file`):
+
+- an empty file or one of only whitespace characters means there is no secret;
+- only trailing `\r` and `\n` are trimmed from a non-empty value; spaces inside and at the
+  edges are part of the value;
+- at most 64 KiB, UTF-8, a regular file only (a directory or FIFO is refused);
+- symbolic links are resolved only inside the secrets directory (this is how Kubernetes lays
+  out secrets); a link outside or `..` above the directory is refused; a path swapped during
+  reading is read again, up to three attempts;
+- `agent-pat` is reserved: it is the PAT of the agent itself, which the node puts alongside,
+  not an installation secret.
+
+| Error code | When | Retryable |
+|---|---|---|
+| `config_missing` | neither the variable nor the file exists (or the file is empty); the message names both lookup places, without values | yes |
+| `secret_name_invalid` | the name is a path (`/`, `..`) or the reserved `agent-pat` | no |
+| `secret_unreadable` | the process user has no permission on the file | yes |
+| `secret_file_rejected` | the file is rejected by the rule; the reason is in `details.reason`: `outside_secrets_dir`, `symlink_swapped`, `not_regular_file`, `too_large`, `not_utf8`, `unreadable` | no |
+
+### LLM { #llm }
+
+The installation chooses the `ctx.llm` provider with the `SKILL_LLM_PROVIDER` variable:
+
+| Provider | Variables | What it is |
+|---|---|---|
+| `openai` (default) | `SKILL_LLM_BASE_URL`, `SKILL_LLM_API_KEY`, `SKILL_LLM_MODELS` (comma-separated, the rotation order) | `OpenAICompatibleClient` from [platform-llm](platform-llm.md); needs the `llm` extra |
+| `claude-code` | `SKILL_LLM_MODELS`, `SKILL_LLM_CLAUDE_BINARY` (`claude` by default), `SKILL_LLM_TIMEOUT_SECONDS` (300 by default); `CLAUDE_CODE_OAUTH_TOKEN` in the executor's environment | Claude on a subscription through the Claude Code CLI in non-interactive mode: no tools and no MCP servers, the prompt goes through stdin; only tokens count toward the cost |
+
+- A provider or its variables not configured — a retryable `llm_not_configured`; no library
+  or CLI — a retryable `llm_unavailable`; a subscription limit or `429` from `claude-code` —
+  a retryable `llm_rate_limited`.
+- **Personal data guard.** `system_prompt` and `messages` pass through it before the model
+  call: a SNILS (Russian individual insurance account number), a passport number (next to
+  the word `паспорт` "passport" or `серия` "series"), phone numbers, e-mail addresses, and
+  full names are replaced with a marker such as `[ПДн:фио]`; the log records only how many
+  of what were found. Organizations' INN and KPP, amounts, and dates are left untouched.
+- For another provider, use `skill_sdk.configure_llm(factory)`.
+
+### Core access: `ctx.artifacts` and `ctx.knowledge` { #core-access }
+
+| Call | What it does | Core route |
+|---|---|---|
+| `await ctx.artifacts.read(artifact_id)` | artifact content: `ArtifactContent` with `data`, `media_type`, `sha256`, `text()` | `GET /api/v1/artifacts/{id}/content` |
+| `await ctx.knowledge.preview(snapshot, workspace_id=…)` | what a source snapshot would change in the graph, and its `stateToken` | `POST /api/v1/knowledge/snapshots:preview` |
+| `await ctx.knowledge.apply(snapshot, workspace_id=…, expected_state=…)` | apply a snapshot; if the state changed after the preview — `SnapshotStale` (`snapshot_stale`, not retryable: build the plan again) | `POST /api/v1/knowledge/snapshots` |
+| `await ctx.knowledge.document(workspace_id=…, natural_key=…, title=…, chunks=…)` | a document in the knowledge base | `POST /api/v1/knowledge/documents` |
+| `await ctx.knowledge.recall(**query)` | the memory answer to a query | `POST /api/v1/context/recall` |
+| `await ctx.knowledge.query(workspace_id=…, kinds=…, where=…)` | all entities of the kinds with a filter, across all pages; more than `max_items` (10,000 by default) is a `knowledge_query_too_large` error, not truncation | `POST /api/v1/knowledge/entities:query` |
+
+- The core address is `CONTROL_PLANE_URL` or the executor daemon's address
+  `CONTROL_PLANE_SERVER`; without them — `config_missing`. The credential is the skill
+  executor's account; the core client finds it.
+- Permissions are checked for the skill executor on the task's workspace: for example,
+  `artifacts.read` to read an artifact.
+- This is the only way a skill sees memory: through the core.
 
 ## Hosting
 
 | Protocol | How to run | What the executor sees |
 |---|---|---|
-| `local` | the package is installed next to the executor daemon, `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES=<package>` | the executor finds the skills itself, calls `__skill_invoke__`, and gets `{outputs, cost}` |
+| `local` | the package is installed next to the executor daemon, `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES=<package>`; in a catalog package, an agent of kind `skills` (see [Package skills](../packages/skills.md#hosting)) | the executor finds the skills itself, calls `__skill_invoke__`, and gets `{outputs, cost}` |
 | `http` | `skill-sdk serve http <module>` or `skill_sdk.http.create_app(...)` in your own ASGI | `POST /skills/{name}@{version}` |
 | `mcp` | `skill-sdk serve mcp-stdio <module>` or `serve mcp-http` | an MCP tool named after the skill |
 
@@ -199,8 +262,9 @@ JWKS gives `503`, an invalid token gives `401`.
 ## Catalog package
 
 Skills reach Control Plane through catalog packages (TAI-ADR-0044, see
-[Catalog packages](../control-plane/catalog-packages.md)). The skill YAML is generated from
-code and never edited by hand:
+[Package skills](../packages/skills.md)). The skill YAML is generated from code and never
+edited by hand; `package-sdk test` checks it against the code at the contracts level (see
+[Package tests](../packages/testing.md)):
 
 
 ```bash
@@ -260,7 +324,7 @@ declarations of the same `name@version` are an error.
 ## Skill tests
 
 ```python
-from skill_sdk.testing import check_contract, invoke
+from skill_sdk.testing import FakeLlm, check_contract, invoke
 
 
 def test_merge_contract():
@@ -268,28 +332,49 @@ def test_merge_contract():
 
 
 def test_conflict_is_an_outcome():
-    result = invoke(merge, {"repository": "…", "branch": "b", "commit": "abc1234", "target": "main"})
+    result = invoke(merge, {"repository": "…", "branch": "b", "commit": "abc1234", "target": "main"},
+                    env={"GIT_REMOTE": "…"}, idempotency_key="k-1")
     assert result.outputs["reason"] == "conflict"
+
+
+def test_summary_uses_the_model():
+    llm = FakeLlm([{"summary": "Коротко"}])
+    result = invoke(summarize, {"text": "…"}, llm=llm)
+    assert result.outputs == {"summary": "Коротко"}
+    assert len(llm.calls) == 1
 ```
 
-`ainvoke` is the asynchronous variant. `check_contract` runs the contract through the same
-validators the core uses, if the `control-plane` package is available in the environment.
+| Tool | What it does |
+|---|---|
+| `invoke(skill, inputs, *, env=None, idempotency_key=None, llm=None)` | a call with input and output checked against the contract, as in hosting; `SkillError` propagates; `ainvoke` is the asynchronous variant |
+| `check_contract(skill)` | runs the contract through the same validators the core uses, if the `control-plane` package is available in the environment |
+| `FakeLlm(answers)` | a fake `ctx.llm`: a single answer, a list in call order, or a function of the call; a `chat_json` answer is validated by the response model; calls are recorded in `llm.calls` after the personal data guard; an extra call is an `AssertionError` |
+| `FakeCore` + `configure_core(lambda ctx: fake)` | an in-memory core for `ctx.artifacts` (`fake.artifacts.put(id, data)`) and `ctx.knowledge` (snapshots with `stateToken` and `SnapshotStale`, the `recall_answer` response, `query` over applied snapshots) |
+
+`env` sets the hosting environment for the duration of the call: `ctx.config` parameters and
+`ctx.secret` secrets. The `llm` fake lives in a context variable: the asyncio tasks of this
+call see it, and the global configuration does not change.
 
 ## Installation
 
-```bash
-uv add skill-sdk                # contract, local, tests, export
-uv add "skill-sdk[http]"        # + ASGI hosting and token verification
-uv add "skill-sdk[mcp]"         # + MCP server
-uv add "skill-sdk[llm]"         # + ctx.llm
-uv add "skill-sdk[all]"         # everything at once
-```
+| Dependency | What it provides |
+|---|---|
+| `skill-sdk` | contract, `local`, tests, export |
+| `skill-sdk[http]` | + ASGI hosting and token verification |
+| `skill-sdk[mcp]` | + MCP server |
+| `skill-sdk[llm]` | + `ctx.llm` with the `openai` provider |
+| `skill-sdk[all]` | everything at once |
 
-`platform-auth-sdk` and `platform-llm` are connected as neighbouring folders.
+`skill-sdk`, `platform-auth-sdk`, and `platform-llm` are connected as neighbouring folders
+(see [Connecting](index.md#connect)), not from the public package index. A package's
+integration code gets `skill-sdk` from the executor's base image (see
+[Integrations](../packages/integrations.md#images)).
 
 ## See also
 
 - [SDK and integrations](index.md)
+- [Package skills](../packages/skills.md)
+- [Package tests](../packages/testing.md)
 - [Catalog packages](../control-plane/catalog-packages.md)
 - [Executor adapters](../runner/adapters.md)
 - [platform-llm](platform-llm.md)

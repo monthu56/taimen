@@ -378,7 +378,6 @@ SDK и [пакеты каталога](catalog-packages.md).
 | `cp_start_run` | M | `max_duration_seconds`, `max_actions` | начать прогон под текущим claim |
 | `cp_get_run` | R | `run_id` | прогон (по умолчанию текущий) |
 | `cp_get_run_context` | R | `run_id` | Run Context: задача, claim, требования, артефакты, checkpoints прошлых попыток, approvals, скиллы |
-| `cp_harness_manifest` | R | `run_id`, `version` | Effective Harness Manifest прогона |
 | `cp_checkpoint` | M | **`kind`**, **`data`** | долговременный checkpoint состояния |
 | `cp_record_action` | M | **`action`**, `status`, `skill`, `external_reference` | запись в журнал действий прогона |
 | `cp_complete_run` | M | `output`, `complete_task` | успешно завершить прогон и, по умолчанию, задачу |

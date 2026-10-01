@@ -16,7 +16,7 @@ description revision. This is a reference article for operations engineers.
 
 !!! tip "How to change agent settings"
     Change the model, `permissionMode`, neighbours, review, or skills by editing the agent
-    description and running `cp_packages apply`: a new revision appears, and the executor
+    description and running `package-sdk apply`: a new revision appears, and the executor
     switches to it after the current run. The `CONTROL_PLANE_AGENT_*`,
     `CONTROL_PLANE_CLAUDE_MODEL`, and similar variables have no effect on an agent with a
     description.

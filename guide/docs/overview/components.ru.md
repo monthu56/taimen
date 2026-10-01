@@ -19,9 +19,10 @@
 ├── platform-auth-sdk/      # сабмодуль (библиотека)
 ├── skill-sdk/              # сабмодуль (библиотека)
 ├── platform-llm/           # сабмодуль (библиотека)
+├── package-sdk/            # сабмодуль (инструменты автора пакетов)
 ├── compose.yml  .env.example  Makefile
 ├── deploy/                 # bootstrap.py, Caddyfile
-├── tools/                  # smoke, fill_secrets, cp_packages, …
+├── tools/                  # smoke, fill_secrets, docs_gen, …
 └── docs/                   # архитектура и ADR
 ```
 
@@ -43,6 +44,7 @@
 |---|---|---|---|
 | **control-plane** | Авторитетное операционное состояние: задачи, типы, claims, runs, approvals, артефакты, цели, журнал событий, харнесс-протокол; CLI `control-plane`, MCP-сервер `control-plane-mcp`, демон исполнителя `control-plane-agent` | `control-plane-api`, `control-plane-worker`, `context-adapter` (один образ) | PostgreSQL 16 (`control-plane-db`) |
 | **iam-service** | Tenants, principals, audiences, PAT, service accounts, федерация внешних IdP, SCIM, выпуск RS256-токенов, JWKS | `iam-service` | PostgreSQL 16 (`iam-db`) |
+| **console** | Веб-консоль работающей организации: пульс, происхождение работы, процессы, правила, агенты, управляющие действия, пакеты, люди и роли. Код суперпроекта (`web/console`), своей базы нет; см. [Консоль](../operator/console.md) | `console` | нет (сессии в памяти) |
 | **memory-service** | Граф знаний с временными фактами и provenance, документы, гибридный поиск (векторный + лексический + графовый), Context Compiler; HTTP API, MCP-сервер, CLI | `memory-service` | PostgreSQL 16 с Apache AGE и pgvector (`memory-db`, свой образ) |
 
 ### Библиотеки
@@ -52,6 +54,7 @@
 | **platform-auth-sdk** | Общий Policy Enforcement Point: проверка токенов IAM по JWKS, trusted auth context, отзыв, проверки entitlement и policy, единый контракт отказа, аудит. Используют все resource services |
 | **skill-sdk** | Скилл пишется один раз в коде; SDK даёт контракт, контекст вызова, хостинг по протоколам `local`, `http`, `mcp` и экспорт YAML в пакет каталога |
 | **platform-llm** | Общий LLM-клиент: любой OpenAI-совместимый `/chat/completions`, ответы по JSON-схеме, ретраи и переключение моделей |
+| **package-sdk** | Инструменты автора пакетов каталога: CLI `package-sdk` (`check`, `test`, `lock`, `plan`, `apply`), схемы формата, среда наблюдателя `package_sdk.connector` и плагин Claude Code `package-author`. См. [Пакеты](../packages/index.md) |
 | **control-plane-client** | Клиент Control Plane (дистрибутив в `control-plane/client`): обмен PAT на токен, ретраи, типизированные вызовы. См. [Клиенты сервисов](../sdk/clients.md) |
 
 ### Периферия
@@ -82,7 +85,7 @@ flowchart LR
 
 | Профиль | Сервисы | Статус | Когда включать |
 |---|---|---|---|
-| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` | **стабильное ядро** | всегда (MinIO — содержимое артефактов ядра) |
+| `core` | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap`, `console` | **стабильное ядро** | всегда (MinIO — содержимое артефактов ядра) |
 | `edge` | `caddy` | стабильный | всегда, кроме случаев, когда периметр обеспечен иначе |
 | `notify` | `notification-db`, `notification-service` | опционально | уведомления людей по событиям Control Plane; учётку сервиса заводит bootstrap |
 

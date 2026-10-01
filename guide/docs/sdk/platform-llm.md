@@ -164,5 +164,5 @@ Package checks: `uv run pytest -q`, `uv run ruff check . && uv run ruff format -
 
 - [SDK and integrations](index.md)
 - [skill-sdk](skill-sdk.md)
-- [Vertical packages](vertical-packages.md)
+- [Packages](../packages/index.md)
 - [Memory configuration](../memory/configuration.md)

@@ -98,10 +98,11 @@ host name.
 |---|---|---|
 | `/iam/*` | `iam-service:8010` | the prefix is stripped; the IAM issuer is `${TAIMEN_PUBLIC_URL}/iam` |
 | `/api/v1/*`, `/health/*`, `/docs`, `/redoc`, `/openapi.json` | `control-plane-api:8000` | `/metrics` is not exposed externally |
+| `/console/*` | `console:8090` | `core` profile; the [console](../operator/console.md), the server itself lives under `/console` |
 | `/notify/*` | `notification-service:8000` | `notify` profile |
 | `/guide/*` | `guide:8080` | `edge` profile; this guide |
 | `/memory/*` | `memory-service:8077` | **local Caddyfile only**; in the production layout memory is not exposed |
-| `/` (everything else) | — | the delivery has no web interface: clients work through the API, CLI, and MCP |
+| `/` (everything else) | — | the delivery's web interface is the [console](../operator/console.md) at `/console/`; besides it, the API, CLI, and MCP |
 
 In addition, each service publishes a port on the host's `127.0.0.1` (for
 example, Control Plane on `18000`, IAM on `18010`, memory on `18001`) for local

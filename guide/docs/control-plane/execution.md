@@ -271,9 +271,16 @@ curl -s -X POST "$CP/tasks/TASK-000123:start-run" \
   with `failureReason: superseded` in the same transaction.
 - `attempt` = number of runs of the task + 1; the run pins the claim's
   `fencingToken`.
-- In the same transaction the run's Effective Harness Manifest is compiled
-  (see [Harness protocol](harness-protocol.md)) and, if the task was launched
-  by a parent run, the child handle is bound.
+- An executor whose principal is linked to an agent passes `agentRevisionId`,
+  the revision of its agent it works by (CP-ADR-0073). Without the field —
+  `422 agent_revision_required`; a revision of another agent, or the field from
+  a principal without an agent — `422 agent_revision_mismatch`. The revision is
+  checked before the task is locked and before the claim is checked. The server
+  records it on the run (`agentRevisionId` in the response and in the
+  `run.started` event); the executor reads its current revision through
+  `GET /agents/me` (see [Agent revision on a run](harness-protocol.md#agent-revision)).
+- If the task was launched by a parent run, the child handle is bound in the
+  same transaction.
 
 Budget: `maxDurationSeconds` and `maxActions` (positive, otherwise
 `422 invalid_budget`). Exceeding it rejects new checkpoints and actions with
@@ -595,6 +602,7 @@ Both are described in [Task context and memory](context.md).
 | `run_holder_mismatch` | 403 | The run belongs to another principal |
 | `run_in_progress` | 409 | `:complete` with an active run |
 | `task_not_runnable` | 422 | `:start-run` on a terminal task |
+| `agent_revision_required`, `agent_revision_mismatch` | 422 | `:start-run` without a revision of its own agent or with another agent's revision |
 | `budget_exceeded` | 409 | The run budget is exhausted |
 | `run_cancel_requested` | 409 | New actions after an applied cancellation |
 | `invalid_handoff`, `unsafe_handoff_payload` | 422 | Invalid handoff |

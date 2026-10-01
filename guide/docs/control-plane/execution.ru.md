@@ -268,9 +268,15 @@ curl -s -X POST "$CP/tasks/TASK-000123:start-run" \
 - `running` run от **прежней** эпохи (зомби) переводится в `failed` с
   `failureReason: superseded` в той же транзакции.
 - `attempt` = число runs задачи + 1; run фиксирует `fencingToken` claim.
-- В той же транзакции компилируется Effective Harness Manifest run'а
-  (см. [Харнесс-протокол](harness-protocol.md)) и, если задача запущена
-  родительским run, привязывается дочерний handle.
+- Исполнитель, чей principal привязан к агенту, передаёт `agentRevisionId` —
+  ревизию своего агента, по которой работает (CP-ADR-0073). Без поля —
+  `422 agent_revision_required`, ревизия чужого агента или поле от principal
+  без агента — `422 agent_revision_mismatch`. Ревизию проверяют до блокировки
+  задачи и до проверки claim. Сервер записывает её на run (`agentRevisionId`
+  в ответе и в событии `run.started`); свою текущую ревизию исполнитель читает
+  через `GET /agents/me` (см. [Ревизия агента на прогоне](harness-protocol.md#agent-revision)).
+- Если задача запущена родительским run, в той же транзакции привязывается
+  дочерний handle.
 
 Бюджет: `maxDurationSeconds` и `maxActions` (положительные, иначе
 `422 invalid_budget`). Превышение отклоняет новые checkpoints и actions
@@ -592,6 +598,7 @@ curl -s "$CP/tasks/TASK-000123/claimability" -H "Authorization: Bearer $TOKEN"
 | `run_holder_mismatch` | 403 | Run принадлежит другому principal |
 | `run_in_progress` | 409 | `:complete` при активном run |
 | `task_not_runnable` | 422 | `:start-run` на терминальной задаче |
+| `agent_revision_required`, `agent_revision_mismatch` | 422 | `:start-run` без ревизии своего агента или с чужой ревизией |
 | `budget_exceeded` | 409 | Исчерпан бюджет run |
 | `run_cancel_requested` | 409 | Новые actions после применённой отмены |
 | `invalid_handoff`, `unsafe_handoff_payload` | 422 | Неверный handoff |

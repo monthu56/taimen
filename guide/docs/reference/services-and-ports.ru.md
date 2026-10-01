@@ -40,8 +40,9 @@ flowchart LR
 
 | Профиль | Статус | Сервисы |
 |---|---|---|
-| `core` | ядро | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap` |
+| `core` | ядро | `iam-db`, `iam-service`, `control-plane-db`, `control-plane-api`, `control-plane-worker`, `context-adapter`, `memory-db`, `memory-service`, `minio`, `minio-bootstrap`, `console` |
 | `edge` | ядро | `caddy`, `guide` |
+| `idp-dex` | только тесты | `dex-render`, `dex` — другой OIDC IdP для compose-теста консоли |
 
 
 !!! note "Зависимости между профилями"
@@ -177,6 +178,24 @@ flowchart LR
 Хранит только содержимое артефактов ядра; см.
 [Хранилище объектов](../operations/object-storage.md).
 
+### console
+
+| Параметр | Значение |
+|---|---|
+| Образ | `${IMAGE_PREFIX:-taimen}/runtime-console`, сборка `web/console/Dockerfile` (контекст `web/console`, `node:24-alpine`) |
+| Пользователь | `10001:10001` |
+| Порт | 8090, не публикуется; снаружи — `/console/*` через Caddy |
+| Зависит от | `iam-service`, `control-plane-api` (healthy) |
+| Секреты | `runtime_console_oidc_secret`, `runtime_console_cookie_secret` |
+| Healthcheck | `GET http://127.0.0.1:8090/console/healthz` |
+| Лимит памяти | `128m` |
+
+Сервер консоли и собранный интерфейс в одном образе; своей базы нет, сессии — в
+памяти процесса. Вход — OIDC IdP организации, в ядро и IAM — по внутренним именам от
+имени вошедшего человека.
+См. [Консоль](../operator/console.md),
+переменные `RUNTIME_CONSOLE_*` — в [справочнике](environment.md).
+
 ## Периметр (`edge`)
 
 ### caddy
@@ -237,6 +256,8 @@ flowchart LR
 | Секрет | Файл по умолчанию | Кому |
 |---|---|---|
 | `iam_signing_key` | `./secrets/iam-signing.pem` | `iam-service` |
+| `runtime_console_oidc_secret` | `./secrets/runtime-console-oidc-secret` (`RUNTIME_CONSOLE_OIDC_SECRET_FILE`) | `console`, `dex-render` |
+| `runtime_console_cookie_secret` | `./secrets/runtime-console-cookie-secret` (`RUNTIME_CONSOLE_COOKIE_SECRET_FILE`) | `console` |
 
 Контейнеры читают секреты под непривилегированным uid (10001 у сервисов
 ядра). На Linux выполните `chown 10001` для файлов в `secrets/`, права

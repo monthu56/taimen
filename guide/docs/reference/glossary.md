@@ -370,9 +370,9 @@ PAT and a binding without human-only permissions.
 **Run budget**: the maximum duration of a run (`maxDurationSeconds`);
 exceeding it gives `budget_exceeded`.
 
-**Vertical package**: a domain product on top of the core that uses the
-shared Control Plane, IAM, and memory, but has its own API and audience. →
-[Vertical packages](../sdk/vertical-packages.md)
+**Vertical package**: a domain vertical as a catalog package without its own
+runtime: the core runs the work, processes, and rules, and skills perform
+actions in the outside world. → [Packages](../packages/index.md)
 
 **Case**: a process instance: data, stages, timers, decision log, and
 outcome; in the knowledge base, a `case` node. → [Processes](../processes/index.md)

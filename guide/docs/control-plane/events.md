@@ -246,7 +246,7 @@ event>` — whatever was missed will be read.
 | `session.opened`, `session.closed`, `session.expired` | session | — |
 | `claim.released` | claim | `taskId`, `reason`, `taskStatus` (and `taskSystemStatusCategory` when a session closes) |
 | `claim.expired` | claim | `taskId`, `reason` (`expired`, `session_inactive`) |
-| `run.started` | run | `taskId`, `claimId`, `attempt`, `fencingToken` |
+| `run.started` (v2) | run | `taskId`, `claimId`, `attempt`, `fencingToken`; v2 — `agentRevisionId` (the agent revision the run goes by; `null` for an executor without an agent) |
 | `run.succeeded` | run | `taskId`, `attempt`, `taskCompleted` |
 | `run.failed` | run | `taskId`, `reason` (including `superseded`), `attempt` |
 | `run.cancelled` | run | `taskId`, `reason`, `attempt` |
@@ -255,7 +255,7 @@ event>` — whatever was missed will be read.
 | `run.handoff_prepared` | run | `taskId`, `claimId`, `checkpointId`, `fencingToken`, `reason` |
 | `run.cancel_requested` | run | `taskId`, `attempt` |
 | `run.control_message.accepted`, `.applied`, `.rejected`, `.superseded` | run | `controlMessageId`, `seq`, `operation`, `status`, `causalPosition`, `safeBoundary` |
-| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | Execution manifest version |
+| `run.manifest_compiled`, `run.manifest_ephemeral_recorded` | run | No longer written (CP-ADR-0073): kept in the catalog for events already in the journal |
 | `run.child.launched`, `.started`, `.resolved`, `.revoked`, `.cancel_requested` | run | ids, `correlationId`, outcome, result hash |
 
 ### Approvals, artifacts, observations
@@ -270,6 +270,29 @@ event>` — whatever was missed will be read.
 | `observation.recorded` | observation | An explicit "remember" (see [Task context and memory](context.md)) |
 | `knowledge.snapshot_reconciled`, `knowledge.pack_registered`, `knowledge.packs_configured` | — | Counters without content |
 | `skill.invocation_requested`, `_claimed`, `_retry_scheduled`, `_succeeded`, `_failed`, `_cancelled` | skill_invocation | ids, skill and version, attempt, error code — without inputs and outputs |
+
+### Processes
+
+The event stream of an instance is `process_instance`; reading it requires
+`events.read` on the process workspace. Events carry no instance data. Common
+payload fields of instance events: `instanceId`, `definitionKey`, `version`,
+`instanceKey`, `workspaceId`.
+
+| Type | Key payload fields beyond the common ones |
+|---|---|
+| `process.started`, `.correlated`, `.data_changed`, `.completed`, `.cancelled`, `.failed`, `.suspended`, `.resumed`, `.migrated` | Instance lifecycle (see [Processes](../processes/index.md#outcomes)) |
+| `process.stage_entered`, `process.stage_exited` | Stage |
+| `process.step_entered` | `element`, `stage`, `stepKind`, `waitsFor`, `attempt`, `activityId`, `enteredAt`, `taskId`, `approvalIds`, `skillInvocationId`, `childInstanceId`, `due`, `warnAt`, `provisional` |
+| `process.step_exited` | `element`, `stage`, `stepKind`, `attempt`, `activityId`, `enteredAt`, `exitedAt`, `outcome`, `durationSeconds`, `due`, `breached`, `overdueSeconds` |
+| `process.sla_warning` | `scope`, `element`, `attempt`, `activityId`, `dueAt`, `warnAt`, `provisional`, `owner`, `assignee` |
+| `process.sla_breached` | `scope`, `element`, `attempt`, `activityId`, `dueAt`, `detectedAt`, `overdueSeconds`, `detectedBy`, `provisional`, `owner`, `assignee` |
+| `process.sla_failed` | `scope`, `element`, `attempt`, `activityId`, `error`, `owner` |
+| `process.timer_fired`, `process.timer_rescheduled` | Timer; a reschedule also has `previousDueAt`, `dueAt`, `cause` (`data_changed`, `calendar_changed`, `resumed`, `migrated`) |
+| `process.escalated`, `process.compensated`, `process.milestone_reached`, `process.milestone_lost`, `process.recall_completed`, `process.recall_timed_out` | See [Processes](../processes/index.md#process-events) |
+| `process.definition_published`, `calendar.published` | A new version of a process or calendar |
+
+Step events and their outcomes are described in [Step events](../processes/index.md#step-events),
+deadlines and the `owner`, `assignee` addressees in [Deadlines and SLA](../processes/index.md#sla).
 
 ### Organization and configuration
 

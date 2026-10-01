@@ -51,8 +51,8 @@ sequenceDiagram
     H->>CP: GET /work/available
     H->>CP: POST /tasks/{ref}:claim {sessionId}
     CP-->>H: Claim {fencingToken, expiresAt}
-    H->>CP: POST /tasks/{ref}:start-run {claimId, fencingToken}
-    CP-->>H: Run (+ манифест v1)
+    H->>CP: POST /tasks/{ref}:start-run {claimId, fencingToken, agentRevisionId?}
+    CP-->>H: Run
     H->>CP: POST /context {task, runId}
     loop работа
         H->>CP: POST /runs/{id}/checkpoints | /actions | POST /artifacts
@@ -266,9 +266,10 @@ claim → start-run → (checkpoints | actions | artifacts)* → succeed | fail 
    (право `tasks.claim`) возвращает claim с `fencingToken` (новой эпохой claim
    задачи) и арендой `expiresAt`.
 2. `POST /tasks/{ref}:start-run` с телом
-   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?}` создаёт
-   run, привязанный к этой эпохе. В той же транзакции компилируется манифест
-   версии 1.
+   `{claimId, fencingToken, input?, maxDurationSeconds?, maxActions?, agentRevisionId?}`
+   создаёт run, привязанный к этой эпохе. Исполнитель, чей principal привязан к
+   агенту, называет в `agentRevisionId` ревизию, по которой работает (см.
+   [Ревизия агента на прогоне](#agent-revision)).
 3. `GET /runs/{id}/context` отдаёт операционный контекст: задачу, workspace,
    claim, требования, связи, последние артефакты, pending approvals,
    **checkpoints всех прошлых run'ов задачи**, исполнимые скиллы,
@@ -382,42 +383,27 @@ curl -s -X POST https://platform.example.com/api/v1/runs/<run-id>:handoff \
 - Summary и evidence с credential-подобными значениями или полными локальными
   путями отклоняются.
 
-## Effective Harness Manifest
+## Ревизия агента на прогоне {#agent-revision}
 
-Вместе с run сервер компилирует его манифест: неизменяемый снимок
-эффективной runtime-конфигурации (CP-ADR-0043). Версия 1 появляется в
-транзакции `start-run`, харнессу для этого ничего делать не нужно.
+Конфигурацию исполнителя — модель, инструкции, выбор работы, рабочую копию —
+фиксирует ревизия его агента: неизменяемый снимок описания в реестре агентов
+Control Plane (CP-ADR-0073). Прогон называет ревизию, по которой шёл: сервер
+записывает `agentRevisionId` на run, отдаёт его в ответе `start-run` и в событии
+`run.started`. Отдельного снимка конфигурации на каждый run нет.
 
-| Часть | Что в ней | Хешируется |
+| Кто запускает прогон | `agentRevisionId` в `start-run` | Отказ |
 |---|---|---|
-| `base` | секции `identity`, `run`, `workerProfile`, `projectPolicy`, `toolPolicy`, `executionBackend`, `model`, `budgets`, `redaction` | да (`baseHash`) |
-| `provenance` | откуда каждая секция и почему виден каждый инструмент | да |
-| `captured` | операционный курсор, версия задачи, эпоха claim, **ссылка** на Memory Context Pack (без содержимого) | нет |
-| `ephemeral` | append-only пометки `steering`, `warning`, `budget_warning`, `note` | нет |
+| principal, привязанный к агенту | обязателен: ревизия своего агента | нет поля — `422 agent_revision_required`; ревизия другого агента — `422 agent_revision_mismatch` |
+| principal без агента (человек, исполнитель в режиме env) | не передаётся | переданное поле — `422 agent_revision_mismatch` |
 
-Кто за что отвечает:
+Ревизия своего агента, но не текущая, принимается: исполнитель узнаёт о новой
+ревизии между прогонами, и публикация ревизии во время старта не должна ронять
+работу. Записывается ревизия, по которой прогон идёт на самом деле. Ревизию
+проверяют до блокировки задачи и до проверки claim.
 
-| Секции | Источник |
-|---|---|
-| `identity`, `run`, `projectPolicy`, `toolPolicy`, `budgets` | вычисляет сервер; попытка передать их даёт `422 server_authoritative_section` |
-| `workerProfile`, `executionBackend`, `model`, `redaction` | харнесс **декларирует**; сервер записывает с пометкой `harness_declared`, но решений на их основе не принимает |
-
-Endpoints:
-
-| Метод и путь | Право | Назначение |
-|---|---|---|
-| `GET /runs/{id}/harness-manifest[?version=N]` | `tasks.read` | манифест (по умолчанию активная версия) |
-| `GET /runs/{id}/harness-manifests` | `tasks.read` | история версий, новые сверху |
-| `POST /runs/{id}/harness-manifest:compile` | `tasks.claim`, владелец живого claim | пересборка; `200` — base не изменился, `201` — новая версия |
-| `POST /runs/{id}/harness-manifest/ephemeral` | `tasks.claim` | пометка `{kind, summary, data}`, base не меняет |
-
-Причины компиляции: `run_started`, `recompile`, `provider_fallback`. Смена
-провайдера модели обязана идти с `reason=provider_fallback` и увеличенным
-`model.attempt`, иначе `422 invalid_fallback_attempt`. В декларациях нельзя
-передавать секреты, поля, похожие на prompt или transcript, и абсолютные
-локальные пути: сервер отвечает `422 secret_material_rejected` или
-`422 unsafe_manifest_payload`. Строки манифеста защищены от UPDATE и DELETE
-триггером БД.
+Исполнитель узнаёт своего агента и текущую ревизию через `GET /agents/me`; как
+демон исполнителя выбирает режим и что берёт из ревизии — в статье
+[Конфигурация исполнителя](../runner/configuration.md).
 
 ## Инструменты и скиллы {#tools-and-skills}
 

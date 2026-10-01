@@ -1,9 +1,10 @@
 # SDK и интеграции
 
 Раздел для разработчиков, которые пишут код поверх платформы: собственный
-resource service, исполнителя (агента), скилл, коннектор или вертикальный
-пакет. Здесь описаны канонические библиотеки платформы и правила их
-подключения. Все библиотеки — Python 3.12+.
+resource service, исполнителя (агента), скилл или код интеграции пакета. Здесь
+описаны канонические библиотеки платформы и правила их подключения. Все
+библиотеки — Python 3.12+. Сам пакет — вертикаль или интеграция — собирается
+инструментом `package-sdk`, см. раздел [Пакеты](../packages/index.md).
 
 ## Библиотеки
 
@@ -14,9 +15,13 @@ resource service, исполнителя (агента), скилл, конне�
 | [platform-memory-client](clients.md#memory-client) | `platform_memory_client` | клиент memory-service (`/api/brain/*`, `/api/memory/*`) | `httpx`, `pydantic` |
 | [skill-sdk](skill-sdk.md) | `skill_sdk` | написать скилл кодом, хостить его по `local`/`http`/`mcp` и выгрузить YAML для пакета каталога | `pydantic`, `jsonschema`, `pyyaml`; опционально `platform-auth-sdk`, `platform-llm` |
 | [platform-llm](platform-llm.md) | `platform_llm` | единый LLM-клиент со structured output, ретраями и ротацией моделей | `httpx`, `pydantic` |
+| [package-sdk](../packages/index.md) | `package_sdk` | инструмент автора пакетов (`check`, `test`, `lock`, `plan`, `apply`) и среда наблюдателя интеграции `package_sdk.connector` | `pyyaml`, `jsonschema`, `ruamel.yaml`; дополнения `sandbox`, `connector`, `skills`, `mcp` |
 
-Вертикальный пакет собирается из всех перечисленных частей — см.
-[Вертикальные пакеты](vertical-packages.md).
+Вертикаль — это пакет каталога без своего runtime: работа, процессы и правила
+исполняет ядро, действия во внешнем мире — скиллы на `skill-sdk`, факты из
+внешнего мира пишет наблюдатель на `package_sdk.connector`. Свой сервис с базой
+нужен, только если у домена есть собственные данные, и тогда он выставляет
+наружу HTTP-скиллы (см. [Пакеты](../packages/index.md#vertical)).
 
 ## Правило канонических клиентов
 
@@ -28,11 +33,29 @@ resource service, исполнителя (агента), скилл, конне�
 | Проверить токен IAM в своём сервисе | `platform_auth.TokenVerifier` + `JwksCache` | разбирать JWT вручную, принимать audience «по вхождению» |
 | Обменять PAT или client credentials на access token | `control_plane_client.IamCredential`, `platform_auth.ServiceTokenProvider` | хранить access token дольше его TTL, слать PAT как Bearer в сервис |
 | Вызвать Control Plane | `control_plane_client.ControlPlaneClient` | писать свой HTTP-клиент по памяти о контракте |
-| Прочитать или записать память | `platform_memory_client` | ходить в базу памяти напрямую |
+| Прочитать или записать память из пакета: процесса, правила, скилла, наблюдателя, исполнителя | через ядро: шаги процесса `memory`, `recall`, `remember`; `ctx.knowledge` скилла; `ctx.snapshot` наблюдателя; контекст задачи и run'а | ходить в memory-service напрямую, заводить пакету свой грант на namespace |
+| Прочитать или записать память из приложения со своим грантом на namespace | `platform_memory_client` | ходить в базу памяти напрямую |
 | Вызвать LLM | `platform_llm.OpenAICompatibleClient` | копировать ретраи и разбор JSON в каждый сервис |
 
 Клиенты лежат рядом с сервером в его репозитории (`control-plane/client`,
 `memory-service/client`) и версионируются вместе с серверным контрактом.
+
+### Память — только через ядро { #memory-through-core }
+
+Код пакета — процесс, правило, скилл, наблюдатель, исполнитель задач — к
+memory-service не обращается. Все его запросы к памяти идут в Control Plane, а ядро
+само ходит в память от своего имени, проверяя права вызывающего на пространство
+работы и включённые онтологии (TAI-ADR-0054):
+
+| Кто | Как читает и пишет память |
+|---|---|
+| процесс | проекция дела `memory`, шаги `recall` и `remember`, контекст шагов ([Процессы и база знаний](../processes/knowledge.md)) |
+| скилл | `ctx.knowledge`: `recall`, `query`, `preview` и `apply` снимка, `document` ([skill-sdk](skill-sdk.md#core-access)) |
+| наблюдатель | `ctx.snapshot` — снимок внешней системы ([Интеграции](../packages/integrations.md#observer)) |
+| исполнитель задачи | контекст задачи и run'а ([Контекст задачи и память](../control-plane/context.md)) |
+
+Прямой клиент памяти `platform_memory_client` — для приложений со своим грантом
+на namespace, а не для пакетов (см. [Клиенты сервисов](clients.md#memory-client)).
 
 ## Подключение {#connect}
 
@@ -135,5 +158,5 @@ flowchart LR
 - [Клиенты сервисов](clients.md)
 - [skill-sdk](skill-sdk.md)
 - [platform-llm](platform-llm.md)
-- [Вертикальные пакеты](vertical-packages.md)
+- [Пакеты](../packages/index.md) — вертикаль как пакет, инструмент `package-sdk`
 - [Токены, audiences, scopes](../iam/tokens.md)

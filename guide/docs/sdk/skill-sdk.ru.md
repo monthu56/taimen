@@ -10,7 +10,9 @@
 !!! note "Статус"
     Версия `0.1.x`, лицензия Apache-2.0. Пакет подключается path-зависимостью
     соседней папкой, как остальные библиотеки платформы
-    (см. [SDK и интеграции](index.md#connect)).
+    (см. [SDK и интеграции](index.md#connect)). Как скиллы живут в пакете
+    каталога — кто их вызывает, где они хостятся, как согласуется внешняя
+    запись, — в статье [Скиллы пакета](../packages/skills.md).
 
 ## Что такое скилл
 
@@ -22,8 +24,8 @@ JSON-схемы входа и выхода, класс побочных эффе
 
 ```mermaid
 flowchart LR
-    Code["@skill в коде"] -->|"skill-sdk export"| Y["packages/пакет/skills/*.yaml"]
-    Y -->|"make bootstrap (пакеты каталога)"| CP[Control Plane: Skill name@version]
+    Code["@skill в коде"] -->|"skill-sdk export"| Y["пакет/skills/*.yaml"]
+    Y -->|"установка пакета: plan и apply"| CP[Control Plane: Skill name@version]
     CP -->|задача с execution.skill| R[Исполнитель]
     R -->|local / http / mcp| H[Хостинг скилла: skill-sdk]
     H --> Code
@@ -102,7 +104,7 @@ SDK отвергает при **импорте** то, что отвергло �
 `external_write` без идемпотентности с `maxAttempts > 1` (повтор внешней
 записи без идемпотентности — второй внешний эффект).
 
-### Исход против сбоя
+### Исход против сбоя { #outcome-vs-failure }
 
 | Ситуация | Как выразить |
 |---|---|
@@ -127,29 +129,90 @@ SDK отвергает при **импорте** то, что отвергло �
 | `ctx.check_deadline()` | бросает повторяемый `SkillError("timeout")`, если время вышло |
 | `ctx.log` | журнал с id вызова |
 | `ctx.config(name, default=None)` | параметр хостинга (из окружения процесса) |
-| `ctx.secret(name)` | секрет хостинга; нет значения — повторяемый `config_missing` (другой хост может его иметь) |
-| `ctx.llm` | клиент [platform-llm](platform-llm.md) по конфигурации инсталляции; токены учитываются в стоимости сами |
+| `ctx.secret(name)` | секрет хостинга: окружение процесса, затем файл секрета узла (см. [ниже](#secrets)); нет ни там, ни там — повторяемый `config_missing` (другой хост может его иметь) |
+| `ctx.llm` | LLM-клиент по конфигурации инсталляции (см. [ниже](#llm)); токены учитываются в стоимости сами |
+| `ctx.artifacts` | содержимое артефактов через ядро (см. [ниже](#core-access)) |
+| `ctx.knowledge` | база знаний через ядро (см. [ниже](#core-access)) |
 | `ctx.add_cost(unit, amount)` | учесть своё потребление (запросы к API, страницы и т. п.) |
 | `ctx.caller` | проверенный контекст вызывающего (`TrustedAuthContext`) для `http`/`mcp-http` |
 
 Клиента Control Plane в контексте **нет намеренно**: скилл не заводит и не
-двигает задачи — это делают исходы approval и правила ядра.
+двигает задачи — это делают исходы approval и правила ядра. Доступ к ядру у
+скилла узкий: содержимое артефактов и база знаний.
 
-LLM по умолчанию — `OpenAICompatibleClient` из переменных:
+### Секреты { #secrets }
 
-| Переменная | Смысл |
-|---|---|
-| `SKILL_LLM_BASE_URL` | база OpenAI-совместимого API |
-| `SKILL_LLM_API_KEY` | ключ |
-| `SKILL_LLM_MODELS` | модели через запятую — порядок ротации |
+`ctx.secret(name)` ищет значение в двух местах по порядку:
 
-Другой провайдер — `skill_sdk.configure_llm(factory)`.
+1. **Переменная окружения** `name` процесса хостинга — так секреты получает
+   хостинг вне узла размещения (свой сервис `http` или `mcp`).
+2. **Файл секрета узла** `$SKILL_SDK_SECRETS_DIR/<name>` (по умолчанию
+   `/run/secrets/<name>`) — так узел передаёт имена из `placement.secrets`
+   описания агента. Имя файла равно имени секрета без перевода регистра;
+   файл ищется, только если имя подходит под шаблон `[a-z0-9][a-z0-9-]{0,62}`.
+
+Правило чтения файла — одно на все SDK платформы, канон — модуль
+`skill_sdk.secrets` (`read_secret`, `read_secret_file`):
+
+- файл пустой или из одних пробельных символов — секрета нет;
+- у непустого значения обрезаются только хвостовые `\r` и `\n`; пробелы
+  внутри и по краям — часть значения;
+- не больше 64 КиБ, UTF-8, только обычный файл (каталог, FIFO — отказ);
+- символические ссылки разрешаются только внутри каталога секретов (так
+  раскладывает секреты Kubernetes); ссылка наружу или `..` выше каталога —
+  отказ; путь, подменённый во время чтения, читается заново, до трёх попыток;
+- `agent-pat` зарезервировано: это PAT самого агента, который узел кладёт
+  рядом, а не секрет инсталляции.
+
+| Код ошибки | Когда | Повторяемая |
+|---|---|---|
+| `config_missing` | нет ни переменной, ни файла (или файл пуст); в сообщении оба места поиска, значений нет | да |
+| `secret_name_invalid` | имя — путь (`/`, `..`) или зарезервированное `agent-pat` | нет |
+| `secret_unreadable` | у пользователя процесса нет прав на файл | да |
+| `secret_file_rejected` | файл отвергнут правилом; причина — `details.reason`: `outside_secrets_dir`, `symlink_swapped`, `not_regular_file`, `too_large`, `not_utf8`, `unreadable` | нет |
+
+### LLM { #llm }
+
+Провайдер `ctx.llm` выбирает инсталляция переменной `SKILL_LLM_PROVIDER`:
+
+| Провайдер | Переменные | Что это |
+|---|---|---|
+| `openai` (по умолчанию) | `SKILL_LLM_BASE_URL`, `SKILL_LLM_API_KEY`, `SKILL_LLM_MODELS` (через запятую — порядок ротации) | `OpenAICompatibleClient` из [platform-llm](platform-llm.md); нужно дополнение `llm` |
+| `claude-code` | `SKILL_LLM_MODELS`, `SKILL_LLM_CLAUDE_BINARY` (по умолчанию `claude`), `SKILL_LLM_TIMEOUT_SECONDS` (по умолчанию 300); `CLAUDE_CODE_OAUTH_TOKEN` в окружении исполнителя | Claude по подписке через Claude Code CLI в неинтерактивном режиме: без инструментов и MCP-серверов, промпт через stdin; в стоимость идут только токены |
+
+- Не настроен провайдер или его переменные — повторяемый `llm_not_configured`;
+  нет библиотеки или CLI — повторяемый `llm_unavailable`; лимит подписки или
+  `429` у `claude-code` — повторяемый `llm_rate_limited`.
+- **Страж персональных данных.** `system_prompt` и `messages` проходят его до
+  вызова модели: СНИЛС, паспорт (рядом со словом «паспорт» или «серия»),
+  телефон, e-mail и ФИО заменяются маркером вида `[ПДн:фио]`; в журнал
+  пишется только сколько и чего найдено. ИНН и КПП организаций, суммы и даты
+  не трогаются.
+- Другой провайдер — `skill_sdk.configure_llm(factory)`.
+
+### Доступ к ядру: `ctx.artifacts` и `ctx.knowledge` { #core-access }
+
+| Вызов | Что делает | Маршрут ядра |
+|---|---|---|
+| `await ctx.artifacts.read(artifact_id)` | содержимое артефакта: `ArtifactContent` с `data`, `media_type`, `sha256`, `text()` | `GET /api/v1/artifacts/{id}/content` |
+| `await ctx.knowledge.preview(snapshot, workspace_id=…)` | что изменит снимок источника в графе и его `stateToken` | `POST /api/v1/knowledge/snapshots:preview` |
+| `await ctx.knowledge.apply(snapshot, workspace_id=…, expected_state=…)` | применить снимок; состояние изменилось после предпросмотра — `SnapshotStale` (`snapshot_stale`, не повторяемая: постройте план заново) | `POST /api/v1/knowledge/snapshots` |
+| `await ctx.knowledge.document(workspace_id=…, natural_key=…, title=…, chunks=…)` | документ в базе знаний | `POST /api/v1/knowledge/documents` |
+| `await ctx.knowledge.recall(**query)` | ответ памяти на запрос | `POST /api/v1/context/recall` |
+| `await ctx.knowledge.query(workspace_id=…, kinds=…, where=…)` | все сущности видов с фильтром, по всем страницам; больше `max_items` (по умолчанию 10 000) — ошибка `knowledge_query_too_large`, а не обрезка | `POST /api/v1/knowledge/entities:query` |
+
+- Адрес ядра — `CONTROL_PLANE_URL` или адрес демона-исполнителя
+  `CONTROL_PLANE_SERVER`; без них — `config_missing`. Credential — учётная
+  запись исполнителя скиллов, её находит клиент ядра.
+- Права проверяются у исполнителя скиллов на workspace задачи: например,
+  `artifacts.read` для чтения артефакта.
+- Память скилл видит только так — через ядро.
 
 ## Хостинг
 
 | Протокол | Как запустить | Что видит исполнитель |
 |---|---|---|
-| `local` | пакет установлен рядом с демоном исполнителя, `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES=<пакет>` | исполнитель находит скиллы сам, вызывает `__skill_invoke__` и получает `{outputs, cost}` |
+| `local` | пакет установлен рядом с демоном исполнителя, `CONTROL_PLANE_SKILLS_LOCAL_PACKAGES=<пакет>`; в пакете каталога — агент вида `skills` (см. [Скиллы пакета](../packages/skills.md#hosting)) | исполнитель находит скиллы сам, вызывает `__skill_invoke__` и получает `{outputs, cost}` |
 | `http` | `skill-sdk serve http <модуль>` или `skill_sdk.http.create_app(...)` в своём ASGI | `POST /skills/{name}@{version}` |
 | `mcp` | `skill-sdk serve mcp-stdio <модуль>` или `serve mcp-http` | инструмент MCP с именем скилла |
 
@@ -202,8 +265,9 @@ Content-Type: application/json
 ## Пакет каталога
 
 Скиллы попадают в Control Plane через пакеты каталога (TAI-ADR-0044, см.
-[Пакеты каталога](../control-plane/catalog-packages.md)). YAML скиллов
-генерируется из кода и руками не правится:
+[Скиллы пакета](../packages/skills.md)). YAML скиллов генерируется из кода и
+руками не правится; `package-sdk test` сверяет его с кодом на ступени
+контрактов (см. [Тесты пакета](../packages/testing.md)):
 
 
 ```bash
@@ -263,7 +327,7 @@ spec:
 ## Тесты скилла
 
 ```python
-from skill_sdk.testing import check_contract, invoke
+from skill_sdk.testing import FakeLlm, check_contract, invoke
 
 
 def test_merge_contract():
@@ -271,29 +335,49 @@ def test_merge_contract():
 
 
 def test_conflict_is_an_outcome():
-    result = invoke(merge, {"repository": "…", "branch": "b", "commit": "abc1234", "target": "main"})
+    result = invoke(merge, {"repository": "…", "branch": "b", "commit": "abc1234", "target": "main"},
+                    env={"GIT_REMOTE": "…"}, idempotency_key="k-1")
     assert result.outputs["reason"] == "conflict"
+
+
+def test_summary_uses_the_model():
+    llm = FakeLlm([{"summary": "Коротко"}])
+    result = invoke(summarize, {"text": "…"}, llm=llm)
+    assert result.outputs == {"summary": "Коротко"}
+    assert len(llm.calls) == 1
 ```
 
-`ainvoke` — асинхронный вариант. `check_contract` прогоняет контракт через
-те же валидаторы, что использует ядро, если пакет `control-plane`
-доступен в окружении.
+| Средство | Что делает |
+|---|---|
+| `invoke(skill, inputs, *, env=None, idempotency_key=None, llm=None)` | вызов с проверкой входа и выхода по контракту, как у хостинга; `SkillError` пробрасывается; `ainvoke` — асинхронный вариант |
+| `check_contract(skill)` | контракт через те же валидаторы, что использует ядро, если пакет `control-plane` доступен в окружении |
+| `FakeLlm(answers)` | подделка `ctx.llm`: один ответ, список по порядку вызовов или функция от вызова; ответ `chat_json` проверяется моделью ответа; вызовы — в `llm.calls` уже после стража персональных данных; лишний вызов — `AssertionError` |
+| `FakeCore` + `configure_core(lambda ctx: fake)` | ядро в памяти для `ctx.artifacts` (`fake.artifacts.put(id, data)`) и `ctx.knowledge` (снимки со `stateToken` и `SnapshotStale`, ответ `recall_answer`, `query` по применённым снимкам) |
+
+`env` задаёт окружение хостинга на время вызова — параметры `ctx.config` и
+секреты `ctx.secret`. Подделка `llm` живёт в переменной контекста: её видят
+задачи asyncio этого вызова, а глобальная настройка не меняется.
 
 ## Установка
 
-```bash
-uv add skill-sdk                # контракт, local, тесты, экспорт
-uv add "skill-sdk[http]"        # + ASGI-хостинг и проверка токена
-uv add "skill-sdk[mcp]"         # + MCP-сервер
-uv add "skill-sdk[llm]"         # + ctx.llm
-uv add "skill-sdk[all]"         # всё сразу
-```
+| Зависимость | Что даёт |
+|---|---|
+| `skill-sdk` | контракт, `local`, тесты, экспорт |
+| `skill-sdk[http]` | + ASGI-хостинг и проверка токена |
+| `skill-sdk[mcp]` | + MCP-сервер |
+| `skill-sdk[llm]` | + `ctx.llm` провайдером `openai` |
+| `skill-sdk[all]` | всё сразу |
 
-`platform-auth-sdk` и `platform-llm` подключаются соседними папками.
+`skill-sdk`, `platform-auth-sdk` и `platform-llm` подключаются соседними папками
+(см. [Подключение](index.md#connect)), а не из публичного индекса пакетов. Код
+интеграции пакета получает `skill-sdk` из базового образа исполнителя (см.
+[Интеграции](../packages/integrations.md#images)).
 
 ## См. также
 
 - [SDK и интеграции](index.md)
+- [Скиллы пакета](../packages/skills.md)
+- [Тесты пакета](../packages/testing.md)
 - [Пакеты каталога](../control-plane/catalog-packages.md)
 - [Адаптеры исполнителей](../runner/adapters.md)
 - [platform-llm](platform-llm.md)

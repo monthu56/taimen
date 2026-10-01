@@ -17,7 +17,7 @@ notification.
 
 ```mermaid
 flowchart LR
-    P["Package<br/>notification-rules/*.yaml"] -->|cp_packages apply| NS["notification-service<br/>notification_rules"]
+    P["Package<br/>notification-rules/*.yaml"] -->|package-sdk apply| NS["notification-service<br/>notification_rules"]
     CP["Control Plane<br/>event log"] -->|"filter = on.type ∪ close.on"| C["Event consumer"]
     NS --> C
     C -->|"rule: on.when → recipient → template"| N["Notification"]
@@ -33,7 +33,7 @@ flowchart LR
 ## Example
 
 ```yaml
-# yaml-language-server: $schema=../../schema/v1/object.schema.json
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<tag>/schema/v1/object.schema.json
 apiVersion: taimen.ai/v1
 kind: NotificationRule
 key: approval-requested
@@ -57,6 +57,8 @@ spec:
   close:
     "on": [approval.approved, approval.rejected, approval.cancelled]
 ```
+
+`package-sdk init` writes the `$schema` line: the address of the schema of the SDK release whose tag it was installed from (in a working copy without a tag, a relative path to the installed SDK's schema).
 
 !!! warning "The `on` key must be quoted"
     YAML 1.1 loaders (including the one the installer uses to read packages) read a bare `on`
@@ -98,6 +100,99 @@ first is empty. If there is still no recipient after `fallback`, no notification
 and the rule key and event id are written to the service log. A role without holders gives a
 delivery log entry without recipients. If the principal or role is unknown to the core, the
 event is skipped for this rule.
+
+### Addressee from a process event { #process-recipients }
+
+Process deadline events (`process.sla_warning`, `process.sla_breached`,
+`process.sla_failed`) carry their addressees themselves: `payload.owner` is
+the process owner, `payload.assignee` is the step's assignee. Both have the
+form `{principalId, roleId, workspaceId}`, with one of `principalId` and
+`roleId` filled in (see [Deadlines and SLA](../processes/index.md#sla-recipients)).
+The rule needs no person's id in an installation variable: the process
+`owner` decides whom to notify.
+
+```yaml
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<tag>/schema/v1/object.schema.json
+apiVersion: taimen.ai/v1
+kind: NotificationRule
+key: process-sla-breached
+spec:
+  description: Срок шага процесса нарушен — уведомление владельцу процесса.
+  "on":
+    type: process.sla_breached
+    when: {eq: [{var: payload.scope}, step]}
+  recipient: {kind: role, ref: payload.owner.roleId, workspace: payload.owner.workspaceId}
+  notification:
+    type: process.sla_breached
+    title: "Нарушен срок: {{payload.definitionKey}} {{payload.instanceKey}}"
+    body: |-
+      Шаг «{{payload.element}}» (попытка {{payload.attempt}}) не закрыт в срок {{payload.dueAt}}.
+      Просрочка, с: {{payload.overdueSeconds}}.
+  dedupKeyTemplate: "process-sla:{{payload.instanceId}}:{{payload.scope}}:{{payload.element}}:{{payload.attempt}}"
+```
+
+- **Owner as a role**: `kind: role` with `ref: payload.owner.roleId` and
+  `workspace: payload.owner.workspaceId`; the holders of the role in the
+  process workspace receive the notification.
+- **Owner as a principal**: a separate rule with `kind: assigned` and
+  `ref: payload.owner.principalId`. Each event has one of the fields filled
+  in, and a rule whose addressee is empty creates no notification, so two
+  rules side by side do not duplicate each other.
+- **Step assignee**: the same forms on `payload.assignee`.
+- **Deadline of the whole process** (`scope: process`): a rule of its own.
+  Its `element` and `attempt` are empty, and a deduplication key built from
+  them would be empty, so the rule skips such an event. The key of the
+  process deadline is `process-sla:{{payload.instanceId}}:process`.
+- The owner did not resolve (the role is not set up): `owner` is empty, there
+  is no addressee, and no notification is created; the event stays in the
+  core log.
+
+For one step attempt the core writes at most one `process.sla_warning` and
+one `process.sla_breached`, so the key "instance + scope + step + attempt"
+gives one notification per breach, and re-entering the step gives a new one.
+
+An escalation level with `action: notify` (the `process.escalated` event)
+carries its own addressees in `payload.addressees`: one per element of the
+level's `to`, in its order, in the same `{principalId, roleId, workspaceId}`
+form. The core looks a role up first in the instance workspace, then at the
+tenant level. An unresolved element is `null` in `addressees` plus an entry
+with the reason in `payload.unresolved`. One rule addresses one index; a
+level with several addressees needs a rule per index:
+
+```yaml
+# yaml-language-server: $schema=https://github.com/taimen-ai/package-sdk/raw/<tag>/schema/v1/object.schema.json
+apiVersion: taimen.ai/v1
+kind: NotificationRule
+key: process-escalation-notify
+spec:
+  description: Уровень эскалации notify — уведомление первому адресату уровня.
+  "on":
+    type: process.escalated
+    when: {eq: [{var: payload.action}, notify]}
+  recipient: {kind: role, ref: payload.addressees.0.roleId, workspace: payload.addressees.0.workspaceId}
+  notification:
+    type: process.escalated
+    title: "Эскалация: {{payload.definitionKey}} {{payload.instanceKey}}"
+    body: "Шаг «{{payload.element}}» не сделан в срок, уровень {{payload.level}}."
+  dedupKeyTemplate: "process-escalated:{{payload.instanceId}}:{{payload.element}}:{{payload.level}}:0:{{event.id}}"
+```
+
+- **Addressee as a role**: `kind: role` with `ref: payload.addressees.0.roleId`
+  and `workspace: payload.addressees.0.workspaceId`, as above. If the role
+  exists neither in the instance workspace nor at the tenant level,
+  `addressees[0]` is empty and the rule creates no notification.
+- **Addressee as a principal**: for `to: [{agent: …}]` or a principal id the
+  core fills in `addressees.<i>.principalId`, and `roleId` is empty. Such an
+  addressee needs a separate rule with `kind: assigned` and
+  `ref: payload.addressees.0.principalId`, as for an owner principal: the
+  addressee has one of the fields filled in, and two rules side by side do
+  not duplicate each other.
+- **Key**: instance, step, level, addressee index, and `event.id`. The level
+  number counts within a step, and a step can be entered again (a `retry`
+  block repeat, a return for rework): the core writes one `process.escalated`
+  per step entry and level, and each such event is a new notification.
+  Redelivery of the same event does not change `event.id`, so there is one
+  notification.
 
 ### Templates and roots
 
@@ -239,13 +334,14 @@ notification-service` and the `notifications:admin` scope (see
 
 ## Application by a package
 
-Rules are package objects in the `notification-rules/` folder. The `tools/cp_packages.py`
+Rules are package objects in the `notification-rules/` folder. The `package-sdk`
 installer applies them **to the notification service, not to the core**, and last — after
 all core kinds:
 
-1. before the first write — `:validate` of all rules of the installation; a service refusal
-   stops the whole installation;
-2. `POST` only for the rules where `:validate` answered `changed: true`; the rest are
+1. `plan` — `:validate` of all rules of the installation; a service refusal stops the
+   whole plan before anything is written;
+2. the plan's `notification-rules` section holds only the rules where `:validate`
+   answered `changed: true`; `apply --plan` does `POST` for exactly those, the rest are
    "unchanged";
 3. `retire.NotificationRule` of the installation file — `:retire`; notifications already sent
    remain.
@@ -254,14 +350,16 @@ The service address is the installation variable **`NOTIFICATION_SERVICE_URL`** 
 the environment), for example `https://platform.example.com/notify`. The token is the
 `NOTIFY_TOKEN` variable (an access token for the `notification-service` audience, scope
 `notifications:admin`) or an exchange, for this audience, of the same IAM credential the
-installer uses for the core (the PAT must allow the audience in its ceiling). Without a
-service address, `apply` skips notification rules with a warning.
+installer uses for the core (the PAT must allow the audience in its ceiling). An
+installation with notification rules is not planned without the service address and the
+token: `plan` refuses.
 
 ```bash
 export CP_TOKEN=<access-token audience control-plane>
 export NOTIFY_TOKEN=<access-token audience notification-service>
-python3 tools/cp_packages.py apply --install deploy/<environment>/packages.yaml \
-  --server https://platform.example.com
+package-sdk plan --install deploy/<environment>/packages.yaml \
+  --server https://platform.example.com --out plan.json
+package-sdk apply --plan plan.json --server https://platform.example.com
 ```
 
 ```text
@@ -272,7 +370,7 @@ python3 tools/cp_packages.py apply --install deploy/<environment>/packages.yaml 
 Exporting the current version into a package (the core is not needed):
 
 ```bash
-python3 tools/cp_packages.py export --kind NotificationRule --key task-verified \
+package-sdk export --kind NotificationRule --key task-verified \
   --package packages/<package>
 ```
 
@@ -301,7 +399,7 @@ accepted" on `task.verified` to the owner) and `apply` — without a service rel
 | Symptom | Cause | What to do |
 |---|---|---|
 | No event notifications at all | The tenant has no enabled rules — the consumer is not running | Apply the `notify` package (with `NOTIFICATION_SERVICE_URL` and the token set) |
-| `apply` prints `NotificationRule не применены: не задан сервис уведомлений` (notification rules not applied: notification service not set) | No `NOTIFICATION_SERVICE_URL` or token | Set the variable and `NOTIFY_TOKEN` (or a PAT with the `notification-service` audience) |
+| The plan is not built: `в установке есть правила уведомлений — нужен сервис уведомлений` (the installation has notification rules: the notification service is needed) | No `NOTIFICATION_SERVICE_URL` or token | Set the variable and `NOTIFY_TOKEN` (or a PAT with the `notification-service` audience) |
 | `422 invalid_notification_rule`, `unknown_event_type` | The event type is not from the core catalog known to the service | Check the type; a new event type reaches the service with its update |
 | `invalid_spec` at `/on` | An unquoted `on` turned into `true` | Write `"on":` |
 | `unknown_field` at a `task.…` path | The event has no task, or the field is not in the task projection | Remove the `task` root or change the event |
@@ -315,5 +413,6 @@ accepted" on `task.verified` to the owner) and `apply` — without a service rel
 - [Telegram](telegram.md) — decisions with buttons.
 - [Catalog packages](../control-plane/catalog-packages.md) — the `NotificationRule` kind.
 - [Events](../control-plane/events.md) — the core event catalog.
+- [Processes](../processes/index.md#sla) — SLA deadlines and the `process.sla_*` events.
 - [Goals, acceptance, and evidence](../control-plane/goals-and-evidence.md#verification-stage) — `task.verification_failed`.
 - [Approvals](../control-plane/approvals.md)

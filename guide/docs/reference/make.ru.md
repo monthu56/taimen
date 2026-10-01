@@ -222,9 +222,9 @@ make packages-check
 ```
 
 
-1. `tools/cp_packages.py check` — схема, ссылки и валидаторы ядра для
+1. `package-sdk check` — схема, ссылки и валидаторы ядра для
    пакетов в `packages/`.
-2. `tools/cp_packages.py check --install <файл установки>` —
+2. `package-sdk check --install <файл установки>` —
    проверка файла установки.
 3. `pytest -q tools/tests` (через `uv run --no-project` с `pytest`,
    `pyyaml`, `jsonschema`, `regex`, `ruamel.yaml`).

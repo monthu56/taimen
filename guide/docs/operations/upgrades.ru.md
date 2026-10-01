@@ -148,7 +148,7 @@ docker compose up -d control-plane-worker context-adapter
 |---|---|
 | Повторный прогон `deploy/bootstrap.py` | Если релиз менял `AUDIENCES`, потолки service accounts, права агентов по умолчанию или пакеты каталога. Скрипт идемпотентен: приводит `allowedScopes` audiences к реестру (`PATCH`), при изменившемся потолке перевыпускает service account ядра и отзывает прежний |
 | Перезапуск ядра после bootstrap | Если bootstrap перевыпустил `secrets/control-plane-iam.env`: `docker compose up -d control-plane-api control-plane-worker context-adapter` |
-| План каталога | `python3 tools/cp_packages.py plan --install deploy/packages.yaml --server https://platform.example.com` показывает расхождения каталога до применения (токен — `CP_TOKEN`) |
+| План каталога | `package-sdk plan --install deploy/packages.yaml --server https://platform.example.com --out plan.json` показывает расхождения каталога до применения (токен — `CP_TOKEN`) |
 | Runner-хост | Обновить отдельно, см. ниже |
 | Рабочие места операторов | Переустановить пакет `control-plane` (MCP-плагин, CLI) и перезапустить сессию: новые инструменты `cp_*` появляются только в новой сессии |
 
