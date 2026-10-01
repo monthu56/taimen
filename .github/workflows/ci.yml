@@ -97,6 +97,13 @@ jobs:
         run: |
           PYTHONPATH=../skill-sdk/src:../skill-sdk uv run pytest -q -p no:cacheprovider \
             -c ../skill-sdk/pyproject.toml ../skill-sdk/tests/test_executor_e2e.py
+      - name: Catalog packages with the core's validators (package-sdk)
+        # The package SDK from its submodule in the core's environment: the core's code at the revision tested above
+        env:
+          PYTHONPATH: ${{ github.workspace }}/package-sdk/src
+        run: |
+          if [ ! -f package-sdk/pyproject.toml ]; then echo "no package-sdk submodule yet — skipping"; exit 0; fi
+          uv run --project control-plane python -m package_sdk.cli check --install deploy/packages.yaml
 
   notification-service:
     name: notification-service (all tests, PostgreSQL)
@@ -154,8 +161,12 @@ jobs:
           python3 tools/fill_secrets.py .env
           mkdir -p secrets && touch secrets/iam-signing.pem
           docker compose --profile core --profile notify --profile idp --profile edge config --quiet
-      - name: Catalog packages (without a running installation)
-        run: uv run --no-project --with pyyaml --with jsonschema python tools/cp_packages.py check --install deploy/packages.yaml
+      - name: Catalog packages (schema and references, without the core's code)
+        # The package SDK is the package-sdk submodule; the core's validators run in the control-plane job
+        run: |
+          if [ ! -f package-sdk/pyproject.toml ]; then echo "no package-sdk submodule yet — skipping"; exit 0; fi
+          PYTHONPATH=package-sdk/src uv run --no-project --with pyyaml --with jsonschema \
+            python -m package_sdk.cli check --schema-only --install deploy/packages.yaml
       - name: Documentation links
         run: python3 tools/linkcheck.py
       - name: gitleaks

@@ -55,11 +55,13 @@ Secrets are never printed. The step numbers below are the ones the script prints
 - **5.** Control Plane: a project template, a project and a workspace named after the
   tenant.
 - **5b.** The catalog from [packages/](../packages/README.md) by the installation file
-  `--packages` (default [packages.yaml](packages.yaml)) through `tools/cp_packages.py`:
-  a type gets a new version only when it differs from the package, so a repeated run
-  changes nothing. Needs PyYAML and jsonschema — `make bootstrap` provides them
-  through uv; without uv, the system `python3` must have them, otherwise the script
-  stops before its first step.
+  `--packages` (default [packages.yaml](packages.yaml)) as one installation plan of the
+  package SDK (the `package-sdk/` submodule): the plan is written to
+  `deploy/state/<env>.packages-plan.json` and exactly that plan is applied; an empty
+  plan is not applied, so a repeated run changes nothing. Needs the `package-sdk/`
+  submodule (`make submodules`) and PyYAML with jsonschema — `make bootstrap` provides
+  them through uv; without uv, the system `python3` must have them. Without either the
+  script stops before its first step.
 - **5c.** notification-service: an IAM service account → `secrets/notification-iam.env`, the
   service description and its identity in the Control Plane (permissions: reading
   events, approvals, tasks, principals and workspaces). The step always runs; the

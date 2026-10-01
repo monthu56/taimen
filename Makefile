@@ -14,6 +14,9 @@ COMPOSE := docker compose $(foreach p,$(PROFILES),--profile $(p))
 COMPONENTS_PY := platform-auth-sdk platform-llm skill-sdk iam-service control-plane memory-service notification-service
 ENV_NAME ?= $(or $(shell sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2>/dev/null),taimen)
 GUIDE_MISSING = echo "there is no guide/ directory: the guide is added to the repository separately (guide/mkdocs.yml)"
+# The package SDK is the package-sdk/ submodule; until it is checked out, the package targets
+# and bootstrap step 5b stop with this hint.
+PACKAGE_SDK_MISSING = echo "there is no package-sdk/ submodule: the package SDK is needed for packages (make submodules)"
 
 .PHONY: help submodules status secrets config build up down ps logs smoke bootstrap reset-state \
         check check-% lint-% test-% tools-check linkcheck oss-check guide guide-serve \
@@ -60,7 +63,7 @@ logs: ## Service logs: make logs svc=control-plane-api
 smoke: ## Check healthz of the running services via the 127.0.0.1 ports
 	@python3 tools/smoke.py
 
-# PyYAML and jsonschema are needed by the catalog-from-packages step (tools/cp_packages.py): through uv
+# PyYAML and jsonschema are needed by the catalog-from-packages step (package-sdk): through uv
 # they are not installed into the system python3; without uv, the system python3 must have them.
 BOOTSTRAP_PY = $(if $(shell command -v uv 2>/dev/null),uv run --no-project --quiet --with pyyaml --with jsonschema python3,python3)
 
@@ -100,16 +103,23 @@ linkcheck: ## Check relative links in the umbrella documentation
 
 INSTALL ?= deploy/packages.yaml
 SERVER ?= http://taimen.localhost
-CP_PACKAGES := uv run --quiet --no-project --with pyyaml --with jsonschema python tools/cp_packages.py
+PLAN ?= deploy/state/$(ENV_NAME).packages-plan.json
+# The package SDK from its submodule with the core's code (extra sandbox): check also runs the core's validators.
+PACKAGE_SDK = uv run --quiet --project package-sdk --all-extras package-sdk
+REQUIRE_PACKAGE_SDK = test -f package-sdk/pyproject.toml || { $(PACKAGE_SDK_MISSING); exit 1; }
 
 packages-check: ## Check catalog packages without a running installation: make packages-check [INSTALL=deploy/packages.yaml]
-	@$(CP_PACKAGES) check --install $(INSTALL)
+	@$(REQUIRE_PACKAGE_SDK)
+	@$(PACKAGE_SDK) check --install $(INSTALL)
 
-packages-plan: ## Compare the install file with a live Control Plane: make packages-plan [SERVER=…]
-	@$(CP_PACKAGES) plan --install $(INSTALL) --server $(SERVER)
+packages-plan: ## Build the installation plan against a live Control Plane, writes nothing to it: make packages-plan [SERVER=…]
+	@$(REQUIRE_PACKAGE_SDK)
+	@mkdir -p $(dir $(PLAN))
+	@$(PACKAGE_SDK) plan --install $(INSTALL) --server $(SERVER) --out $(PLAN)
 
-packages-apply: ## Apply the catalog install file: make packages-apply [SERVER=…]
-	@$(CP_PACKAGES) apply --install $(INSTALL) --server $(SERVER)
+packages-apply: ## Apply exactly the plan of packages-plan after review: make packages-apply [SERVER=…]
+	@$(REQUIRE_PACKAGE_SDK)
+	@$(PACKAGE_SDK) apply --plan $(PLAN) --server $(SERVER)
 
 oss-check: ## Check that the umbrella is publishable (without gitleaks): make oss-check STOPLIST=<file>
 	@python3 tools/oss_check.py . --skip-gitleaks $(if $(STOPLIST),--stoplist $(STOPLIST))

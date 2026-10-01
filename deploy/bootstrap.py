@@ -11,11 +11,12 @@ Initial setup of IAM and the Control Plane in one pass:
   4. a fresh authentication context → the operator's Platform Access Token with the
      read/write/admin ceiling → secrets/harness-pat (0600); the PAT exchange is verified right away;
   5. Control Plane: project template, project and workspace;
-  5b. the catalog from packages/ by the installation file (--packages, default
-     deploy/packages.yaml) through tools/cp_packages.py: task types and templates get a new
-     version only when they differ from the package, the previously active ones become
-     deprecated; roles, workspace types, capabilities and skills are created or brought in
-     line with the package; `retire` of the installation file is applied;
+  5b. packages by the installation file (--packages, default deploy/packages.yaml) as one
+     installation plan of the package SDK (the package-sdk submodule): `install.plan()`
+     writes the plan to deploy/state/<env>.packages-plan.json and `install.apply()` applies
+     exactly that plan — the catalog, processes and calendars, notification rules and
+     `retire` of the installation file. Running the initial setup stands for the human's
+     confirmation here (assume_yes, marked in the log); an empty plan is not applied;
   5c. notification-service: an IAM service account, the service description and its identity in
      the core → secrets/notification-iam.env (the service picks up the file on `up -d`);
      then the legacy api-key from the step 3 response is revoked — the installation is IAM-only;
@@ -25,8 +26,9 @@ Initial setup of IAM and the Control Plane in one pass:
 State lives in deploy/state/<env>.json: the identifiers are not secret; a repeated run
 skips what is done and brings the mutable parts (audience ceilings, binding permissions)
 in line with the registry in the script and the catalog with the packages. Secrets are never
-printed. HTTP uses the Python standard library only; step 5b needs PyYAML and jsonschema
-(`make bootstrap` provides them through uv):
+printed. HTTP uses the Python standard library only; step 5b needs the package-sdk
+submodule (`make submodules`) and PyYAML with jsonschema (`make bootstrap` provides them
+through uv):
 
     uv run --no-project --with pyyaml --with jsonschema python3 deploy/bootstrap.py --env .env
     python3 deploy/bootstrap.py --env .env --agents agents.json   # system python3 with both modules
@@ -46,10 +48,10 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "tools"))
-import cp_packages  # noqa: E402  (catalog packages, step 5b)
+# The package SDK (the package-sdk submodule) installs the packages at step 5b.
+PACKAGE_SDK_SRC = ROOT / "package-sdk" / "src"
 
-# Python modules step 5b needs (tools/cp_packages.py): import name → package name.
+# Python modules step 5b needs (the package SDK): import name → package name.
 CATALOG_MODULES = {"yaml": "PyYAML", "jsonschema": "jsonschema"}
 
 # IAM audiences and their scope ceilings: one token — one service.
@@ -167,12 +169,65 @@ def secure_write(path: Path, value: str) -> None:
 
 def require_catalog_modules() -> None:
     """Fail before the first write if step 5b could not run: better than a half-done bootstrap."""
+    if not (PACKAGE_SDK_SRC / "package_sdk").is_dir():
+        raise SystemExit(
+            "there is no package-sdk/ submodule: step 5b (catalog from packages) needs the package SDK — "
+            "run `make submodules`"
+        )
     missing = [name for module, name in CATALOG_MODULES.items() if importlib.util.find_spec(module) is None]
     if missing:
         raise SystemExit(
             f"{' and '.join(missing)} required by step 5b (catalog from packages): install uv and run "
             "`make bootstrap`, or `pip install pyyaml jsonschema` for this python3"
         )
+
+
+def install_packages(installation: Path, *, cp_base: str, exchange, env: dict, plan_path: Path, log=print) -> dict:
+    """5b. Packages as one installation plan of the package SDK: the plan is written to
+    plan_path and exactly that plan is applied. Bootstrap is not interactive: assume_yes
+    stands for the human's answer — the only way to install without a confirmation, and the
+    log says so. A plan without changes is not applied, so a repeated bootstrap writes
+    nothing. The token of the core comes from `exchange` before every request and is renewed
+    before it expires: an access token lives minutes."""
+    sys.path.insert(0, str(PACKAGE_SDK_SRC))
+    # the package-sdk submodule, checked by require_catalog_modules before the first step
+    from package_sdk import install, model
+    from package_sdk.apply import Http as PackageHttp
+    from package_sdk.apply import HttpError
+    from package_sdk.auth import Bearer
+    from package_sdk.install.plan import needs_notify
+
+    model.ROOT = ROOT
+    model.PACKAGES_DIR = ROOT / "packages"
+    try:
+        target = install.Target(server=cp_base, http=PackageHttp(cp_base), token=Bearer.expiring(exchange))
+        if needs_notify(install.load(installation, strict=False).installation):
+            url, token = env.get(model.NOTIFY_URL_ENV), env.get(model.NOTIFY_TOKEN_ENV)
+            if not url or not token:
+                raise SystemExit(
+                    f"step 5b stopped: {installation.name} installs or retires notification rules — set "
+                    f"{model.NOTIFY_URL_ENV} (the notification-service address) and {model.NOTIFY_TOKEN_ENV} "
+                    f"(an access token for the {model.NOTIFY_AUDIENCE} audience)"
+                )
+            target.notify = (PackageHttp(url), Bearer.static_token(token))
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        document = install.plan(installation, target=target, env=env, out=plan_path, log=log)
+        changes = install.count_changes(document)
+        summary = {"plan": str(plan_path.relative_to(ROOT)), "planHash": document["planHash"], "changes": changes}
+        if not changes:
+            log("the plan is empty: the installation already matches, nothing to apply")
+            return {**summary, "applied": False}
+        log(
+            f"bootstrap: plan {document['planHash']} ({changes} changes) is applied without a human's "
+            "confirmation — running the initial setup is the operator's decision (assume_yes)"
+        )
+        install.apply(plan_path, target=target, env=env, assume_yes=True, log=log)
+        return {**summary, "applied": True}
+    except model.PackageError as error:
+        raise SystemExit(f"step 5b stopped: {error}") from error
+    except HttpError as error:
+        message = f"step 5b stopped: the installation answered HTTP {error.status}: {str(error)[:400]}"
+        raise SystemExit(message) from error
 
 
 def issue_pat(
@@ -431,12 +486,23 @@ def main() -> int:
         save()
     print("   project", state["projectId"], "workspace", state["workspaceId"])
 
-    print("5b. catalog from packages:", args.packages)
-    try:
-        installation = cp_packages.load_installation(ROOT / args.packages)
-        state["catalog"] = cp_packages.apply(installation, cp, auth, env={**env, **os.environ})
-    except cp_packages.PackageError as error:
-        raise SystemExit(f"step 5b stopped: {error}") from error
+    print("5b. packages as one installation plan:", args.packages)
+    state.pop("catalog", None)  # the summary of the previous installer, without a plan
+    state["packages"] = {
+        "install": args.packages,
+        **install_packages(
+            ROOT / args.packages,
+            cp_base=cp.base,
+            exchange=lambda: iam.call(
+                "POST",
+                "/api/v1/platform-access-tokens:exchange",
+                {"token": pat, "audience": "control-plane", "scopes": OPERATOR_CEILING},
+            ),
+            env={**env, **os.environ},
+            plan_path=state_path.with_name(f"{name}.packages-plan.json"),
+            log=lambda line: print("  ", line),
+        ),
+    }
     save()
 
     print("5c. notification-service: IAM service account, identity in the core, env file")

@@ -61,9 +61,9 @@
 
 - **Пакеты каталога в git.** Типы задач и артефактов, роли, скиллы, правила,
   процессы, календари, описания агентов и правила уведомлений — YAML-объекты
-  пакета. `tools/cp_packages.py` проверяет пакет без стенда, прогоняет его тесты,
-  показывает план и применяет к живой инсталляции; как устроен пакет и образец —
-  в [packages/](packages/README.md).
+  пакета. SDK пакетов (`package-sdk/`) проверяет пакет без стенда, прогоняет его
+  тесты, строит план установки и применяет ровно этот план к живой инсталляции; как
+  устроен пакет и образец — в [packages/](packages/README.md).
 
 ### Исполнители без привязки к вендору
 
@@ -124,6 +124,7 @@
 | [platform-auth-sdk](https://github.com/taimen-ai/platform-auth-sdk) | Проверка токенов и прав в сервисах (Policy Enforcement Point) |
 | [skill-sdk](https://github.com/taimen-ai/skill-sdk) | SDK скиллов: контракт из кода, контекст вызова, хостинг `local` / `http` / `mcp` |
 | [platform-llm](https://github.com/taimen-ai/platform-llm) | Клиент любого OpenAI-совместимого endpoint со структурированным ответом |
+| [package-sdk](https://github.com/taimen-ai/package-sdk) | SDK пакетов: инструменты автора пакетов каталога — `check` / `test` / `plan` / `apply`, MCP-сервер и плагин для Claude Code |
 
 Раскладка плоская намеренно: `control-plane`, `memory-service`,
 `notification-service` и `skill-sdk` берут соседей (`../platform-auth-sdk`,
@@ -131,8 +132,8 @@
 корня этого репозитория.
 
 Сам этот репозиторий — сборка: `compose.yml`, `.env.example`, `Makefile`,
-[deploy/](deploy/README.md) (bootstrap и внешний контур), `tools/` (в том числе
-инструмент пакетов каталога) и руководство `guide/`.
+[deploy/](deploy/README.md) (bootstrap и внешний контур), `tools/` (скрипты сборки
+и проверок) и руководство `guide/`.
 
 ## Быстрый старт
 

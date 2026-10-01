@@ -61,9 +61,10 @@ with every decision leaving a trace.
 
 - **Catalog packages in git.** Task and artifact types, roles, skills, rules,
   processes, calendars, agent descriptions and notification rules are YAML objects of
-  a package. `tools/cp_packages.py` checks a package without a running installation,
-  runs its tests, shows a plan and applies it to a live installation; how a package is
-  structured, with an example, is in [packages/](packages/README.md).
+  a package. The package SDK (`package-sdk/`) checks a package without a running
+  installation, runs its tests, builds an installation plan and applies exactly that
+  plan to a live installation; how a package is structured, with an example, is in
+  [packages/](packages/README.md).
 
 ### Vendor-neutral executors
 
@@ -125,6 +126,7 @@ this repository.
 | [platform-auth-sdk](https://github.com/taimen-ai/platform-auth-sdk) | Token and permission checks in services (Policy Enforcement Point) |
 | [skill-sdk](https://github.com/taimen-ai/skill-sdk) | Skill SDK: contract from code, invocation context, `local` / `http` / `mcp` hosting |
 | [platform-llm](https://github.com/taimen-ai/platform-llm) | Client for any OpenAI-compatible endpoint with structured output |
+| [package-sdk](https://github.com/taimen-ai/package-sdk) | Package SDK: tools for catalog package authors — `check` / `test` / `plan` / `apply`, an MCP server and a plugin for Claude Code |
 
 The flat layout is intentional: `control-plane`, `memory-service`,
 `notification-service` and `skill-sdk` take their neighbours (`../platform-auth-sdk`,
@@ -132,8 +134,8 @@ The flat layout is intentional: `control-plane`, `memory-service`,
 root of this repository.
 
 This repository itself is the assembly: `compose.yml`, `.env.example`, `Makefile`,
-[deploy/](deploy/README.md) (bootstrap and the edge), `tools/` (including the catalog
-package tool) and the guide `guide/`.
+[deploy/](deploy/README.md) (bootstrap and the edge), `tools/` (build and check
+scripts) and the guide `guide/`.
 
 ## Quick start
 
